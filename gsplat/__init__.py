@@ -1,6 +1,5 @@
 import warnings
 
-from .color_correct import color_correct_affine, color_correct_quadratic
 from .compression import PngCompression
 from .cuda._torch_impl import accumulate
 from .cuda._torch_impl_2dgs import accumulate_2dgs
@@ -29,15 +28,12 @@ from .rendering import (
     rasterization_2dgs_inria_wrapper,
     rasterization_inria_wrapper,
 )
-from .strategy import DefaultStrategy, MCMCStrategy, Strategy
+from .strategy import DefaultStrategy, Strategy
 from .version import __version__
 
 all = [
-    "color_correct_affine",
-    "color_correct_quadratic",
     "PngCompression",
     "DefaultStrategy",
-    "MCMCStrategy",
     "Strategy",
     "rasterization",
     "rasterization_2dgs",
