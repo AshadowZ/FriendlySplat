@@ -1,0 +1,376 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Optional, Tuple
+
+
+@dataclass(frozen=True)
+class IOConfig:
+    # Path to the dataset root directory.
+    data_dir: str
+    # Directory to save outputs (checkpoints, PLY exports, etc.).
+    result_dir: str = "results"
+    # Torch device string, e.g. "cuda", "cuda:0", or "cpu".
+    device: str = "cuda"
+    # Global random seed (data sampling + initialization).
+    seed: int = 42
+
+    # Whether to export splats as PLY files during training.
+    export_ply: bool = False
+    # PLY export format: "ply" or "ply_compressed".
+    ply_format: str = "ply"
+    # 1-based training step numbers to export PLY files. e.g. (15000, 30000)
+    ply_steps: Tuple[int, ...] = (30000,)
+
+    # Whether to save checkpoint(s) during training.
+    save_ckpt: bool = False
+    # 1-based training step numbers to save checkpoints. e.g. (15000, 30000)
+    save_steps: Tuple[int, ...] = (30_000,)
+
+
+@dataclass(frozen=True)
+class DataConfig:
+    # Downsample factor for the dataset images.
+    data_factor: int = 1
+    # Normalize the world space based on COLMAP points/cameras.
+    normalize_world_space: bool = True
+    # Every N images there is a test image.
+    test_every: int = 8
+    # Benchmark split mode for training:
+    # - False: `split="train"` uses all images.
+    # - True: `split="train"` excludes every `test_every`-th image (train/test are disjoint).
+    benchmark_train_split: bool = False
+    # DataLoader preload mode: "none" or "cuda".
+    # - "none": load samples on-demand on CPU; batches are moved to the training device each step.
+    # - "cuda": preload the entire dataset to CUDA once inside DataLoader (uses GPU memory).
+    preload: str = "none"
+    # Batch size for training.
+    batch_size: int = 1
+    # Number of DataLoader workers.
+    num_workers: Optional[int] = 8
+    # Use an infinite sampler to avoid DataLoader epoch-boundary stalls.
+    infinite_sampler: bool = True
+    # Asynchronously prefetch the next batch to GPU (hides H2D latency for non-cuda preload).
+    prefetch_to_gpu: bool = True
+
+    ## Optional priors / masks (resolved relative to dataset root).
+
+    # Folder name for dense depth priors (sibling of "images"); .npy files.
+    depth_dir_name: Optional[str] = None
+    # Folder name for dense normal priors (sibling of "images"); .png files.
+    normal_dir_name: Optional[str] = None
+    # Folder name for dynamic object masks (optional).
+    dynamic_mask_dir_name: Optional[str] = None
+    # Folder name for sky masks (optional).
+    sky_mask_dir_name: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class InitConfig:
+    # Initialization strategy: "sfm" (COLMAP points) or "random".
+    init_type: str = "sfm"
+    # Initial number of Gaussians (ignored when init_type="sfm").
+    init_num_pts: int = 100_000
+    # Initial extent for random init, as a multiple of scene scale (ignored for "sfm").
+    init_extent: float = 3.0
+    # Initial opacity for Gaussians (before logit).
+    init_opacity: float = 0.1
+    # Initial scale multiplier for Gaussians (applied to KNN-based scale estimate).
+    init_scale: float = 1.0
+
+
+@dataclass(frozen=True)
+class PoseConfig:
+    ## Pose optimization (experimental).
+
+    # Whether to optimize per-image camera pose adjustments during training.
+    pose_opt: bool = False
+    # Learning rate for pose optimization.
+    pose_opt_lr: float = 1e-5
+    # Weight decay for pose optimization.
+    pose_opt_reg: float = 1e-6
+
+
+@dataclass(frozen=True)
+class PostprocessConfig:
+    ## Post-processing modules (experimental).
+    # Bilateral grid and PPISP are mutually exclusive and apply to rendered RGB.
+
+    # Whether to enable fused bilateral grid post-processing (requires `fused_bilagrid`).
+    use_bilateral_grid: bool = False
+    # Bilateral grid resolution (X, Y, W).
+    bilateral_grid_shape: Tuple[int, int, int] = (16, 16, 8)
+    # Learning rate for bilateral grid parameters.
+    bilateral_grid_lr: float = 2e-3
+    # TV regularization weight for bilateral grid.
+    bilateral_grid_tv_weight: float = 10.0
+
+    # Whether to enable PPISP post-processing (requires `ppisp`).
+    use_ppisp: bool = False
+    # Regularization weight for PPISP.
+    ppisp_reg_weight: float = 1.0
+
+
+@dataclass(frozen=True)
+class ViewerConfig:
+    # Whether to disable the online viewer (viser/nerfview).
+    # When enabled, training can be paused/resumed and rendered interactively.
+    disable_viewer: bool = False
+    # Port for the viewer server.
+    port: int = 8080
+    # Keep the viewer process alive after training finishes (Ctrl+C to exit).
+    keep_alive_after_train: bool = True
+
+
+@dataclass(frozen=True)
+class OptimConfig:
+    # Number of training steps.
+    max_steps: int = 30_000
+
+    # LR for 3D Gaussian means (positions).
+    means_lr: float = 4e-5
+    # LR for Gaussian log-scales.
+    scales_lr: float = 5e-3
+    # LR for Gaussian quaternions (orientation).
+    quats_lr: float = 1e-3
+    # LR for opacity logits.
+    opacities_lr: float = 5e-2
+    # LR for SH band 0.
+    sh0_lr: float = 2.5e-3
+    # LR for higher-order SH coefficients.
+    shN_lr: float = 2.5e-3 / 20.0
+
+    # Spherical harmonics configuration.
+    # Maximum degree of spherical harmonics for color.
+    sh_degree: int = 3
+    # Turn on another SH degree every this many steps (0 disables progressive SH).
+    sh_degree_interval: int = 1000
+
+    # Use random backgrounds during training to discourage transparency.
+    random_bkgd: bool = True
+    # Use packed rasterization mode (lower memory, slightly slower).
+    packed: bool = False
+    # Enable anti-aliasing in rasterization (may affect quantitative metrics).
+    antialiased: bool = False
+
+    # Convert dense grads to sparse grads and use SparseAdam (requires packed=True).
+    sparse_grad: bool = False
+    # Use SelectiveAdam to update only visible Gaussians (experimental).
+    visible_adam: bool = False
+
+
+@dataclass(frozen=True)
+class RegConfig:
+    ## Photometric loss
+
+    # Weight for SSIM in the RGB loss (rgb = (1-ssim)*L1 + ssim*SSIM).
+    ssim_lambda: float = 0.2
+
+    # PhysGauss-style scale regularizations (optional).
+    # - Flatness: encourages each Gaussian to have a small minimum axis (disk-/sheet-like).
+    # - Scale ratio: suppresses spiky Gaussians where max(scale) >> median(scale).
+
+    # Weight of flatness regularization (encourage Gaussians to be flat/disc-like).
+    flat_reg_weight: float = 0.0
+    # Weight of scale ratio regularization (PhysGauss-style, adapted to max/median ratio).
+    scale_reg_weight: float = 0.0
+    # Threshold of max/median scale ratio before applying regularization.
+    max_gauss_ratio: float = 6.0
+    # Apply scale ratio regularization once every N steps.
+    scale_reg_every_n: int = 10
+
+    ## Regularizations using priors / masks.
+
+    # Weight for sky supervision loss (encourage transparency in sky pixels).
+    sky_loss_weight: float = 0.05
+
+    # Apply depth regularization once every N steps.
+    depth_reg_every_n: int = 4
+    # Weight of the depth loss.
+    depth_loss_weight: float = 0.25
+    # Starting step for depth regularization.
+    depth_loss_activation_step: int = 1000
+
+    # Normal supervision weights:
+    # - `normal_loss_*`: supervise rendered normals (from gsplat) w.r.t. the normal prior.
+    # - `surf_normal_loss_*`: supervise normals implied by depth w.r.t. the normal prior.
+    # - `consistency_normal_loss_*`: encourage rendered normals to match depth-implied normals.
+
+    # Apply normal regularization once every N steps.
+    normal_reg_every_n: int = 8
+    # Weight of the rendered-normal loss.
+    normal_loss_weight: float = 0.1
+    # Starting step for rendered-normal regularization.
+    normal_loss_activation_step: int = 7000
+    # Weight of the depth-implied surface-normal loss.
+    surf_normal_loss_weight: float = 0.1
+    # Starting step for surface-normal regularization.
+    surf_normal_loss_activation_step: int = 7000
+    # Weight of the normal consistency loss (rendered normals vs depth-implied normals).
+    consistency_normal_loss_weight: float = 0.0
+    # Starting step for normal consistency regularization.
+    consistency_normal_loss_activation_step: int = 7000
+
+
+@dataclass(frozen=True)
+class GNSConfig:
+    ## Natural Selection (GNS) pruning (optional).
+
+    # Whether to enable the Natural Selection pruning phase.
+    gns_enable: bool = False
+    # Step to start Natural Selection (usually post-densification, e.g., after 15000).
+    reg_start: int = 15_000
+    # Step to end Natural Selection.
+    reg_end: int = 23_000
+    # Final target Gaussian count (budget).
+    final_budget: int = 1_000_000
+    # Base regularization strength during Natural Selection (adjusted dynamically).
+    opacity_reg_weight: float = 2e-5
+
+
+@dataclass(frozen=True)
+class StrategyConfig:
+    """Densification strategy config (this repo currently supports improved only)."""
+
+    # ImprovedStrategy parameters (see `gsplat/strategy/improved.py`).
+
+    # Opacity threshold for pruning.
+    prune_opa: float = 0.005
+    # Gradient threshold (2D) for splitting/growing Gaussians.
+    grow_grad2d: float = 0.0002
+    # 3D scale threshold for pruning.
+    prune_scale3d: float = 0.08
+    # 2D projected scale threshold for pruning.
+    prune_scale2d: float = 0.15
+    # Stop refining 2D scale after this step.
+    refine_scale2d_stop_iter: int = 4000
+    # Start densification/refinement at this step.
+    refine_start_iter: int = 500
+    # Stop densification/refinement at this step.
+    refine_stop_iter: int = 15_000
+    # Reset opacities every N steps (during densification window).
+    reset_every: int = 3000
+    # Run densification refine step every N steps.
+    refine_every: int = 100
+    # Use absolute gradients for splitting (requires rasterization absgrad enabled).
+    absgrad: bool = True
+    # Verbosity for densification logs.
+    verbose: bool = True
+    # Which meta key to use for gradients ("means2d" for 3DGS; "gradient_2dgs" for 2DGS).
+    key_for_gradient: str = "means2d"
+    # Maximum number of Gaussians allowed during densification.
+    densification_budget: int = 2_500_000
+
+
+@dataclass(frozen=True)
+class TrainConfig:
+    # I/O and runtime paths (dataset, output directory, device, etc.).
+    io: IOConfig
+    # Dataset / DataLoader configuration.
+    data: DataConfig = field(default_factory=DataConfig)
+    # Initialization configuration (sfm/random init).
+    init: InitConfig = field(default_factory=InitConfig)
+    # Optimizer and training loop configuration (includes max_steps).
+    optim: OptimConfig = field(default_factory=OptimConfig)
+    # Loss / regularization configuration.
+    reg: RegConfig = field(default_factory=RegConfig)
+    # Densification strategy configuration.
+    strategy: StrategyConfig = field(default_factory=StrategyConfig)
+    # Natural Selection (GNS) configuration.
+    gns: GNSConfig = field(default_factory=GNSConfig)
+    # Pose optimization / noise configuration.
+    pose: PoseConfig = field(default_factory=PoseConfig)
+    # Post-processing configuration (bilateral grid / PPISP).
+    postprocess: PostprocessConfig = field(default_factory=PostprocessConfig)
+    # Online viewer configuration (viser/nerfview).
+    viewer: ViewerConfig = field(default_factory=ViewerConfig)
+
+    # Reserved for future multi-GPU training (currently not implemented / not tested here).
+    # Whether to enable distributed training (not implemented in this repo).
+    distributed: bool = False
+    # Distributed rank (reserved; must be 0).
+    world_rank: int = 0
+    # Distributed world size (reserved; must be 1).
+    world_size: int = 1
+
+
+def validate_train_config(cfg: TrainConfig) -> None:
+    if cfg.distributed or cfg.world_size != 1 or cfg.world_rank != 0:
+        raise NotImplementedError(
+            "Distributed/multi-GPU training is reserved for future work in this repo. "
+            "Run with distributed=False, world_size=1, world_rank=0."
+        )
+
+    if cfg.data.batch_size <= 0:
+        raise ValueError(f"batch_size must be > 0, got {cfg.data.batch_size}")
+    if cfg.data.test_every <= 0:
+        raise ValueError(f"data.test_every must be > 0, got {cfg.data.test_every}")
+    if cfg.data.benchmark_train_split and cfg.data.test_every <= 1:
+        raise ValueError(
+            "data.benchmark_train_split=True requires data.test_every > 1, "
+            f"got data.test_every={cfg.data.test_every}"
+        )
+    if cfg.world_size <= 0:
+        raise ValueError(f"world_size must be > 0, got {cfg.world_size}")
+    if cfg.optim.max_steps <= 0:
+        raise ValueError(f"optim.max_steps must be > 0, got {cfg.optim.max_steps}")
+
+    if cfg.data.preload not in ("none", "cuda"):
+        raise ValueError(f"preload must be 'none' or 'cuda', got {cfg.data.preload!r}")
+    if cfg.data.preload == "cuda":
+        if not str(cfg.io.device).startswith("cuda"):
+            raise ValueError(
+                f"preload='cuda' requires io.device to be CUDA (e.g. 'cuda' or 'cuda:0'), got {cfg.io.device!r}"
+            )
+        if cfg.data.prefetch_to_gpu:
+            raise ValueError("preload='cuda' is incompatible with prefetch_to_gpu=True.")
+        if cfg.data.num_workers not in (None, 0):
+            raise ValueError("preload='cuda' requires data.num_workers=0.")
+
+    if cfg.optim.sparse_grad and cfg.optim.visible_adam:
+        raise ValueError("optim.sparse_grad and optim.visible_adam are mutually exclusive.")
+    if cfg.optim.sparse_grad and not cfg.optim.packed:
+        raise ValueError("optim.sparse_grad=True requires optim.packed=True (packed rasterization).")
+    if cfg.strategy.key_for_gradient not in ("means2d", "gradient_2dgs"):
+        raise ValueError(
+            "strategy.key_for_gradient must be 'means2d' (3DGS) or 'gradient_2dgs' (2DGS), "
+            f"got {cfg.strategy.key_for_gradient!r}"
+        )
+    if cfg.postprocess.use_bilateral_grid and cfg.postprocess.use_ppisp:
+        raise ValueError("postprocess.use_bilateral_grid and postprocess.use_ppisp are mutually exclusive.")
+
+    if not cfg.viewer.disable_viewer:
+        if not (1 <= int(cfg.viewer.port) <= 65535):
+            raise ValueError(f"viewer.port must be in [1, 65535], got {cfg.viewer.port}")
+
+    if cfg.io.export_ply:
+        if len(cfg.io.ply_steps) == 0:
+            raise ValueError("export_ply=True requires non-empty ply_steps (e.g. --io.ply_steps 15000 30000).")
+        if cfg.io.ply_format not in ("ply", "ply_compressed"):
+            raise ValueError(f"ply_format must be 'ply' or 'ply_compressed', got {cfg.io.ply_format!r}")
+
+    if cfg.gns.gns_enable:
+        if cfg.optim.sparse_grad:
+            raise ValueError(
+                "gns.gns_enable=True is incompatible with optim.sparse_grad=True "
+                "(packed+sparse mode). Disable either GNS or sparse_grad."
+            )
+        if cfg.gns.reg_start < cfg.strategy.refine_stop_iter:
+            raise ValueError(
+                "gns.gns_enable=True requires gns.reg_start >= strategy.refine_stop_iter, "
+                f"got gns.reg_start={cfg.gns.reg_start} < strategy.refine_stop_iter={cfg.strategy.refine_stop_iter}"
+            )
+        if cfg.gns.reg_end < cfg.gns.reg_start:
+            raise ValueError(
+                "gns.gns_enable=True requires gns.reg_end >= gns.reg_start, "
+                f"got gns.reg_end={cfg.gns.reg_end} < gns.reg_start={cfg.gns.reg_start}"
+            )
+        if cfg.gns.final_budget <= 0:
+            raise ValueError(
+                f"gns.gns_enable=True requires gns.final_budget > 0, got {cfg.gns.final_budget}"
+            )
+        if cfg.gns.opacity_reg_weight <= 0.0:
+            raise ValueError(
+                "gns.gns_enable=True requires gns.opacity_reg_weight > 0, "
+                f"got {cfg.gns.opacity_reg_weight}"
+            )
