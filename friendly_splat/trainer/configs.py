@@ -123,6 +123,18 @@ class ViewerConfig:
 
 
 @dataclass(frozen=True)
+class TensorBoardConfig:
+    # Enable TensorBoard scalar logging.
+    enable: bool = False
+    # Log training scalars every N training steps (1-based).
+    every_n: int = 100
+    # Flush TensorBoard event file every N logged training steps.
+    flush_every_n: int = 500
+    # Log CUDA memory usage (GB) under train/mem_gb when CUDA is used.
+    log_memory: bool = True
+
+
+@dataclass(frozen=True)
 class EvalConfig:
     # Enable periodic evaluation on holdout images.
     enable: bool = False
@@ -301,6 +313,8 @@ class TrainConfig:
     postprocess: PostprocessConfig = field(default_factory=PostprocessConfig)
     # Online viewer configuration (viser/nerfview).
     viewer: ViewerConfig = field(default_factory=ViewerConfig)
+    # TensorBoard logging configuration.
+    tb: TensorBoardConfig = field(default_factory=TensorBoardConfig)
     # Evaluation configuration (periodic holdout metrics).
     eval: EvalConfig = field(default_factory=EvalConfig)
 
@@ -384,6 +398,13 @@ def validate_train_config(cfg: TrainConfig) -> None:
         if not (1 <= int(cfg.viewer.port) <= 65535):
             raise ValueError(
                 f"viewer.port must be in [1, 65535], got {cfg.viewer.port}"
+            )
+    if cfg.tb.enable:
+        if int(cfg.tb.every_n) <= 0:
+            raise ValueError(f"tb.every_n must be > 0, got {cfg.tb.every_n}")
+        if int(cfg.tb.flush_every_n) <= 0:
+            raise ValueError(
+                f"tb.flush_every_n must be > 0, got {cfg.tb.flush_every_n}"
             )
 
     if cfg.io.export_ply:

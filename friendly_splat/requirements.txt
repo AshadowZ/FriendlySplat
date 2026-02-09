@@ -9,6 +9,12 @@ scikit-learn
 # CLI for `friendly_splat/trainer.py` (dataclass-based args).
 tyro>=0.8.8
 
+# Config snapshot (`result_dir/cfg.yml`) output.
+PyYAML
+
+# TensorBoard event writer (`--tb.enable`).
+tensorboard
+
 # Progress bar for training output.
 tqdm
 
