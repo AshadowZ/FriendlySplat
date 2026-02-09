@@ -6,6 +6,7 @@ from dataclasses import asdict
 from typing import Any, Dict, Optional, Set
 
 import torch
+import yaml
 
 from friendly_splat.trainer.configs import (
     EvalConfig,
@@ -24,6 +25,23 @@ def init_output_paths(*, io_cfg: IOConfig) -> None:
 
     if io_cfg.export_ply:
         os.makedirs(os.path.join(io_cfg.result_dir, "ply"), exist_ok=True)
+
+
+def save_train_config_snapshot(
+    *,
+    io_cfg: IOConfig,
+    train_cfg: TrainConfig,
+) -> str:
+    out_path = os.path.join(io_cfg.result_dir, "cfg.yml")
+    with open(out_path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(
+            asdict(train_cfg),
+            f,
+            sort_keys=False,
+            allow_unicode=True,
+        )
+    print(f"Saved config snapshot: {out_path}", flush=True)
+    return out_path
 
 
 def init_eval_output_paths(*, io_cfg: IOConfig, eval_cfg: EvalConfig) -> None:

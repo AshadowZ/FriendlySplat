@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Callable, Dict, Optional
 
 import torch
 
@@ -220,6 +220,7 @@ def maybe_run_evaluation_for_step(
     splats: torch.nn.ParameterDict,
     bilagrid: Optional[BilateralGridPostProcessor] = None,
     ppisp: Optional[PPISPPostProcessor] = None,
+    on_eval_complete: Optional[Callable[[int, Dict[str, float]], None]] = None,
 ) -> Optional[str]:
     """Run evaluation for the current step when configured and due.
 
@@ -244,6 +245,8 @@ def maybe_run_evaluation_for_step(
         step=int(step),
         stats=eval_output.stats,
     )
+    if on_eval_complete is not None:
+        on_eval_complete(int(step), eval_output.stats)
     lpips_suffix = ""
     lpips_value = eval_output.stats.get("lpips")
     if lpips_value is not None:
@@ -266,4 +269,34 @@ def maybe_run_evaluation_for_step(
         f"{lpips_suffix} "
         f"{cc_suffix} "
         f"sec/img={eval_output.stats['seconds_per_image']:.4f}"
+    )
+
+
+def maybe_log_training_scalars_for_step(
+    *,
+    step: int,
+    device: torch.device,
+    splats: torch.nn.ParameterDict,
+    loss_output: LossOutput,
+    optimizer_coordinator: Any,
+    tb_runtime: Any,
+) -> None:
+    """Collect and write training scalars to TensorBoard (if enabled)."""
+    means_opt = optimizer_coordinator.splat_optimizers.get("means")
+    lr_means = None
+    if means_opt is not None and len(means_opt.param_groups) > 0:
+        lr_value = means_opt.param_groups[0].get("lr")
+        if isinstance(lr_value, (int, float)):
+            lr_means = float(lr_value)
+
+    mem_gb = None
+    if bool(tb_runtime.enabled) and bool(tb_runtime.log_memory) and device.type == "cuda":
+        mem_gb = float(torch.cuda.max_memory_allocated(device=device) / (1024**3))
+
+    tb_runtime.log_train(
+        step=int(step),
+        loss_items=loss_output.items,
+        num_gs=int(splats["means"].shape[0]),
+        lr_means=lr_means,
+        mem_gb=mem_gb,
     )

@@ -9,8 +9,6 @@ This file intentionally stays thin and delegates most logic to:
 - `friendly_splat.viewer.viewer_runtime`: optional online viewer (viser/nerfview)
 """
 
-import warnings
-
 import torch
 import tyro
 import tqdm
@@ -22,6 +20,7 @@ from friendly_splat.trainer.builder import build_training_context
 from friendly_splat.trainer.step_runtime import (
     build_step_schedule_from_prepared_batch,
     compute_losses_from_prepared_batch_and_render,
+    maybe_log_training_scalars_for_step,
     maybe_run_evaluation_for_step,
     prepare_training_batch,
     render_from_prepared_batch,
@@ -32,8 +31,10 @@ from friendly_splat.utils.common_utils import set_seed
 from friendly_splat.trainer.io_utils import (
     init_output_paths,
     init_eval_output_paths,
+    save_train_config_snapshot,
     maybe_save_outputs,
 )
+from friendly_splat.trainer.tb_runtime import TensorBoardRuntime
 
 
 class Trainer:
@@ -52,6 +53,7 @@ class Trainer:
         # Prepare output folders (checkpoints / PLY exports).
         init_output_paths(io_cfg=cfg.io)
         init_eval_output_paths(io_cfg=cfg.io, eval_cfg=cfg.eval)
+        save_train_config_snapshot(io_cfg=cfg.io, train_cfg=cfg)
 
         context = build_training_context(cfg)
         self.dataset = context.dataset
@@ -87,6 +89,8 @@ class Trainer:
         gns = self.natural_selection_policy
         optimizer_coordinator = self.optimizer_coordinator
         loader_iter = iter(self.loader)
+        tb_runtime = TensorBoardRuntime(io_cfg=cfg.io, tb_cfg=cfg.tb)
+
         viewer_runtime = ViewerRuntime(
             disable_viewer=bool(cfg.viewer.disable_viewer),
             port=int(cfg.viewer.port),
@@ -199,6 +203,15 @@ class Trainer:
                     strategy_state=strategy_state,
                 )
 
+            maybe_log_training_scalars_for_step(
+                step=int(step),
+                device=self.device,
+                splats=splats,
+                loss_output=loss_output,
+                optimizer_coordinator=optimizer_coordinator,
+                tb_runtime=tb_runtime,
+            )
+
             # Step 9: Optionally save checkpoint / PLY outputs.
             maybe_save_outputs(
                 io_cfg=cfg.io,
@@ -231,10 +244,16 @@ class Trainer:
                 splats=splats,
                 bilagrid=bilagrid,
                 ppisp=ppisp,
+                on_eval_complete=lambda eval_step, stats: tb_runtime.log_eval(
+                    step=eval_step,
+                    stats=stats,
+                    stage="eval",
+                ),
             )
             if eval_summary is not None:
                 pbar.write(eval_summary)
 
+        tb_runtime.close()
         viewer_runtime.complete()
         if (not bool(cfg.viewer.disable_viewer)) and bool(
             cfg.viewer.keep_alive_after_train
