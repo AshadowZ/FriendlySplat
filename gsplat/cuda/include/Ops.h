@@ -36,7 +36,7 @@ projection_ewa_simple_bwd(const at::Tensor means,  // [..., C, N, 3]
 // splatting.
 //    - w/ minimum radius check
 // 4. add a bit blurring to the 2D gaussians for anti-aliasing.
-std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor,
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor,
            at::Tensor>
 projection_ewa_3dgs_fused_fwd(
     const at::Tensor means,                   // [..., N, 3]
@@ -67,6 +67,7 @@ projection_ewa_3dgs_fused_bwd(
     // grad outputs
     const at::Tensor v_means2d,                     // [..., C, N, 2]
     const at::Tensor v_depths,                      // [..., C, N]
+    const at::Tensor v_normals,                     // [..., C, N, 3]
     const at::Tensor v_conics,                      // [..., C, N, 3]
     const at::optional<at::Tensor> v_compensations, // [..., C, N] optional
     const bool viewmats_requires_grad);
@@ -80,7 +81,7 @@ projection_ewa_3dgs_fused_bwd(
 // sparsity is high, i.e., most of the gaussians are not in the camera frustum.
 // But at the cost of slightly slower speed.
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor,
-           at::Tensor, at::Tensor, at::Tensor,
+           at::Tensor, at::Tensor, at::Tensor, at::Tensor,
            at::Tensor>
 projection_ewa_3dgs_packed_fwd(
     const at::Tensor means,                   // [..., N, 3]
@@ -113,6 +114,7 @@ projection_ewa_3dgs_packed_bwd(
     // grad outputs
     const at::Tensor v_means2d,                     // [nnz, 2]
     const at::Tensor v_depths,                      // [nnz]
+    const at::Tensor v_normals,                     // [nnz, 3]
     const at::Tensor v_conics,                      // [nnz, 3]
     const at::optional<at::Tensor> v_compensations, // [nnz] optional
     const bool viewmats_requires_grad, const bool sparse_grad);
@@ -186,6 +188,22 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_3dgs_fwd(
     const at::Tensor flatten_ids   // [n_isects]
 );
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+rasterize_to_pixels_3dgs_fwd_median(
+    // Gaussian parameters
+    const at::Tensor means2d,   // [..., N, 2] or [nnz, 2]
+    const at::Tensor conics,    // [..., N, 3] or [nnz, 3]
+    const at::Tensor colors,    // [..., N, channels] or [nnz, channels]
+    const at::Tensor opacities, // [..., N]  or [nnz]
+    const at::optional<at::Tensor> backgrounds, // [..., channels]
+    const at::optional<at::Tensor> masks, // [..., tile_height, tile_width]
+    // image size
+    const uint32_t image_width, const uint32_t image_height,
+    const uint32_t tile_size,
+    // intersections
+    const at::Tensor tile_offsets, // [..., tile_height, tile_width]
+    const at::Tensor flatten_ids   // [n_isects]
+);
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
 rasterize_to_pixels_3dgs_bwd(
     // Gaussian parameters
     const at::Tensor means2d,                   // [..., N, 2] or [nnz, 2]
@@ -208,6 +226,31 @@ rasterize_to_pixels_3dgs_bwd(
     const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
     // options
     bool absgrad);
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+rasterize_to_pixels_3dgs_bwd_median(
+    // Gaussian parameters
+    const at::Tensor means2d,                   // [..., N, 2] or [nnz, 2]
+    const at::Tensor conics,                    // [..., N, 3] or [nnz, 3]
+    const at::Tensor colors,                    // [..., N, channels] or [nnz, channels]
+    const at::Tensor opacities,                 // [..., N] or [nnz]
+    const at::optional<at::Tensor> backgrounds, // [..., channels]
+    const at::optional<at::Tensor> masks, // [..., tile_height, tile_width]
+    // image size
+    const uint32_t image_width, const uint32_t image_height,
+    const uint32_t tile_size,
+    // intersections
+    const at::Tensor tile_offsets, // [..., tile_height, tile_width]
+    const at::Tensor flatten_ids,  // [n_isects]
+    // forward outputs
+    const at::Tensor render_alphas, // [..., image_height, image_width, 1]
+    const at::Tensor last_ids,      // [..., image_height, image_width]
+    const at::Tensor median_ids,    // [..., image_height, image_width]
+    // gradients of outputs
+    const at::Tensor v_render_colors, // [..., image_height, image_width, channels]
+    const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
+    const at::Tensor v_render_median, // [..., image_height, image_width, 1]
+    // options
+    bool absgrad);
 
 // Rasterize 3D Gaussian, but only return the indices of gaussians and pixels.
 std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_3dgs(
@@ -225,15 +268,6 @@ std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_3dgs(
     const at::Tensor tile_offsets, // [..., tile_height, tile_width]
     const at::Tensor flatten_ids   // [n_isects]
 );
-
-// Relocate some Gaussians in the Densification Process.
-// Equation (9) in "3D Gaussian Splatting as Markov Chain Monte Carlo"
-std::tuple<at::Tensor, at::Tensor>
-relocation(at::Tensor opacities, // [N]
-           at::Tensor scales,    // [N, 3]
-           at::Tensor ratios,    // [N]
-           at::Tensor binoms,    // [n_max, n_max]
-           const int n_max);
 
 // Projection for 2DGS
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor,

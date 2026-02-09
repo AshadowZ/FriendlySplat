@@ -123,7 +123,7 @@ def rasterization(
     packed: bool = True,
     tile_size: int = 16,
     backgrounds: Optional[Tensor] = None,
-    render_mode: Literal["RGB", "D", "ED", "RGB+D", "RGB+ED"] = "RGB",
+    render_mode: Literal["RGB", "D", "ED", "RGB+D", "RGB+ED", "RGB+N+ED"] = "RGB",
     sparse_grad: bool = False,
     absgrad: bool = False,
     rasterize_mode: Literal["classic", "antialiased"] = "classic",
@@ -176,11 +176,13 @@ def rasterization(
 
     .. note::
         **Depth Rendering**: This function supports colors or/and depths via `render_mode`.
-        The supported modes are "RGB", "D", "ED", "RGB+D", and "RGB+ED". "RGB" renders the
+        The supported modes are "RGB", "D", "ED", "RGB+D", "RGB+ED", and "RGB+N+ED". "RGB" renders the
         colored image that respects the `colors` argument. "D" renders the accumulated z-depth
         :math:`\\sum_i w_i z_i`. "ED" renders the expected z-depth
         :math:`\\frac{\\sum_i w_i z_i}{\\sum_i w_i}`. "RGB+D" and "RGB+ED" render both
         the colored image and the depth, in which the depth is the last channel of the output.
+        "RGB+N+ED" renders color, normals, and expected depth, where the output channels are
+        [RGB, normal_x, normal_y, normal_z, depth].
 
     .. note::
         **Memory-Speed Trade-off**: The `packed` argument provides a trade-off between
@@ -360,7 +362,31 @@ def rasterization(
     assert opacities.shape == batch_dims + (N,), opacities.shape
     assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape
     assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
-    assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED"], render_mode
+    assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED", "RGB+N+ED"], render_mode
+    need_normals = render_mode == "RGB+N+ED"
+    need_median = (not with_eval3d) and (
+        render_mode in ["D", "ED", "RGB+D", "RGB+ED", "RGB+N+ED"]
+    )
+
+    # NOTE on normals + gradients:
+    # Normals are computed from `quats/scales` in the CUDA projection kernels.
+    #
+    # For the `covars` projection chain:
+    #   1) normals are not defined (projection returns zeros), and
+    #   2) we do NOT implement normals gradients w.r.t. `covars`.
+    #
+    # Therefore, when training with normals, do NOT use the `covars` projection chain. Keep
+    # `covars=None` and pass `quats/scales`.
+    if need_normals and covars is not None:
+        raise ValueError(
+            "render_mode='RGB+N+ED' requires projecting from `quats/scales` (set covars=None). "
+            "Normals are not defined for the covars projection chain."
+        )
+    if need_normals and (with_ut or with_eval3d):
+        raise NotImplementedError(
+            "render_mode='RGB+N+ED' is only implemented for the standard (non-UT, non-eval3d) "
+            "projection+rasterization path."
+        )
 
     def reshape_view(C: int, world_view: torch.Tensor, N_world: list) -> torch.Tensor:
         view_list = list(
@@ -497,28 +523,51 @@ def rasterization(
             radius_clip=radius_clip,
             sparse_grad=sparse_grad,
             calc_compensations=(rasterize_mode == "antialiased"),
+            return_normals=need_normals,
             camera_model=camera_model,
             opacities=opacities,  # use opacities to compute a tigher bound for radii.
         )
 
     if packed:
         # The results are packed into shape [nnz, ...]. All elements are valid.
-        (
-            batch_ids,
-            camera_ids,
-            gaussian_ids,
-            indptr,
-            radii,
-            means2d,
-            depths,
-            conics,
-            compensations,
-        ) = proj_results
+        if need_normals:
+            (
+                batch_ids,
+                camera_ids,
+                gaussian_ids,
+                indptr,
+                radii,
+                means2d,
+                depths,
+                normals,
+                conics,
+                compensations,
+            ) = proj_results
+        else:
+            (
+                batch_ids,
+                camera_ids,
+                gaussian_ids,
+                indptr,
+                radii,
+                means2d,
+                depths,
+                conics,
+                compensations,
+            ) = proj_results
+            normals = None
         opacities = opacities.view(B, N)[batch_ids, gaussian_ids]  # [nnz]
         image_ids = batch_ids * C + camera_ids
     else:
         # The results are with shape [..., C, N, ...]. Only the elements with radii > 0 are valid.
-        radii, means2d, depths, conics, compensations = proj_results
+        if with_ut:
+            radii, means2d, depths, conics, compensations = proj_results
+            normals = None
+        elif need_normals:
+            radii, means2d, depths, normals, conics, compensations = proj_results
+        else:
+            radii, means2d, depths, conics, compensations = proj_results
+            normals = None
         opacities = torch.broadcast_to(
             opacities[..., None, :], batch_dims + (C, N)
         )  # [..., C, N]
@@ -538,6 +587,7 @@ def rasterization(
             "radii": radii,
             "means2d": means2d,
             "depths": depths,
+            "normals": normals,
             "conics": conics,
             "opacities": opacities,
         }
@@ -623,12 +673,22 @@ def rasterization(
             (radii,) = all_to_all_tensor_list(
                 world_size, [radii], cnts, output_splits=collected_splits
             )
-            (means2d, depths, conics, opacities, colors) = all_to_all_tensor_list(
-                world_size,
-                [means2d, depths, conics, opacities, colors],
-                cnts,
-                output_splits=collected_splits,
-            )
+            if need_normals:
+                (means2d, depths, normals, conics, opacities, colors) = (
+                    all_to_all_tensor_list(
+                        world_size,
+                        [means2d, depths, normals, conics, opacities, colors],
+                        cnts,
+                        output_splits=collected_splits,
+                    )
+                )
+            else:
+                (means2d, depths, conics, opacities, colors) = all_to_all_tensor_list(
+                    world_size,
+                    [means2d, depths, conics, opacities, colors],
+                    cnts,
+                    output_splits=collected_splits,
+                )
 
             # before sending the data, we should turn the camera_ids from global to local.
             # i.e. the camera_ids produced by the projection stage are over all cameras world-wide,
@@ -675,25 +735,61 @@ def rasterization(
             )
             radii = reshape_view(C, radii, N_world)
 
-            (means2d, depths, conics, opacities, colors) = all_to_all_tensor_list(
-                world_size,
-                [
-                    means2d.flatten(0, 1),
-                    depths.flatten(0, 1),
-                    conics.flatten(0, 1),
-                    opacities.flatten(0, 1),
-                    colors.flatten(0, 1),
-                ],
-                splits=[C_i * N for C_i in C_world],
-                output_splits=[C * N_i for N_i in N_world],
-            )
+            if need_normals:
+                (means2d, depths, normals, conics, opacities, colors) = (
+                    all_to_all_tensor_list(
+                        world_size,
+                        [
+                            means2d.flatten(0, 1),
+                            depths.flatten(0, 1),
+                            normals.flatten(0, 1),
+                            conics.flatten(0, 1),
+                            opacities.flatten(0, 1),
+                            colors.flatten(0, 1),
+                        ],
+                        splits=[C_i * N for C_i in C_world],
+                        output_splits=[C * N_i for N_i in N_world],
+                    )
+                )
+            else:
+                (means2d, depths, conics, opacities, colors) = all_to_all_tensor_list(
+                    world_size,
+                    [
+                        means2d.flatten(0, 1),
+                        depths.flatten(0, 1),
+                        conics.flatten(0, 1),
+                        opacities.flatten(0, 1),
+                        colors.flatten(0, 1),
+                    ],
+                    splits=[C_i * N for C_i in C_world],
+                    output_splits=[C * N_i for N_i in N_world],
+                )
             means2d = reshape_view(C, means2d, N_world)
             depths = reshape_view(C, depths, N_world)
+            if need_normals:
+                normals = reshape_view(C, normals, N_world)
             conics = reshape_view(C, conics, N_world)
             opacities = reshape_view(C, opacities, N_world)
             colors = reshape_view(C, colors, N_world)
 
     # Rasterize to pixels
+    if render_mode == "RGB+N+ED":
+        # Append per-Gaussian normals and depth as extra features.
+        #
+        # IMPORTANT: Keep the depth as the LAST channel: [RGB, nx, ny, nz, depth].
+        # This is required for the median-depth computation in the 3DGS rasterizer,
+        # which assumes the last feature channel is a depth value.
+        extra_feats = torch.cat([normals, depths[..., None]], dim=-1)
+        colors = torch.cat([colors, extra_feats], dim=-1)
+        if backgrounds is not None:
+            backgrounds = torch.cat(
+                [
+                    backgrounds,
+                    torch.zeros(batch_dims + (C, 1 + 3), device=backgrounds.device),
+                ],
+                dim=-1,
+            )
+
     if render_mode in ["RGB+D", "RGB+ED"]:
         colors = torch.cat((colors, depths[..., None]), dim=-1)
         if backgrounds is not None:
@@ -748,6 +844,7 @@ def rasterization(
     )
 
     # print("rank", world_rank, "Before rasterize_to_pixels")
+    render_median = None
     if colors.shape[-1] > channel_chunk:
         # slice into chunks
         n_chunks = (colors.shape[-1] + channel_chunk - 1) // channel_chunk
@@ -783,20 +880,42 @@ def rasterization(
                     viewmats_rs=viewmats_rs,
                 )
             else:
-                render_colors_, render_alphas_ = rasterize_to_pixels(
-                    means2d,
-                    conics,
-                    colors_chunk,
-                    opacities,
-                    width,
-                    height,
-                    tile_size,
-                    isect_offsets,
-                    flatten_ids,
-                    backgrounds=backgrounds_chunk,
-                    packed=packed,
-                    absgrad=absgrad,
-                )
+                request_median = need_median and (i == n_chunks - 1)
+                if request_median:
+                    (
+                        render_colors_,
+                        render_alphas_,
+                        render_median,
+                    ) = rasterize_to_pixels(
+                        means2d,
+                        conics,
+                        colors_chunk,
+                        opacities,
+                        width,
+                        height,
+                        tile_size,
+                        isect_offsets,
+                        flatten_ids,
+                        backgrounds=backgrounds_chunk,
+                        packed=packed,
+                        absgrad=absgrad,
+                        return_median=True,
+                    )
+                else:
+                    render_colors_, render_alphas_ = rasterize_to_pixels(
+                        means2d,
+                        conics,
+                        colors_chunk,
+                        opacities,
+                        width,
+                        height,
+                        tile_size,
+                        isect_offsets,
+                        flatten_ids,
+                        backgrounds=backgrounds_chunk,
+                        packed=packed,
+                        absgrad=absgrad,
+                    )
             render_colors.append(render_colors_)
             render_alphas.append(render_alphas_)
         render_colors = torch.cat(render_colors, dim=-1)
@@ -826,29 +945,52 @@ def rasterization(
                 viewmats_rs=viewmats_rs,
             )
         else:
-            render_colors, render_alphas = rasterize_to_pixels(
-                means2d,
-                conics,
-                colors,
-                opacities,
-                width,
-                height,
-                tile_size,
-                isect_offsets,
-                flatten_ids,
-                backgrounds=backgrounds,
-                packed=packed,
-                absgrad=absgrad,
-            )
-    if render_mode in ["ED", "RGB+ED"]:
+            if need_median:
+                render_colors, render_alphas, render_median = rasterize_to_pixels(
+                    means2d,
+                    conics,
+                    colors,
+                    opacities,
+                    width,
+                    height,
+                    tile_size,
+                    isect_offsets,
+                    flatten_ids,
+                    backgrounds=backgrounds,
+                    packed=packed,
+                    absgrad=absgrad,
+                    return_median=True,
+                )
+            else:
+                render_colors, render_alphas = rasterize_to_pixels(
+                    means2d,
+                    conics,
+                    colors,
+                    opacities,
+                    width,
+                    height,
+                    tile_size,
+                    isect_offsets,
+                    flatten_ids,
+                    backgrounds=backgrounds,
+                    packed=packed,
+                    absgrad=absgrad,
+                )
+    if render_median is not None:
+        meta["render_median"] = render_median
+    if render_mode in ["ED", "RGB+ED", "RGB+N+ED"]:
         # normalize the accumulated depth to get the expected depth
-        render_colors = torch.cat(
-            [
-                render_colors[..., :-1],
-                render_colors[..., -1:] / render_alphas.clamp(min=1e-10),
-            ],
-            dim=-1,
-        )
+        if render_mode == "RGB+N+ED":
+            # In RGB+N+ED mode the depth channel is the last entry.
+            render_colors[..., -1:] /= render_alphas.clamp(min=1e-10)
+        else:
+            render_colors = torch.cat(
+                [
+                    render_colors[..., :-1],
+                    render_colors[..., -1:] / render_alphas.clamp(min=1e-10),
+                ],
+                dim=-1,
+            )
 
     return render_colors, render_alphas, meta
 

@@ -106,6 +106,7 @@ std::tuple<
     at::Tensor,
     at::Tensor,
     at::Tensor,
+    at::Tensor,
     at::Tensor>
 projection_ewa_3dgs_fused_fwd(
     const at::Tensor means,                // [..., N, 3]
@@ -150,6 +151,9 @@ projection_ewa_3dgs_fused_fwd(
     at::DimVector depths_shape(batch_dims);
     depths_shape.append({C, N});
     at::Tensor depths = at::empty(depths_shape, opt);
+    at::DimVector normals_shape(batch_dims);
+    normals_shape.append({C, N, 3});
+    at::Tensor normals = at::empty(normals_shape, opt);
     at::DimVector conics_shape(batch_dims);
     conics_shape.append({C, N, 3});
     at::Tensor conics = at::empty(conics_shape, opt);
@@ -181,11 +185,12 @@ projection_ewa_3dgs_fused_fwd(
         radii,
         means2d,
         depths,
+        normals,
         conics,
         calc_compensations ? at::optional<at::Tensor>(compensations)
                            : c10::nullopt
     );
-    return std::make_tuple(radii, means2d, depths, conics, compensations);
+    return std::make_tuple(radii, means2d, depths, normals, conics, compensations);
 }
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
@@ -208,6 +213,7 @@ projection_ewa_3dgs_fused_bwd(
     // grad outputs
     const at::Tensor v_means2d,                     // [..., C, N, 2]
     const at::Tensor v_depths,                      // [..., C, N]
+    const at::Tensor v_normals,                     // [..., C, N, 3]
     const at::Tensor v_conics,                      // [..., C, N, 3]
     const at::optional<at::Tensor> v_compensations, // [..., C, N] optional
     const bool viewmats_requires_grad
@@ -227,6 +233,7 @@ projection_ewa_3dgs_fused_bwd(
     CHECK_INPUT(conics);
     CHECK_INPUT(v_means2d);
     CHECK_INPUT(v_depths);
+    CHECK_INPUT(v_normals);
     CHECK_INPUT(v_conics);
     if (compensations.has_value()) {
         CHECK_INPUT(compensations.value());
@@ -266,6 +273,7 @@ projection_ewa_3dgs_fused_bwd(
         compensations,
         v_means2d,
         v_depths,
+        v_normals,
         v_conics,
         v_compensations,
         viewmats_requires_grad,
@@ -281,6 +289,7 @@ projection_ewa_3dgs_fused_bwd(
 }
 
 std::tuple<
+    at::Tensor,
     at::Tensor,
     at::Tensor,
     at::Tensor,
@@ -360,6 +369,7 @@ projection_ewa_3dgs_packed_fwd(
             c10::nullopt, // radii
             c10::nullopt, // means2d
             c10::nullopt, // depths
+            c10::nullopt, // normals
             c10::nullopt, // conics
             // pass in as an indicator on whether compensation will be applied or not.
             calc_compensations ? at::optional<at::Tensor>(at::empty({1}, opt))
@@ -379,6 +389,7 @@ projection_ewa_3dgs_packed_fwd(
     at::Tensor radii = at::empty({nnz, 2}, opt.dtype(at::kInt));
     at::Tensor means2d = at::empty({nnz, 2}, opt);
     at::Tensor depths = at::empty({nnz}, opt);
+    at::Tensor normals = at::empty({nnz, 3}, opt);
     at::Tensor conics = at::empty({nnz, 3}, opt);
     at::Tensor compensations;
     if (calc_compensations) {
@@ -413,6 +424,7 @@ projection_ewa_3dgs_packed_fwd(
             radii,
             means2d,
             depths,
+            normals,
             conics,
             calc_compensations ? at::optional<at::Tensor>(compensations)
                                : c10::nullopt
@@ -429,6 +441,7 @@ projection_ewa_3dgs_packed_fwd(
         radii,
         means2d,
         depths,
+        normals,
         conics,
         compensations
     );
@@ -456,6 +469,7 @@ projection_ewa_3dgs_packed_bwd(
     // grad outputs
     const at::Tensor v_means2d,                     // [nnz, 2]
     const at::Tensor v_depths,                      // [nnz]
+    const at::Tensor v_normals,                     // [nnz, 3]
     const at::Tensor v_conics,                      // [nnz, 3]
     const at::optional<at::Tensor> v_compensations, // [nnz] optional
     const bool viewmats_requires_grad,
@@ -478,6 +492,7 @@ projection_ewa_3dgs_packed_bwd(
     CHECK_INPUT(conics);
     CHECK_INPUT(v_means2d);
     CHECK_INPUT(v_depths);
+    CHECK_INPUT(v_normals);
     CHECK_INPUT(v_conics);
     if (compensations.has_value()) {
         CHECK_INPUT(compensations.value());
@@ -532,6 +547,7 @@ projection_ewa_3dgs_packed_bwd(
         // grad outputs
         v_means2d,
         v_depths,
+        v_normals,
         v_conics,
         v_compensations,
         sparse_grad,

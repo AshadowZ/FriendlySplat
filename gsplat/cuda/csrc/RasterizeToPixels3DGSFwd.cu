@@ -36,7 +36,9 @@ __global__ void rasterize_to_pixels_3dgs_fwd_kernel(
     scalar_t
         *__restrict__ render_colors, // [I, image_height, image_width, CDIM]
     scalar_t *__restrict__ render_alphas, // [I, image_height, image_width, 1]
-    int32_t *__restrict__ last_ids        // [I, image_height, image_width]
+    scalar_t *__restrict__ render_median, // [I, image_height, image_width, 1] optional
+    int32_t *__restrict__ last_ids,       // [I, image_height, image_width]
+    int32_t *__restrict__ median_ids      // [I, image_height, image_width] optional
 ) {
     // each thread draws one pixel, but also timeshares caching gaussians in a
     // shared tile
@@ -51,7 +53,13 @@ __global__ void rasterize_to_pixels_3dgs_fwd_kernel(
     tile_offsets += image_id * tile_height * tile_width;
     render_colors += image_id * image_height * image_width * CDIM;
     render_alphas += image_id * image_height * image_width;
+    if (render_median != nullptr) {
+        render_median += image_id * image_height * image_width;
+    }
     last_ids += image_id * image_height * image_width;
+    if (median_ids != nullptr) {
+        median_ids += image_id * image_height * image_width;
+    }
     if (backgrounds != nullptr) {
         backgrounds += image_id * CDIM;
     }
@@ -75,6 +83,12 @@ __global__ void rasterize_to_pixels_3dgs_fwd_kernel(
         for (uint32_t k = 0; k < CDIM; ++k) {
             render_colors[pix_id * CDIM + k] =
                 backgrounds == nullptr ? 0.0f : backgrounds[k];
+        }
+        if (render_median != nullptr) {
+            render_median[pix_id] = 0.0f;
+        }
+        if (median_ids != nullptr) {
+            median_ids[pix_id] = -1;
         }
         return;
     }
@@ -105,6 +119,9 @@ __global__ void rasterize_to_pixels_3dgs_fwd_kernel(
     float T = 1.0f;
     // index of most recent gaussian to write to this thread's pixel
     uint32_t cur_idx = 0;
+    // keep track of median depth contribution (optional)
+    float median_depth = 0.f;
+    int32_t median_idx = -1;
 
     // collect and process batches of gaussians
     // each thread loads one gaussian at a time before rasterizing its
@@ -165,6 +182,15 @@ __global__ void rasterize_to_pixels_3dgs_fwd_kernel(
             }
             cur_idx = batch_start + t;
 
+            if (render_median != nullptr && median_ids != nullptr) {
+                // Median is defined as the depth of the Gaussian where the accumulated
+                // transmittance crosses 0.5 (non-differentiable selection).
+                if (T > 0.5f) {
+                    median_depth = c_ptr[CDIM - 1];
+                    median_idx = static_cast<int32_t>(batch_start + t);
+                }
+            }
+
             T = next_T;
         }
     }
@@ -184,6 +210,12 @@ __global__ void rasterize_to_pixels_3dgs_fwd_kernel(
         }
         // index in bin of last gaussian in this pixel
         last_ids[pix_id] = static_cast<int32_t>(cur_idx);
+        if (render_median != nullptr) {
+            render_median[pix_id] = median_depth;
+        }
+        if (median_ids != nullptr) {
+            median_ids[pix_id] = median_idx;
+        }
     }
 }
 
@@ -206,7 +238,9 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
     // outputs
     at::Tensor renders, // [..., image_height, image_width, channels]
     at::Tensor alphas,  // [..., image_height, image_width]
-    at::Tensor last_ids // [..., image_height, image_width]
+    at::Tensor last_ids, // [..., image_height, image_width]
+    at::optional<at::Tensor> render_median, // [..., image_height, image_width, 1]
+    at::optional<at::Tensor> median_ids     // [..., image_height, image_width]
 ) {
     bool packed = means2d.dim() == 2;
 
@@ -261,7 +295,12 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
             flatten_ids.data_ptr<int32_t>(),
             renders.data_ptr<float>(),
             alphas.data_ptr<float>(),
+            render_median.has_value() ? render_median.value().data_ptr<float>()
+                                      : nullptr,
             last_ids.data_ptr<int32_t>()
+            ,
+            median_ids.has_value() ? median_ids.value().data_ptr<int32_t>()
+                                   : nullptr
         );
 }
 
@@ -283,7 +322,9 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
         const at::Tensor flatten_ids,                                          \
         at::Tensor renders,                                                    \
         at::Tensor alphas,                                                     \
-        at::Tensor last_ids                                                    \
+        at::Tensor last_ids,                                                   \
+        at::optional<at::Tensor> render_median,                                \
+        at::optional<at::Tensor> median_ids                                    \
     );
 
 __INS__(1)

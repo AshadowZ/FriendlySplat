@@ -303,7 +303,8 @@ def fully_fused_projection(
     calc_compensations: bool = False,
     camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
     opacities: Optional[Tensor] = None,  # [..., N] or None
-) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+    return_normals: bool = False,
+) -> Tuple[Tensor, ...]:
     """Projects Gaussians to 2D.
 
     This function fuse the process of computing covariances
@@ -326,6 +327,11 @@ def fully_fused_projection(
         This functions supports projecting Gaussians with either covariances or {quaternions, scales},
         which will be converted to covariances internally in a fused CUDA kernel. Either `covars` or
         {`quats`, `scales`} should be provided.
+        
+        **Normals**: When `quats/scales` are provided, the CUDA projection kernels can also output a
+        per-Gaussian normal (camera space) defined as the axis corresponding to the smallest scale.
+        If `covars` are provided (and `quats/scales` are not), normals are not defined and will be
+        returned as zeros. Set `return_normals=True` to include normals in the return tuple.
 
     Args:
         means: Gaussian means. [..., N, 3]
@@ -345,13 +351,15 @@ def fully_fused_projection(
           of {`means`, `covars`, `quats`, `scales`} will be a sparse Tensor in COO layout. Default: False.
         calc_compensations: If True, a view-dependent opacity compensation factor will be computed, which
           is useful for anti-aliasing. Default: False.
+        return_normals: If True, include per-Gaussian normals (camera space) in the return tuple.
+          Default: False (keeps backward-compatible return signatures).
         opacities: Gaussian opacities in range [0, 1]. If provided, will use it to compute a tighter bounds.
             [..., N] or None. Default: None.
 
     Returns:
         A tuple:
 
-        If `packed` is True:
+        If `packed` is True (and `return_normals=True`):
 
         - **batch_ids**. The batch indices of the projected Gaussians. Int32 tensor of shape [nnz].
         - **camera_ids**. The camera indices of the projected Gaussians. Int32 tensor of shape [nnz].
@@ -360,14 +368,16 @@ def fully_fused_projection(
         - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [nnz, 2].
         - **means**. Projected Gaussian means in 2D. [nnz, 2]
         - **depths**. The z-depth of the projected Gaussians. [nnz]
+        - **normals**. Per-Gaussian normals in camera space. [nnz, 3]
         - **conics**. Inverse of the projected covariances. Return the flattend upper triangle with [nnz, 3]
         - **compensations**. The view-dependent opacity compensation factor. [nnz]
 
-        If `packed` is False:
+        If `packed` is False (and `return_normals=True`):
 
         - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [..., C, N, 2].
         - **means**. Projected Gaussian means in 2D. [..., C, N, 2]
         - **depths**. The z-depth of the projected Gaussians. [..., C, N]
+        - **normals**. Per-Gaussian normals in camera space. [..., C, N, 3]
         - **conics**. Inverse of the projected covariances. Return the flattend upper triangle with [..., C, N, 3]
         - **compensations**. The view-dependent opacity compensation factor. [..., C, N]
     """
@@ -402,7 +412,7 @@ def fully_fused_projection(
     viewmats = viewmats.contiguous()
     Ks = Ks.contiguous()
     if packed:
-        return _FullyFusedProjectionPacked.apply(
+        out = _FullyFusedProjectionPacked.apply(
             means,
             covars,
             quats,
@@ -420,8 +430,13 @@ def fully_fused_projection(
             camera_model,
             opacities,
         )
+        if return_normals:
+            return out
+        # Backward-compatible signature (no normals):
+        # (batch_ids, camera_ids, gaussian_ids, indptr, radii, means2d, depths, conics, compensations)
+        return out[0], out[1], out[2], out[3], out[4], out[5], out[6], out[8], out[9]
     else:
-        return _FullyFusedProjection.apply(
+        out = _FullyFusedProjection.apply(
             means,
             covars,
             quats,
@@ -438,6 +453,11 @@ def fully_fused_projection(
             camera_model,
             opacities,
         )
+        if return_normals:
+            return out
+        # Backward-compatible signature (no normals):
+        # (radii, means2d, depths, conics, compensations)
+        return out[0], out[1], out[2], out[4], out[5]
 
 
 @torch.no_grad()
@@ -555,7 +575,8 @@ def rasterize_to_pixels(
     masks: Optional[Tensor] = None,  # [..., tile_height, tile_width]
     packed: bool = False,
     absgrad: bool = False,
-) -> Tuple[Tensor, Tensor]:
+    return_median: bool = False,
+) -> Tuple[Tensor, Tensor] | Tuple[Tensor, Tensor, Tensor]:
     """Rasterizes Gaussians to pixels.
 
     Args:
@@ -578,6 +599,7 @@ def rasterize_to_pixels(
 
         - **Rendered colors**. [..., image_height, image_width, channels]
         - **Rendered alphas**. [..., image_height, image_width, 1]
+        - **Rendered median depth**. [..., image_height, image_width, 1] (only if `return_median=True`)
     """
 
     image_dims = means2d.shape[:-2]
@@ -596,13 +618,18 @@ def rasterize_to_pixels(
         assert colors.shape == image_dims + (N, channels), colors.shape
         assert opacities.shape == image_dims + (N,), opacities.shape
     if backgrounds is not None:
-        assert backgrounds.shape == image_dims + (channels,), backgrounds.shape
+        expected = (image_dims or (1,)) + (channels,)
+        # Backwards-compatible: packed mode previously accepted a single global background
+        # color with shape (channels,) when image_dims == ().
+        if not (backgrounds.shape == expected or (image_dims == () and backgrounds.shape == (channels,))):
+            raise AssertionError(backgrounds.shape)
         backgrounds = backgrounds.contiguous()
     if masks is not None:
         assert masks.shape == isect_offsets.shape, masks.shape
         masks = masks.contiguous()
 
     # Pad the channels to the nearest supported number if necessary
+    orig_channels = channels
     if channels > 513 or channels == 0:
         # TODO: maybe worth to support zero channels?
         raise ValueError(f"Unsupported number of color channels: {channels}")
@@ -628,23 +655,47 @@ def rasterize_to_pixels(
         513,
     ):
         padded_channels = (1 << (channels - 1).bit_length()) - channels
-        colors = torch.cat(
-            [
-                colors,
-                torch.zeros(*colors.shape[:-1], padded_channels, device=device),
-            ],
-            dim=-1,
-        )
-        if backgrounds is not None:
-            backgrounds = torch.cat(
+        if return_median:
+            # When median depth is requested, the CUDA kernel assumes the LAST channel
+            # is a depth value. Keep that last channel in place when padding.
+            colors = torch.cat(
                 [
-                    backgrounds,
-                    torch.zeros(
-                        *backgrounds.shape[:-1], padded_channels, device=device
-                    ),
+                    colors[..., :-1],
+                    torch.zeros(*colors.shape[:-1], padded_channels, device=device),
+                    colors[..., -1:],
                 ],
                 dim=-1,
             )
+        else:
+            colors = torch.cat(
+                [
+                    colors,
+                    torch.zeros(*colors.shape[:-1], padded_channels, device=device),
+                ],
+                dim=-1,
+            )
+        if backgrounds is not None:
+            if return_median:
+                backgrounds = torch.cat(
+                    [
+                        backgrounds[..., :-1],
+                        torch.zeros(
+                            *backgrounds.shape[:-1], padded_channels, device=device
+                        ),
+                        backgrounds[..., -1:],
+                    ],
+                    dim=-1,
+                )
+            else:
+                backgrounds = torch.cat(
+                    [
+                        backgrounds,
+                        torch.zeros(
+                            *backgrounds.shape[:-1], padded_channels, device=device
+                        ),
+                    ],
+                    dim=-1,
+                )
     else:
         padded_channels = 0
 
@@ -655,6 +706,28 @@ def rasterize_to_pixels(
     assert (
         tile_width * tile_size >= image_width
     ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
+
+    if return_median:
+        render_colors, render_alphas, render_median = _RasterizeToPixelsWithMedian.apply(
+            means2d.contiguous(),
+            conics.contiguous(),
+            colors.contiguous(),
+            opacities.contiguous(),
+            backgrounds,
+            masks,
+            image_width,
+            image_height,
+            tile_size,
+            isect_offsets.contiguous(),
+            flatten_ids.contiguous(),
+            absgrad,
+        )
+        if padded_channels > 0:
+            render_colors = torch.cat(
+                [render_colors[..., : orig_channels - 1], render_colors[..., -1:]],
+                dim=-1,
+            )
+        return render_colors, render_alphas, render_median
 
     render_colors, render_alphas = _RasterizeToPixels.apply(
         means2d.contiguous(),
@@ -674,6 +747,144 @@ def rasterize_to_pixels(
     if padded_channels > 0:
         render_colors = render_colors[..., :-padded_channels]
     return render_colors, render_alphas
+
+
+class _RasterizeToPixelsWithMedian(torch.autograd.Function):
+    """Rasterize gaussians and compute per-pixel median depth."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        means2d: Tensor,  # [..., N, 2] or [nnz, 2]
+        conics: Tensor,  # [..., N, 3] or [nnz, 3]
+        colors: Tensor,  # [..., N, channels] or [nnz, channels]
+        opacities: Tensor,  # [..., N] or [nnz]
+        backgrounds: Tensor,  # [..., channels], Optional
+        masks: Tensor,  # [..., tile_height, tile_width], Optional
+        width: int,
+        height: int,
+        tile_size: int,
+        isect_offsets: Tensor,  # [..., tile_height, tile_width]
+        flatten_ids: Tensor,  # [n_isects]
+        absgrad: bool,
+    ) -> Tuple[Tensor, Tensor, Tensor]:
+        render_colors, render_alphas, last_ids, render_median, median_ids = (
+            _make_lazy_cuda_func("rasterize_to_pixels_3dgs_fwd_median")(
+                means2d,
+                conics,
+                colors,
+                opacities,
+                backgrounds,
+                masks,
+                width,
+                height,
+                tile_size,
+                isect_offsets,
+                flatten_ids,
+            )
+        )
+
+        ctx.save_for_backward(
+            means2d,
+            conics,
+            colors,
+            opacities,
+            backgrounds,
+            masks,
+            isect_offsets,
+            flatten_ids,
+            render_alphas,
+            last_ids,
+            median_ids,
+        )
+        ctx.width = width
+        ctx.height = height
+        ctx.tile_size = tile_size
+        ctx.absgrad = absgrad
+
+        # double to float
+        render_alphas = render_alphas.float()
+        return render_colors, render_alphas, render_median
+
+    @staticmethod
+    def backward(
+        ctx,
+        v_render_colors: Tensor,  # [..., H, W, channels]
+        v_render_alphas: Tensor,  # [..., H, W, 1]
+        v_render_median: Tensor,  # [..., H, W, 1]
+    ):
+        (
+            means2d,
+            conics,
+            colors,
+            opacities,
+            backgrounds,
+            masks,
+            isect_offsets,
+            flatten_ids,
+            render_alphas,
+            last_ids,
+            median_ids,
+        ) = ctx.saved_tensors
+        width = ctx.width
+        height = ctx.height
+        tile_size = ctx.tile_size
+        absgrad = ctx.absgrad
+
+        if v_render_median is None:
+            v_render_median = torch.zeros_like(render_alphas)
+
+        (
+            v_means2d_abs,
+            v_means2d,
+            v_conics,
+            v_colors,
+            v_opacities,
+        ) = _make_lazy_cuda_func("rasterize_to_pixels_3dgs_bwd_median")(
+            means2d,
+            conics,
+            colors,
+            opacities,
+            backgrounds,
+            masks,
+            width,
+            height,
+            tile_size,
+            isect_offsets,
+            flatten_ids,
+            render_alphas,
+            last_ids,
+            median_ids,
+            v_render_colors.contiguous(),
+            v_render_alphas.contiguous(),
+            v_render_median.contiguous(),
+            absgrad,
+        )
+
+        if absgrad:
+            means2d.absgrad = v_means2d_abs
+
+        if ctx.needs_input_grad[4]:
+            v_backgrounds = (v_render_colors * (1.0 - render_alphas).float()).sum(
+                dim=(-3, -2)
+            )
+        else:
+            v_backgrounds = None
+
+        return (
+            v_means2d,
+            v_conics,
+            v_colors,
+            v_opacities,
+            v_backgrounds,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
 
 
 def rasterize_to_pixels_eval3d(
@@ -1049,7 +1260,7 @@ class _FullyFusedProjection(torch.autograd.Function):
         calc_compensations: bool,
         camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
         opacities: Optional[Tensor] = None,  # [..., N] or None
-    ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
         assert (
             camera_model != "ftheta"
         ), "ftheta camera is only supported via UT, please set with_ut=True in the rasterization()"
@@ -1059,7 +1270,7 @@ class _FullyFusedProjection(torch.autograd.Function):
         )
 
         # "covars" and {"quats", "scales"} are mutually exclusive
-        radii, means2d, depths, conics, compensations = _make_lazy_cuda_func(
+        radii, means2d, depths, normals, conics, compensations = _make_lazy_cuda_func(
             "projection_ewa_3dgs_fused_fwd"
         )(
             means,
@@ -1088,10 +1299,18 @@ class _FullyFusedProjection(torch.autograd.Function):
         ctx.eps2d = eps2d
         ctx.camera_model_type = camera_model_type
 
-        return radii, means2d, depths, conics, compensations
+        return radii, means2d, depths, normals, conics, compensations
 
     @staticmethod
-    def backward(ctx, v_radii, v_means2d, v_depths, v_conics, v_compensations):
+    def backward(
+        ctx,
+        v_radii,
+        v_means2d,
+        v_depths,
+        v_normals,
+        v_conics,
+        v_compensations,
+    ):
         (
             means,
             covars,
@@ -1109,6 +1328,18 @@ class _FullyFusedProjection(torch.autograd.Function):
         camera_model_type = ctx.camera_model_type
         if v_compensations is not None:
             v_compensations = v_compensations.contiguous()
+        if v_depths is None:
+            v_depths = torch.zeros(
+                conics.shape[:-1],
+                dtype=conics.dtype,
+                device=conics.device,
+            )
+        if v_normals is None:
+            v_normals = torch.zeros(
+                conics.shape[:-1] + (3,),
+                dtype=conics.dtype,
+                device=conics.device,
+            )
         v_means, v_covars, v_quats, v_scales, v_viewmats = _make_lazy_cuda_func(
             "projection_ewa_3dgs_fused_bwd"
         )(
@@ -1127,6 +1358,7 @@ class _FullyFusedProjection(torch.autograd.Function):
             compensations,
             v_means2d.contiguous(),
             v_depths.contiguous(),
+            v_normals.contiguous(),
             v_conics.contiguous(),
             v_compensations,
             ctx.needs_input_grad[4],  # viewmats_requires_grad
@@ -1616,6 +1848,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
             radii,
             means2d,
             depths,
+            normals,
             conics,
             compensations,
         ) = _make_lazy_cuda_func("projection_ewa_3dgs_packed_fwd")(
@@ -1664,6 +1897,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
             radii,
             means2d,
             depths,
+            normals,
             conics,
             compensations,
         )
@@ -1678,6 +1912,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
         v_radii,
         v_means2d,
         v_depths,
+        v_normals,
         v_conics,
         v_compensations,
     ):
@@ -1702,6 +1937,18 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
 
         if v_compensations is not None:
             v_compensations = v_compensations.contiguous()
+        if v_depths is None:
+            v_depths = torch.zeros(
+                conics.shape[:-1],
+                dtype=conics.dtype,
+                device=conics.device,
+            )
+        if v_normals is None:
+            v_normals = torch.zeros(
+                conics.shape[:-1] + (3,),
+                dtype=conics.dtype,
+                device=conics.device,
+            )
         v_means, v_covars, v_quats, v_scales, v_viewmats = _make_lazy_cuda_func(
             "projection_ewa_3dgs_packed_bwd"
         )(
@@ -1722,6 +1969,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
             compensations,
             v_means2d.contiguous(),
             v_depths.contiguous(),
+            v_normals.contiguous(),
             v_conics.contiguous(),
             v_compensations,
             ctx.needs_input_grad[4],  # viewmats_requires_grad
