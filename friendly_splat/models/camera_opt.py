@@ -55,7 +55,10 @@ class CameraOptModule(torch.nn.Module):
         # Delta position (3D) + Delta rotation (6D).
         self.embeds = torch.nn.Embedding(int(n), 9)
         # Identity rotation in 6D representation.
-        self.register_buffer("identity", torch.tensor([1.0, 0.0, 0.0, 0.0, 1.0, 0.0], dtype=torch.float32))
+        self.register_buffer(
+            "identity",
+            torch.tensor([1.0, 0.0, 0.0, 0.0, 1.0, 0.0], dtype=torch.float32),
+        )
 
     def zero_init(self) -> None:
         torch.nn.init.zeros_(self.embeds.weight)
@@ -63,7 +66,9 @@ class CameraOptModule(torch.nn.Module):
     def random_init(self, std: float) -> None:
         torch.nn.init.normal_(self.embeds.weight, std=float(std))
 
-    def forward(self, camtoworlds: torch.Tensor, embed_ids: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, camtoworlds: torch.Tensor, embed_ids: torch.Tensor
+    ) -> torch.Tensor:
         """Apply pose deltas to camtoworld matrices.
 
         Args:
@@ -75,7 +80,9 @@ class CameraOptModule(torch.nn.Module):
         """
 
         if camtoworlds.shape[-2:] != (4, 4):
-            raise ValueError(f"camtoworlds must have shape (...,4,4), got {tuple(camtoworlds.shape)}")
+            raise ValueError(
+                f"camtoworlds must have shape (...,4,4), got {tuple(camtoworlds.shape)}"
+            )
         if camtoworlds.shape[:-2] != embed_ids.shape:
             raise ValueError(
                 "camtoworlds batch dims must match embed_ids shape, "
@@ -86,8 +93,12 @@ class CameraOptModule(torch.nn.Module):
         pose_deltas = self.embeds(embed_ids)  # (..., 9)
         dx, drot = pose_deltas[..., :3], pose_deltas[..., 3:]
 
-        rot = rotation_6d_to_matrix(drot + self.identity.expand(*batch_dims, -1))  # (..., 3, 3)
-        transform = torch.eye(4, device=pose_deltas.device, dtype=pose_deltas.dtype).repeat((*batch_dims, 1, 1))
+        rot = rotation_6d_to_matrix(
+            drot + self.identity.expand(*batch_dims, -1)
+        )  # (..., 3, 3)
+        transform = torch.eye(
+            4, device=pose_deltas.device, dtype=pose_deltas.dtype
+        ).repeat((*batch_dims, 1, 1))
         transform[..., :3, :3] = rot
         transform[..., :3, 3] = dx
         return torch.matmul(camtoworlds, transform)

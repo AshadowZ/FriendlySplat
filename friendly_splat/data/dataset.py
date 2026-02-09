@@ -24,9 +24,13 @@ class InputDataset(torch.utils.data.Dataset):
 
         n = int(len(self.parsed_scene.image_names))
         if int(self.parsed_scene.camtoworlds.shape[0]) != n:
-            raise ValueError("DataparserOutputs.camtoworlds must have length N == len(image_names).")
+            raise ValueError(
+                "DataparserOutputs.camtoworlds must have length N == len(image_names)."
+            )
         if int(self.parsed_scene.Ks.shape[0]) != n:
-            raise ValueError("DataparserOutputs.Ks must have length N == len(image_names).")
+            raise ValueError(
+                "DataparserOutputs.Ks must have length N == len(image_names)."
+            )
         if int(self.parsed_scene.indices.ndim) != 1:
             raise ValueError("DataparserOutputs.indices must be a 1D array.")
 
@@ -41,6 +45,8 @@ class InputDataset(torch.utils.data.Dataset):
         parsed_scene = self.parsed_scene
         # `dataset_index` is split-local index; convert to global image index first.
         image_index = int(parsed_scene.indices[int(dataset_index)])
+        # Evaluation currently needs only RGB + camera tensors, so skip heavy prior I/O.
+        load_auxiliary_priors = str(parsed_scene.split).lower() == "train"
 
         # Trust parser outputs directly: no per-sample path existence checks.
         image_arr = imread_rgb(parsed_scene.image_paths[image_index])
@@ -48,34 +54,40 @@ class InputDataset(torch.utils.data.Dataset):
         camtoworld = parsed_scene.camtoworlds[image_index]
 
         depth_data = None
-        if parsed_scene.depth_paths is not None:
+        if load_auxiliary_priors and parsed_scene.depth_paths is not None:
             depth_path = parsed_scene.depth_paths[image_index]
             # Depth prior is stored in the parser's normalized scene space; map back
             # with parser scale so training-side depth supervision matches render space.
-            depth_data = np.load(depth_path).astype(np.float32) * float(parsed_scene.scale)
+            depth_data = np.load(depth_path).astype(np.float32) * float(
+                parsed_scene.scale
+            )
 
         normal_data = None
-        if parsed_scene.normal_paths is not None:
+        if load_auxiliary_priors and parsed_scene.normal_paths is not None:
             normal_path = parsed_scene.normal_paths[image_index]
             normal_data = imread_rgb(normal_path)
 
         dynamic_mask_data = None
-        if parsed_scene.dynamic_mask_paths is not None:
+        if load_auxiliary_priors and parsed_scene.dynamic_mask_paths is not None:
             dyn_path = parsed_scene.dynamic_mask_paths[image_index]
             dynamic_mask_data = imread_gray(dyn_path) > 0
 
         sky_mask_data = None
-        if parsed_scene.sky_mask_paths is not None:
+        if load_auxiliary_priors and parsed_scene.sky_mask_paths is not None:
             sky_path = parsed_scene.sky_mask_paths[image_index]
             sky_mask_data = imread_gray(sky_path) > 0
 
         image = torch.from_numpy(image_arr)
         image_id = torch.tensor(image_index, dtype=torch.long)
         depth_prior = (
-            torch.from_numpy(depth_data).float().unsqueeze(-1) if depth_data is not None else torch.empty(0)
+            torch.from_numpy(depth_data).float().unsqueeze(-1)
+            if depth_data is not None
+            else torch.empty(0)
         )
         normal_prior_u8 = (
-            torch.from_numpy(normal_data) if normal_data is not None else torch.empty(0, dtype=torch.uint8)
+            torch.from_numpy(normal_data)
+            if normal_data is not None
+            else torch.empty(0, dtype=torch.uint8)
         )
 
         data: Dict[str, Any] = {

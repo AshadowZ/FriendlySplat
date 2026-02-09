@@ -23,7 +23,9 @@ class BilateralGridPostProcessor(torch.nn.Module):
         self.cached_w: int = -1
 
     @classmethod
-    def create(cls, *, num_frames: int, grid_shape: tuple[int, int, int], device: torch.device):
+    def create(
+        cls, *, num_frames: int, grid_shape: tuple[int, int, int], device: torch.device
+    ):
         try:
             from fused_bilagrid import BilateralGrid, slice, total_variation_loss  # type: ignore
         except ImportError as e:  # pragma: no cover
@@ -31,9 +33,19 @@ class BilateralGridPostProcessor(torch.nn.Module):
                 "To use bilateral grid, install `fused_bilagrid` and enable --postprocess.use_bilateral_grid."
             ) from e
 
-        grid_x, grid_y, grid_w = (int(grid_shape[0]), int(grid_shape[1]), int(grid_shape[2]))
-        bil_grids = BilateralGrid(int(num_frames), grid_X=grid_x, grid_Y=grid_y, grid_W=grid_w).to(device)
-        return cls(bil_grids=bil_grids, slice_fn=slice, total_variation_loss_fn=total_variation_loss).to(device)
+        grid_x, grid_y, grid_w = (
+            int(grid_shape[0]),
+            int(grid_shape[1]),
+            int(grid_shape[2]),
+        )
+        bil_grids = BilateralGrid(
+            int(num_frames), grid_X=grid_x, grid_Y=grid_y, grid_W=grid_w
+        ).to(device)
+        return cls(
+            bil_grids=bil_grids,
+            slice_fn=slice,
+            total_variation_loss_fn=total_variation_loss,
+        ).to(device)
 
     @property
     def device(self) -> torch.device:
@@ -46,14 +58,22 @@ class BilateralGridPostProcessor(torch.nn.Module):
             return torch.device("cpu")
 
     def _grid_xy(self, *, height: int, width: int) -> torch.Tensor:
-        if self.cached_grid_xy is None or self.cached_h != int(height) or self.cached_w != int(width):
+        if (
+            self.cached_grid_xy is None
+            or self.cached_h != int(height)
+            or self.cached_w != int(width)
+        ):
             self.cached_h, self.cached_w = int(height), int(width)
             grid_y, grid_x = torch.meshgrid(
-                (torch.arange(self.cached_h, device=self.device) + 0.5) / float(self.cached_h),
-                (torch.arange(self.cached_w, device=self.device) + 0.5) / float(self.cached_w),
+                (torch.arange(self.cached_h, device=self.device) + 0.5)
+                / float(self.cached_h),
+                (torch.arange(self.cached_w, device=self.device) + 0.5)
+                / float(self.cached_w),
                 indexing="ij",
             )
-            self.cached_grid_xy = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0).detach()
+            self.cached_grid_xy = (
+                torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0).detach()
+            )
         assert isinstance(self.cached_grid_xy, torch.Tensor)
         return self.cached_grid_xy
 

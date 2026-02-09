@@ -96,7 +96,11 @@ class ImprovedStrategy(Strategy):
         # put them on the correct device.
         # - grad2d: running accum of the norm of the image-plane gradients for each Gaussian.
         # - count: running accum of how many times each Gaussian is visible.
-        state: Dict[str, Any] = {"grad2d": None, "count": None, "scene_scale": scene_scale}
+        state: Dict[str, Any] = {
+            "grad2d": None,
+            "count": None,
+            "scene_scale": scene_scale,
+        }
         if self.refine_scale2d_stop_iter > 0:
             state["radii"] = None
         return state
@@ -132,9 +136,9 @@ class ImprovedStrategy(Strategy):
     ):
         """Callback executed before `loss.backward()`."""
         del params, optimizers, state, step
-        assert self.key_for_gradient in info, (
-            "The 2D means (or equivalent) of the Gaussians is required but missing."
-        )
+        assert (
+            self.key_for_gradient in info
+        ), "The 2D means (or equivalent) of the Gaussians is required but missing."
         info[self.key_for_gradient].retain_grad()
 
     def step_post_backward(
@@ -172,7 +176,9 @@ class ImprovedStrategy(Strategy):
                     )
             else:
                 if self.verbose:
-                    print(f"Step {step}: Skipping pruning in the last refinement iteration.")
+                    print(
+                        f"Step {step}: Skipping pruning in the last refinement iteration."
+                    )
 
             # Reset running stats.
             state["grad2d"].zero_()
@@ -242,7 +248,9 @@ class ImprovedStrategy(Strategy):
             radii = info["radii"][sel].max(dim=-1).values  # [nnz]
 
         state["grad2d"].index_add_(0, gs_ids, grads.norm(dim=-1))
-        state["count"].index_add_(0, gs_ids, torch.ones_like(gs_ids, dtype=torch.float32))
+        state["count"].index_add_(
+            0, gs_ids, torch.ones_like(gs_ids, dtype=torch.float32)
+        )
 
         if self.refine_scale2d_stop_iter > 0:
             state["radii"][gs_ids] = torch.maximum(
@@ -306,7 +314,9 @@ class ImprovedStrategy(Strategy):
 
         n_split = int(is_split.sum().item())
         if n_split > 0:
-            long_axis_split(params=params, optimizers=optimizers, state=state, mask=is_split)
+            long_axis_split(
+                params=params, optimizers=optimizers, state=state, mask=is_split
+            )
         return n_split
 
     @torch.no_grad()

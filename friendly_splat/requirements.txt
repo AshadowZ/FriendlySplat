@@ -12,6 +12,9 @@ tyro>=0.8.8
 # Progress bar for training output.
 tqdm
 
+# Evaluation metrics (PSNR/SSIM/LPIPS) implementation.
+torchmetrics
+
 # Image/mask IO for dataset loading.
 imageio
 opencv-python

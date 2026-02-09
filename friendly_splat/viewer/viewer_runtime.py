@@ -82,7 +82,9 @@ class ViewerRuntime:
         if tic is not None:
             num_train_steps_per_sec = 1.0 / max(time.time() - tic, 1e-10)
             num_train_rays_per_step = int(batch_size) * int(height) * int(width)
-            self.viewer.render_tab_state.num_train_rays_per_sec = num_train_rays_per_step * num_train_steps_per_sec
+            self.viewer.render_tab_state.num_train_rays_per_sec = (
+                num_train_rays_per_step * num_train_steps_per_sec
+            )
             self.viewer.update(int(step), int(num_train_rays_per_step))
 
         self.viewer.lock.release()
@@ -112,7 +114,9 @@ class ViewerRuntime:
         radii = meta.get("radii")
         if not isinstance(radii, torch.Tensor):
             return
-        self.viewer.render_tab_state.rendered_gs_count = int(self._count_rendered_gaussians(radii))
+        self.viewer.render_tab_state.rendered_gs_count = int(
+            self._count_rendered_gaussians(radii)
+        )
 
     @staticmethod
     def _count_rendered_gaussians(radii: torch.Tensor) -> int:
@@ -137,7 +141,7 @@ class ViewerRuntime:
         if total_k <= 0:
             return 0
         # total_k == (degree+1)^2 for SH representation.
-        degree = int((total_k ** 0.5) - 1)
+        degree = int((total_k**0.5) - 1)
         return max(0, degree)
 
     @torch.no_grad()
@@ -148,7 +152,9 @@ class ViewerRuntime:
         from nerfview import apply_float_colormap  # type: ignore
 
         from friendly_splat.viewer.gsplat_viewer import GsplatRenderTabState  # type: ignore
-        from friendly_splat.utils.common_utils import get_implied_normal_from_depth  # noqa: WPS433
+        from friendly_splat.utils.common_utils import (
+            get_implied_normal_from_depth,
+        )  # noqa: WPS433
         from friendly_splat.renderer.renderer import render_splats  # noqa: WPS433
 
         assert isinstance(render_tab_state, GsplatRenderTabState)
@@ -161,11 +167,20 @@ class ViewerRuntime:
             height = int(render_tab_state.viewer_height)
 
         c2w = torch.from_numpy(np.asarray(camera_state.c2w)).float().to(self.device)
-        K = torch.from_numpy(np.asarray(camera_state.get_K((width, height)))).float().to(self.device)
+        K = (
+            torch.from_numpy(np.asarray(camera_state.get_K((width, height))))
+            .float()
+            .to(self.device)
+        )
 
         max_degree = self._max_sh_degree_supported()
         active_sh_degree = min(int(render_tab_state.sh_degree), int(max_degree))
-        backgrounds = torch.tensor([render_tab_state.backgrounds], device=self.device, dtype=torch.float32) / 255.0
+        backgrounds = (
+            torch.tensor(
+                [render_tab_state.backgrounds], device=self.device, dtype=torch.float32
+            )
+            / 255.0
+        )
 
         mode = str(render_tab_state.render_mode)
 
@@ -203,7 +218,11 @@ class ViewerRuntime:
             self._update_counts(out.meta)
 
             if mode == "expected_depth":
-                depth = out.expected_depth[0, ..., 0:1] if out.expected_depth is not None else None
+                depth = (
+                    out.expected_depth[0, ..., 0:1]
+                    if out.expected_depth is not None
+                    else None
+                )
             else:
                 median = out.meta.get("render_median")
                 depth = median[0] if isinstance(median, torch.Tensor) else None
@@ -224,7 +243,11 @@ class ViewerRuntime:
             depth_norm = depth_norm.clamp(0.0, 1.0)
             if bool(render_tab_state.inverse):
                 depth_norm = 1.0 - depth_norm
-            return apply_float_colormap(depth_norm, render_tab_state.colormap).cpu().numpy()
+            return (
+                apply_float_colormap(depth_norm, render_tab_state.colormap)
+                .cpu()
+                .numpy()
+            )
 
         if mode == "alpha":
             out = _render(render_mode="RGB")
@@ -242,7 +265,9 @@ class ViewerRuntime:
                 return np.zeros((height, width, 3), dtype=np.uint8)
             normals = (normals + 1.0) * 0.5
             normals = 1.0 - normals
-            return (normals.clamp(0.0, 1.0).detach().cpu().numpy() * 255.0).astype(np.uint8)
+            return (normals.clamp(0.0, 1.0).detach().cpu().numpy() * 255.0).astype(
+                np.uint8
+            )
 
         if mode == "surf_normal":
             out = _render(render_mode="RGB+ED")
@@ -253,6 +278,8 @@ class ViewerRuntime:
             normals = get_implied_normal_from_depth(depth, K).squeeze(0)
             normals = (normals + 1.0) * 0.5
             normals = 1.0 - normals
-            return (normals.clamp(0.0, 1.0).detach().cpu().numpy() * 255.0).astype(np.uint8)
+            return (normals.clamp(0.0, 1.0).detach().cpu().numpy() * 255.0).astype(
+                np.uint8
+            )
 
         return np.zeros((height, width, 3), dtype=np.uint8)

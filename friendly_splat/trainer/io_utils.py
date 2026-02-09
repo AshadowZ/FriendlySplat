@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 import os
+import json
 from dataclasses import asdict
 from typing import Any, Dict, Optional, Set
 
 import torch
 
-from friendly_splat.trainer.configs import IOConfig, PoseConfig, PostprocessConfig, TrainConfig
+from friendly_splat.trainer.configs import (
+    EvalConfig,
+    IOConfig,
+    PoseConfig,
+    PostprocessConfig,
+    TrainConfig,
+)
 
 
 def init_output_paths(*, io_cfg: IOConfig) -> None:
@@ -17,6 +24,33 @@ def init_output_paths(*, io_cfg: IOConfig) -> None:
 
     if io_cfg.export_ply:
         os.makedirs(os.path.join(io_cfg.result_dir, "ply"), exist_ok=True)
+
+
+def init_eval_output_paths(*, io_cfg: IOConfig, eval_cfg: EvalConfig) -> None:
+    if not bool(eval_cfg.enable):
+        return
+    os.makedirs(os.path.join(io_cfg.result_dir, "stats"), exist_ok=True)
+
+
+def save_eval_stats(
+    *,
+    io_cfg: IOConfig,
+    eval_cfg: EvalConfig,
+    step: int,
+    stats: Dict[str, float],
+) -> str:
+    split = str(eval_cfg.split)
+    train_step = int(step) + 1
+    stats_dir = os.path.join(io_cfg.result_dir, "stats")
+    os.makedirs(stats_dir, exist_ok=True)
+    out_path = os.path.join(stats_dir, f"{split}_step{train_step:06d}.json")
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(stats, f, indent=2, sort_keys=True)
+    history_path = os.path.join(stats_dir, f"{split}_history.jsonl")
+    with open(history_path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(stats, sort_keys=True) + "\n")
+    print(f"Saved eval stats: {out_path}", flush=True)
+    return out_path
 
 
 def should_save_checkpoint(
@@ -122,8 +156,16 @@ def maybe_save_outputs(
 ) -> None:
     ckpt_dir = os.path.join(io_cfg.result_dir, "ckpts")
     ply_dir = os.path.join(io_cfg.result_dir, "ply")
-    save_steps = set(int(step_id) for step_id in io_cfg.save_steps) if io_cfg.save_ckpt else set()
-    ply_steps = set(int(step_id) for step_id in io_cfg.ply_steps) if io_cfg.export_ply else set()
+    save_steps = (
+        set(int(step_id) for step_id in io_cfg.save_steps)
+        if io_cfg.save_ckpt
+        else set()
+    )
+    ply_steps = (
+        set(int(step_id) for step_id in io_cfg.ply_steps)
+        if io_cfg.export_ply
+        else set()
+    )
     ply_format = str(io_cfg.ply_format) if io_cfg.export_ply else "ply"
 
     if should_save_checkpoint(

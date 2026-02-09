@@ -14,6 +14,7 @@ from friendly_splat.models.gaussian import GaussianModel
 from friendly_splat.models.ppisp import PPISPPostProcessor
 from friendly_splat.trainer.configs import (
     DataConfig,
+    EvalConfig,
     InitConfig,
     IOConfig,
     OptimConfig,
@@ -21,7 +22,10 @@ from friendly_splat.trainer.configs import (
     PostprocessConfig,
     TrainConfig,
 )
-from friendly_splat.trainer.optimizer_coordinator import OptimizerBundle, OptimizerCoordinator
+from friendly_splat.trainer.optimizer_coordinator import (
+    OptimizerBundle,
+    OptimizerCoordinator,
+)
 from gsplat.strategy import ImprovedStrategy
 from gsplat.strategy.natural_selection import (
     NaturalSelectionPolicy,
@@ -35,6 +39,8 @@ class TrainingContext:
     device: torch.device
     dataset: InputDataset
     loader: DataLoader
+    eval_dataset: Optional[InputDataset]
+    eval_loader: Optional[DataLoader]
     gaussian_model: GaussianModel
     splats: torch.nn.ParameterDict
     pose_adjust: Optional[CameraOptModule]
@@ -71,6 +77,39 @@ def build_dataset_and_loader(
         num_workers=data_cfg.num_workers,
         device=device,
         infinite_sampler=data_cfg.infinite_sampler,
+        prefetch_to_gpu=data_cfg.prefetch_to_gpu,
+        preload=data_cfg.preload,  # type: ignore[arg-type]
+        seed=io_cfg.seed,
+    )
+    return dataset, loader
+
+
+def build_eval_dataset_and_loader(
+    *,
+    io_cfg: IOConfig,
+    data_cfg: DataConfig,
+    eval_cfg: EvalConfig,
+) -> tuple[InputDataset, DataLoader]:
+    device = torch.device(io_cfg.device)
+    dataparser = ColmapDataParser(
+        data_dir=io_cfg.data_dir,
+        factor=data_cfg.data_factor,
+        normalize_world_space=data_cfg.normalize_world_space,
+        test_every=data_cfg.test_every,
+        benchmark_train_split=data_cfg.benchmark_train_split,
+        depth_dir_name=data_cfg.depth_dir_name,
+        normal_dir_name=data_cfg.normal_dir_name,
+        dynamic_mask_dir_name=data_cfg.dynamic_mask_dir_name,
+        sky_mask_dir_name=data_cfg.sky_mask_dir_name,
+    )
+    parsed_scene = dataparser.get_dataparser_outputs(split=str(eval_cfg.split))
+    dataset = InputDataset(parsed_scene)
+    loader = DataLoader(
+        dataset,
+        batch_size=data_cfg.batch_size,
+        num_workers=data_cfg.num_workers,
+        device=device,
+        infinite_sampler=False,
         prefetch_to_gpu=data_cfg.prefetch_to_gpu,
         preload=data_cfg.preload,  # type: ignore[arg-type]
         seed=io_cfg.seed,
@@ -147,11 +186,15 @@ def build_optimizer_bundle(
     def _make_optimizer(param: torch.nn.Parameter, lr: float) -> torch.optim.Optimizer:
         lr_scaled = float(lr) * lr_scale
         if optim_cfg.sparse_grad:
-            return torch.optim.SparseAdam([{"params": param, "lr": lr_scaled}], betas=betas, eps=eps)
+            return torch.optim.SparseAdam(
+                [{"params": param, "lr": lr_scaled}], betas=betas, eps=eps
+            )
         if optim_cfg.visible_adam:
             from gsplat.optimizers import SelectiveAdam  # noqa: WPS433
 
-            return SelectiveAdam([{"params": param, "lr": lr_scaled}], eps=eps, betas=betas)
+            return SelectiveAdam(
+                [{"params": param, "lr": lr_scaled}], eps=eps, betas=betas
+            )
 
         # Default: Adam with fused implementation when available.
         if device.type == "cuda":
@@ -164,7 +207,9 @@ def build_optimizer_bundle(
                 )
             except TypeError:
                 pass
-        return torch.optim.Adam([{"params": param, "lr": lr_scaled}], eps=eps, betas=betas)
+        return torch.optim.Adam(
+            [{"params": param, "lr": lr_scaled}], eps=eps, betas=betas
+        )
 
     scene_scale = float(scene_scale)
     splat_optimizers: Dict[str, torch.optim.Optimizer] = {
@@ -194,11 +239,14 @@ def build_optimizer_bundle(
     bilagrid_optimizers: list[torch.optim.Optimizer] = []
     if postprocess_cfg.use_bilateral_grid:
         if bilagrid is None:
-            raise RuntimeError("use_bilateral_grid=True but bilagrid module is not initialized.")
+            raise RuntimeError(
+                "use_bilateral_grid=True but bilagrid module is not initialized."
+            )
         bilagrid_optimizers = [
             torch.optim.Adam(
                 bilagrid.parameters(),
-                lr=float(postprocess_cfg.bilateral_grid_lr) * math.sqrt(float(data_cfg.batch_size)),
+                lr=float(postprocess_cfg.bilateral_grid_lr)
+                * math.sqrt(float(data_cfg.batch_size)),
                 eps=1e-15,
             )
         ]
@@ -225,7 +273,9 @@ def build_optimizer_bundle(
     if postprocess_cfg.use_bilateral_grid:
         # Linear warmup (1000 iters) then exponential decay to 1% at max_steps.
         if len(bilagrid_optimizers) == 0:
-            raise RuntimeError("use_bilateral_grid=True but bilagrid optimizer is not initialized.")
+            raise RuntimeError(
+                "use_bilateral_grid=True but bilagrid optimizer is not initialized."
+            )
         gamma = 0.01 ** (1.0 / float(optim_cfg.max_steps))
         schedulers.append(
             torch.optim.lr_scheduler.ChainedScheduler(
@@ -271,6 +321,14 @@ def build_optimizer_bundle(
 def build_training_context(cfg: TrainConfig) -> TrainingContext:
     device = torch.device(cfg.io.device)
     dataset, loader = build_dataset_and_loader(io_cfg=cfg.io, data_cfg=cfg.data)
+    eval_dataset: Optional[InputDataset] = None
+    eval_loader: Optional[DataLoader] = None
+    if cfg.eval.enable:
+        eval_dataset, eval_loader = build_eval_dataset_and_loader(
+            io_cfg=cfg.io,
+            data_cfg=cfg.data,
+            eval_cfg=cfg.eval,
+        )
     gaussian_model = build_gaussian_model(
         dataset=dataset,
         init_cfg=cfg.init,
@@ -347,7 +405,9 @@ def build_training_context(cfg: TrainConfig) -> TrainingContext:
         budget=int(cfg.strategy.densification_budget),
     )
     strategy.check_sanity(splats, optimizer_bundle.splat_optimizers)
-    strategy_state = strategy.initialize_state(scene_scale=float(parsed_scene.scene_scale))
+    strategy_state = strategy.initialize_state(
+        scene_scale=float(parsed_scene.scene_scale)
+    )
 
     optimizer_coordinator = OptimizerCoordinator(
         optim_cfg=cfg.optim,
@@ -362,6 +422,8 @@ def build_training_context(cfg: TrainConfig) -> TrainingContext:
         device=device,
         dataset=dataset,
         loader=loader,
+        eval_dataset=eval_dataset,
+        eval_loader=eval_loader,
         gaussian_model=gaussian_model,
         splats=splats,
         pose_adjust=pose_adjust,

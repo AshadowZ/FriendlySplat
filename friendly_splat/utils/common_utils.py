@@ -98,7 +98,7 @@ def get_implied_normal_from_depth(
     invK = torch.linalg.inv(Ks_b33.to(dtype=dtype))  # [B,3,3]
     pix_3N = _pixel_coords_3N(H, W, device, dtype)  # [3, H*W]
     rays_b3N = torch.matmul(invK, pix_3N)  # [B,3,N]
-    points_b3hw = (rays_b3N.view(B, 3, H, W) * depths_b1hw)  # [B,3,H,W]
+    points_b3hw = rays_b3N.view(B, 3, H, W) * depths_b1hw  # [B,3,H,W]
 
     grad_x = points_b3hw[:, :, 1:-1, 2:] - points_b3hw[:, :, 1:-1, :-2]  # [B,3,H-2,W-2]
     grad_y = points_b3hw[:, :, 2:, 1:-1] - points_b3hw[:, :, :-2, 1:-1]  # [B,3,H-2,W-2]

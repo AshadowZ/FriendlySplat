@@ -35,7 +35,9 @@ CAMERA_MODELS = {
     CameraModel(model_id=9, model_name="RADIAL_FISHEYE", num_params=5),
     CameraModel(model_id=10, model_name="THIN_PRISM_FISHEYE", num_params=12),
 }
-CAMERA_MODEL_IDS = {camera_model.model_id: camera_model for camera_model in CAMERA_MODELS}
+CAMERA_MODEL_IDS = {
+    camera_model.model_id: camera_model for camera_model in CAMERA_MODELS
+}
 CAMERA_MODEL_NAMES = {
     camera_model.model_name: camera_model for camera_model in CAMERA_MODELS
 }
@@ -83,7 +85,9 @@ def read_cameras_binary(path_to_model_file):
     with open(path_to_model_file, "rb") as fid:
         num_cameras = read_next_bytes(fid, 8, "Q")[0]
         for _ in range(num_cameras):
-            camera_properties = read_next_bytes(fid, num_bytes=24, format_char_sequence="iiQQ")
+            camera_properties = read_next_bytes(
+                fid, num_bytes=24, format_char_sequence="iiQQ"
+            )
             camera_id = camera_properties[0]
             model_id = camera_properties[1]
             model_name = CAMERA_MODEL_IDS[model_id].model_name
@@ -142,7 +146,9 @@ def read_images_binary(path_to_model_file):
             while current_char != b"\x00":
                 image_name += current_char.decode("utf-8")
                 current_char = read_next_bytes(fid, 1, "c")[0]
-            num_points2d = read_next_bytes(fid, num_bytes=8, format_char_sequence="Q")[0]
+            num_points2d = read_next_bytes(fid, num_bytes=8, format_char_sequence="Q")[
+                0
+            ]
             x_y_id_s = read_next_bytes(
                 fid,
                 num_bytes=24 * num_points2d,
@@ -208,9 +214,13 @@ def read_points3d_binary(path_to_model_file):
             xyz = np.array(binary_point_line_properties[1:4])
             rgb = np.array(binary_point_line_properties[4:7])
             error = np.array(binary_point_line_properties[7])
-            track_length = read_next_bytes(fid, num_bytes=8, format_char_sequence="Q")[0]
+            track_length = read_next_bytes(fid, num_bytes=8, format_char_sequence="Q")[
+                0
+            ]
             track_elems = read_next_bytes(
-                fid, num_bytes=8 * track_length, format_char_sequence="ii" * track_length
+                fid,
+                num_bytes=8 * track_length,
+                format_char_sequence="ii" * track_length,
             )
             image_ids = np.array(tuple(map(int, track_elems[0::2])))
             point2d_idxs = np.array(tuple(map(int, track_elems[1::2])))
@@ -283,10 +293,23 @@ def get_intrinsics(camera: Camera) -> np.ndarray:
     params = camera.params
     if model in ("SIMPLE_PINHOLE", "SIMPLE_RADIAL", "SIMPLE_RADIAL_FISHEYE"):
         # fx = fy = params[0]
-        K = np.array([[params[0], 0.0, params[1]], [0.0, params[0], params[2]], [0.0, 0.0, 1.0]])
+        K = np.array(
+            [[params[0], 0.0, params[1]], [0.0, params[0], params[2]], [0.0, 0.0, 1.0]]
+        )
         return K
-    if model in ("PINHOLE", "OPENCV", "OPENCV_FISHEYE", "RADIAL", "RADIAL_FISHEYE", "FULL_OPENCV", "FOV", "THIN_PRISM_FISHEYE"):
-        K = np.array([[params[0], 0.0, params[2]], [0.0, params[1], params[3]], [0.0, 0.0, 1.0]])
+    if model in (
+        "PINHOLE",
+        "OPENCV",
+        "OPENCV_FISHEYE",
+        "RADIAL",
+        "RADIAL_FISHEYE",
+        "FULL_OPENCV",
+        "FOV",
+        "THIN_PRISM_FISHEYE",
+    ):
+        K = np.array(
+            [[params[0], 0.0, params[2]], [0.0, params[1], params[3]], [0.0, 0.0, 1.0]]
+        )
         return K
     raise ValueError(f"Unsupported camera model: {model}")
 
@@ -294,6 +317,7 @@ def get_intrinsics(camera: Camera) -> np.ndarray:
 def get_extrinsic(image: Image) -> np.ndarray:
     R = image.qvec2rotmat()
     t = image.tvec.reshape(3, 1)
-    w2c = np.concatenate([np.concatenate([R, t], axis=1), np.array([[0, 0, 0, 1]])], axis=0)
+    w2c = np.concatenate(
+        [np.concatenate([R, t], axis=1), np.array([[0, 0, 0, 1]])], axis=0
+    )
     return w2c
-

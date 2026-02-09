@@ -38,9 +38,15 @@ def compute_step_schedule(
     else:
         active_sh_degree = max_sh_degree
 
-    depth_due = reg_cfg.depth_reg_every_n > 0 and (step % reg_cfg.depth_reg_every_n == 0)
-    normal_due = reg_cfg.normal_reg_every_n > 0 and (step % reg_cfg.normal_reg_every_n == 0)
-    scale_due = reg_cfg.scale_reg_every_n > 0 and (step % reg_cfg.scale_reg_every_n == 0)
+    depth_due = reg_cfg.depth_reg_every_n > 0 and (
+        step % reg_cfg.depth_reg_every_n == 0
+    )
+    normal_due = reg_cfg.normal_reg_every_n > 0 and (
+        step % reg_cfg.normal_reg_every_n == 0
+    )
+    scale_due = reg_cfg.scale_reg_every_n > 0 and (
+        step % reg_cfg.scale_reg_every_n == 0
+    )
 
     do_depth_reg = (
         has_depth_prior
@@ -69,7 +75,9 @@ def compute_step_schedule(
     do_flat_reg = reg_cfg.flat_reg_weight > 0.0
     do_scale_reg = reg_cfg.scale_reg_weight > 0.0 and scale_due
 
-    need_expected_depth = do_depth_reg or do_surf_normal_reg or do_consistency_normal_reg
+    need_expected_depth = (
+        do_depth_reg or do_surf_normal_reg or do_consistency_normal_reg
+    )
     need_render_normals = do_render_normal_reg or do_consistency_normal_reg
 
     if need_render_normals:

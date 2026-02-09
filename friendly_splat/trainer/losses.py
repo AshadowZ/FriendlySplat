@@ -249,12 +249,18 @@ def compute_losses(
     The `do_*` switches are decided by train pipeline scheduling logic.
     """
     device = pixels.device
-    batch_size, height, width = int(pixels.shape[0]), int(pixels.shape[1]), int(pixels.shape[2])
+    batch_size, height, width = (
+        int(pixels.shape[0]),
+        int(pixels.shape[1]),
+        int(pixels.shape[2]),
+    )
 
     items: Dict[str, torch.Tensor] = {}
 
     # Shared validity mask for color/geometry terms.
-    valid_color = torch.ones((batch_size, height, width), dtype=torch.bool, device=device)
+    valid_color = torch.ones(
+        (batch_size, height, width), dtype=torch.bool, device=device
+    )
     if isinstance(sky_mask, torch.Tensor):
         valid_color = valid_color & (~sky_mask.bool())
     if isinstance(dynamic_mask, torch.Tensor):
@@ -274,7 +280,9 @@ def compute_losses(
         if float(reg_cfg.ssim_lambda) > 0.0
         else torch.tensor(0.0, device=device)
     )
-    rgb_loss = (1.0 - float(reg_cfg.ssim_lambda)) * l1 + float(reg_cfg.ssim_lambda) * ssim_term
+    rgb_loss = (1.0 - float(reg_cfg.ssim_lambda)) * l1 + float(
+        reg_cfg.ssim_lambda
+    ) * ssim_term
 
     total = rgb_loss
     items["rgb_l1"] = l1.detach()
@@ -297,7 +305,9 @@ def compute_losses(
     depth_loss = torch.tensor(0.0, device=device)
     if do_depth_reg:
         if not isinstance(depth_prior, torch.Tensor) or expected_depth is None:
-            raise RuntimeError("do_depth_reg=True requires both depth_prior and expected_depth.")
+            raise RuntimeError(
+                "do_depth_reg=True requires both depth_prior and expected_depth."
+            )
         valid_depth = valid_color & (alphas[..., 0] > 1e-6)
         depth_loss = expected_depth_l1_loss(
             expected_depth=expected_depth,
@@ -314,7 +324,9 @@ def compute_losses(
     render_normal_loss = torch.tensor(0.0, device=device)
     if do_render_normal_reg:
         if not isinstance(normal_prior, torch.Tensor) or render_normals is None:
-            raise RuntimeError("do_render_normal_reg=True requires both normal_prior and render_normals.")
+            raise RuntimeError(
+                "do_render_normal_reg=True requires both normal_prior and render_normals."
+            )
         render_normal_loss = cosine_normal_loss(
             pred_normals=render_normals,
             gt_normals=normal_prior,
@@ -359,7 +371,10 @@ def compute_losses(
             gt_normals=surf_normals,
             valid_mask=valid_norm,
         )
-        total = total + float(reg_cfg.consistency_normal_loss_weight) * consistency_normal_loss
+        total = (
+            total
+            + float(reg_cfg.consistency_normal_loss_weight) * consistency_normal_loss
+        )
     items["consistency_normal"] = consistency_normal_loss.detach()
 
     # Scale regularizations.

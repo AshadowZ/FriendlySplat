@@ -46,7 +46,9 @@ def resize_image_folder(image_dir: str, resized_dir: str, factor: int) -> str:
     image_files = get_rel_paths(image_dir)
     for image_file in image_files:
         image_path = os.path.join(image_dir, image_file)
-        resized_path = os.path.join(resized_dir, os.path.splitext(image_file)[0] + ".png")
+        resized_path = os.path.join(
+            resized_dir, os.path.splitext(image_file)[0] + ".png"
+        )
         if os.path.isfile(resized_path):
             continue
         os.makedirs(os.path.dirname(resized_path), exist_ok=True)
@@ -55,8 +57,12 @@ def resize_image_folder(image_dir: str, resized_dir: str, factor: int) -> str:
             int(round(image_arr.shape[1] / factor)),
             int(round(image_arr.shape[0] / factor)),
         )
-        resized_image = cv2.resize(image_arr, resized_size, interpolation=cv2.INTER_CUBIC)
+        resized_image = cv2.resize(
+            image_arr, resized_size, interpolation=cv2.INTER_CUBIC
+        )
         resized_bgr = cv2.cvtColor(resized_image, cv2.COLOR_RGB2BGR)
         if not cv2.imwrite(resized_path, resized_bgr):
-            raise RuntimeError(f"cv2.imwrite failed to save resized image: {resized_path}")
+            raise RuntimeError(
+                f"cv2.imwrite failed to save resized image: {resized_path}"
+            )
     return resized_dir
