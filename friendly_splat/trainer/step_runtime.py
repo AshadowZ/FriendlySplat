@@ -4,12 +4,19 @@ from typing import Optional
 
 import torch
 
-from friendly_splat.data.dataloader import PreparedBatch
+from friendly_splat.data.dataloader import DataLoader, PreparedBatch
 from friendly_splat.models.bilateral_grid import BilateralGridPostProcessor
 from friendly_splat.models.camera_opt import CameraOptModule, apply_pose_adjust
 from friendly_splat.models.ppisp import PPISPPostProcessor
 from friendly_splat.renderer.renderer import RenderOutput, render_splats
-from friendly_splat.trainer.configs import OptimConfig, PostprocessConfig, RegConfig
+from friendly_splat.trainer.configs import (
+    OptimConfig,
+    PostprocessConfig,
+    RegConfig,
+    TrainConfig,
+)
+from friendly_splat.trainer.eval_runtime import run_evaluation, should_run_evaluation
+from friendly_splat.trainer.io_utils import save_eval_stats
 from friendly_splat.trainer.losses import LossOutput, compute_losses
 from friendly_splat.trainer.step_schedule import StepSchedule, compute_step_schedule
 from gsplat.strategy.natural_selection import NaturalSelectionPolicy
@@ -23,10 +30,12 @@ def build_step_schedule_from_prepared_batch(
     prepared_batch: PreparedBatch,
 ) -> StepSchedule:
     has_depth_prior = (
-        isinstance(prepared_batch.depth_prior, torch.Tensor) and prepared_batch.depth_prior.numel() > 0
+        isinstance(prepared_batch.depth_prior, torch.Tensor)
+        and prepared_batch.depth_prior.numel() > 0
     )
     has_normal_prior = (
-        isinstance(prepared_batch.normal_prior, torch.Tensor) and prepared_batch.normal_prior.numel() > 0
+        isinstance(prepared_batch.normal_prior, torch.Tensor)
+        and prepared_batch.normal_prior.numel() > 0
     )
     return compute_step_schedule(
         step=step,
@@ -94,7 +103,9 @@ def render_from_prepared_batch(
 
     if postprocess_cfg.use_bilateral_grid:
         if bilagrid is None:
-            raise RuntimeError("use_bilateral_grid=True but bilagrid is not initialized.")
+            raise RuntimeError(
+                "use_bilateral_grid=True but bilagrid is not initialized."
+            )
         if image_ids is None:
             raise KeyError("Bilateral grid requires `image_id` in the batch.")
         pred_rgb = bilagrid.apply(rgb=pred_rgb, image_ids=image_ids)
@@ -168,7 +179,9 @@ def compute_losses_from_prepared_batch_and_render(
     bilagrid_tv = torch.tensor(0.0, device=device)
     if postprocess_cfg.use_bilateral_grid:
         if bilagrid is None:
-            raise RuntimeError("use_bilateral_grid=True but bilagrid is not initialized.")
+            raise RuntimeError(
+                "use_bilateral_grid=True but bilagrid is not initialized."
+            )
         image_ids = prepared_batch.image_ids
         if image_ids is None:
             raise KeyError("Bilateral grid loss requires `image_id` in the batch.")
@@ -197,3 +210,60 @@ def compute_losses_from_prepared_batch_and_render(
 
     items["total"] = total.detach()
     return LossOutput(total=total, items=items)
+
+
+def maybe_run_evaluation_for_step(
+    *,
+    step: int,
+    train_cfg: TrainConfig,
+    eval_loader: Optional[DataLoader],
+    splats: torch.nn.ParameterDict,
+    bilagrid: Optional[BilateralGridPostProcessor] = None,
+    ppisp: Optional[PPISPPostProcessor] = None,
+) -> Optional[str]:
+    """Run evaluation for the current step when configured and due.
+
+    Returns a short human-readable summary string when evaluation runs, else None.
+    """
+    if not should_run_evaluation(eval_cfg=train_cfg.eval, step=int(step)):
+        return None
+    if eval_loader is None:
+        raise RuntimeError("Evaluation is enabled but eval_loader is not initialized.")
+
+    eval_output = run_evaluation(
+        cfg=train_cfg,
+        step=int(step),
+        eval_loader=eval_loader,
+        splats=splats,
+        bilagrid=bilagrid,
+        ppisp=ppisp,
+    )
+    save_eval_stats(
+        io_cfg=train_cfg.io,
+        eval_cfg=train_cfg.eval,
+        step=int(step),
+        stats=eval_output.stats,
+    )
+    lpips_suffix = ""
+    lpips_value = eval_output.stats.get("lpips")
+    if lpips_value is not None:
+        lpips_suffix = f" lpips={float(lpips_value):.4f}"
+    cc_suffix = ""
+    cc_psnr = eval_output.stats.get("cc_psnr")
+    cc_ssim = eval_output.stats.get("cc_ssim")
+    cc_lpips = eval_output.stats.get("cc_lpips")
+    if cc_psnr is not None and cc_ssim is not None and cc_lpips is not None:
+        cc_suffix = (
+            f" cc_psnr={float(cc_psnr):.3f}"
+            f" cc_ssim={float(cc_ssim):.4f}"
+            f" cc_lpips={float(cc_lpips):.4f}"
+        )
+    return (
+        "eval "
+        f"step={int(step) + 1} "
+        f"psnr={eval_output.stats['psnr']:.3f} "
+        f"ssim={eval_output.stats['ssim']:.4f}"
+        f"{lpips_suffix} "
+        f"{cc_suffix} "
+        f"sec/img={eval_output.stats['seconds_per_image']:.4f}"
+    )

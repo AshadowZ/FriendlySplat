@@ -91,7 +91,9 @@ class OptimizerCoordinator:
         if optim_cfg.sparse_grad:
             gaussian_ids = meta.get("gaussian_ids")
             if not isinstance(gaussian_ids, torch.Tensor):
-                raise KeyError("meta['gaussian_ids'] missing; required for sparse_grad in packed mode.")
+                raise KeyError(
+                    "meta['gaussian_ids'] missing; required for sparse_grad in packed mode."
+                )
             ids = gaussian_ids.to(dtype=torch.int64)
             is_coalesced = int(batch_size) == 1
             for param in splats.values():
@@ -111,16 +113,22 @@ class OptimizerCoordinator:
             if optim_cfg.packed:
                 gaussian_ids = meta.get("gaussian_ids")
                 if not isinstance(gaussian_ids, torch.Tensor):
-                    raise KeyError("meta['gaussian_ids'] missing; required for visible_adam in packed mode.")
+                    raise KeyError(
+                        "meta['gaussian_ids'] missing; required for visible_adam in packed mode."
+                    )
                 visibility = torch.zeros_like(splats["opacities"], dtype=torch.bool)
                 visibility.scatter_(0, gaussian_ids.to(dtype=torch.int64), True)
             else:
                 radii = meta.get("radii")
                 if not isinstance(radii, torch.Tensor):
-                    raise KeyError("meta['radii'] missing; required for visible_adam in unpacked mode.")
+                    raise KeyError(
+                        "meta['radii'] missing; required for visible_adam in unpacked mode."
+                    )
                 vis = radii > 0
                 # Handle common shapes: [..., C, N, 2] -> [..., C, N]
-                if vis.dim() >= 2 and int(vis.shape[-1]) != int(splats["opacities"].shape[0]):
+                if vis.dim() >= 2 and int(vis.shape[-1]) != int(
+                    splats["opacities"].shape[0]
+                ):
                     vis = vis.all(dim=-1)
                 reduce_dims = tuple(range(vis.dim() - 1))
                 visibility = vis.any(dim=reduce_dims)
@@ -143,10 +151,14 @@ class OptimizerCoordinator:
                 if gns_window_active and name == "opacities":
                     if (
                         self._gns_opacity_visibility is None
-                        or int(self._gns_opacity_visibility.numel()) != int(splats["opacities"].numel())
-                        or self._gns_opacity_visibility.device != splats["opacities"].device
+                        or int(self._gns_opacity_visibility.numel())
+                        != int(splats["opacities"].numel())
+                        or self._gns_opacity_visibility.device
+                        != splats["opacities"].device
                     ):
-                        self._gns_opacity_visibility = torch.ones_like(splats["opacities"], dtype=torch.bool)
+                        self._gns_opacity_visibility = torch.ones_like(
+                            splats["opacities"], dtype=torch.bool
+                        )
                     opt.step(self._gns_opacity_visibility)
                 else:
                     opt.step(visibility)

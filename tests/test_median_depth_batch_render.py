@@ -58,7 +58,6 @@ def _maybe_save_visualization(
     except Exception:
         return None
 
-
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     renders_np = renders.detach().float().cpu().numpy()
@@ -194,22 +193,40 @@ def _run() -> int:
     torch.manual_seed(0)
     device = torch.device("cuda")
 
-    means, quats, scales, opacities, colors, viewmats, Ks, width, height = load_test_data(
+    (
+        means,
+        quats,
+        scales,
+        opacities,
+        colors,
+        viewmats,
+        Ks,
+        width,
+        height,
+    ) = load_test_data(
         data_path=_asset_path(),
         device=device,
         scene_grid=1,
     )
 
     B, C = 2, 3
-    means = torch.broadcast_to(means, (B, *means.shape)).contiguous().requires_grad_(True)
-    quats = torch.broadcast_to(quats, (B, *quats.shape)).contiguous().requires_grad_(True)
-    scales = torch.broadcast_to(scales, (B, *scales.shape)).contiguous().requires_grad_(True)
+    means = (
+        torch.broadcast_to(means, (B, *means.shape)).contiguous().requires_grad_(True)
+    )
+    quats = (
+        torch.broadcast_to(quats, (B, *quats.shape)).contiguous().requires_grad_(True)
+    )
+    scales = (
+        torch.broadcast_to(scales, (B, *scales.shape)).contiguous().requires_grad_(True)
+    )
     opacities = (
         torch.broadcast_to(opacities, (B, *opacities.shape))
         .contiguous()
         .requires_grad_(True)
     )
-    colors = torch.broadcast_to(colors, (B, *colors.shape)).contiguous().requires_grad_(True)
+    colors = (
+        torch.broadcast_to(colors, (B, *colors.shape)).contiguous().requires_grad_(True)
+    )
 
     viewmats = torch.broadcast_to(viewmats[:C], (B, C, 4, 4)).contiguous()
     Ks = torch.broadcast_to(Ks[:C], (B, C, 3, 3)).contiguous()
@@ -301,7 +318,9 @@ def _run() -> int:
     out_png = _results_dir() / "rgb_ed_median_batched.png"
     saved = _maybe_save_visualization(out_png, renders, alphas, render_median)
     if saved is None:
-        print("OK: tests passed, but no PNG was saved. Install matplotlib to enable saving.")
+        print(
+            "OK: tests passed, but no PNG was saved. Install matplotlib to enable saving."
+        )
     else:
         print(f"OK: saved {saved}")
     print("OK: median depth forward+backward look good")

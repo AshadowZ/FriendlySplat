@@ -9,6 +9,8 @@ This file intentionally stays thin and delegates most logic to:
 - `friendly_splat.viewer.viewer_runtime`: optional online viewer (viser/nerfview)
 """
 
+import warnings
+
 import torch
 import tyro
 import tqdm
@@ -20,6 +22,7 @@ from friendly_splat.trainer.builder import build_training_context
 from friendly_splat.trainer.step_runtime import (
     build_step_schedule_from_prepared_batch,
     compute_losses_from_prepared_batch_and_render,
+    maybe_run_evaluation_for_step,
     prepare_training_batch,
     render_from_prepared_batch,
 )
@@ -28,6 +31,7 @@ from friendly_splat.trainer.configs import TrainConfig, validate_train_config
 from friendly_splat.utils.common_utils import set_seed
 from friendly_splat.trainer.io_utils import (
     init_output_paths,
+    init_eval_output_paths,
     maybe_save_outputs,
 )
 
@@ -47,10 +51,13 @@ class Trainer:
 
         # Prepare output folders (checkpoints / PLY exports).
         init_output_paths(io_cfg=cfg.io)
+        init_eval_output_paths(io_cfg=cfg.io, eval_cfg=cfg.eval)
 
         context = build_training_context(cfg)
         self.dataset = context.dataset
         self.loader = context.loader
+        self.eval_dataset = context.eval_dataset
+        self.eval_loader = context.eval_loader
         self.gaussian_model = context.gaussian_model
         self.splats = context.splats
         self.bilagrid = context.bilagrid
@@ -64,18 +71,14 @@ class Trainer:
 
         torch.backends.cudnn.benchmark = True
 
-        # Optional online viewer runtime (pause/resume + interactive renders).
-        self.viewer_runtime = ViewerRuntime(
-            disable_viewer=bool(cfg.viewer.disable_viewer),
-            port=int(cfg.viewer.port),
-            device=self.device,
-            splats=self.splats,
-            output_dir=cfg.io.result_dir,
-        )
+        # Viewer runtime is initialized lazily in `train()` after DataLoader workers
+        # are started, to avoid fork-after-threads stalls with num_workers>0.
+        self.viewer_runtime = None
 
     def train(self) -> None:
         cfg = self.cfg
         splats = self.splats
+        eval_loader = self.eval_loader
         bilagrid = self.bilagrid
         ppisp = self.ppisp
         pose_adjust = self.pose_adjust
@@ -83,15 +86,21 @@ class Trainer:
         strategy_state = self.strategy_state
         gns = self.natural_selection_policy
         optimizer_coordinator = self.optimizer_coordinator
-        viewer_runtime = self.viewer_runtime
-
         loader_iter = iter(self.loader)
+        viewer_runtime = ViewerRuntime(
+            disable_viewer=bool(cfg.viewer.disable_viewer),
+            port=int(cfg.viewer.port),
+            device=self.device,
+            splats=splats,
+            output_dir=cfg.io.result_dir,
+        )
+        self.viewer_runtime = viewer_runtime
         tqdm_update_every = 10
         pbar = tqdm.tqdm(
             range(cfg.optim.max_steps),
             miniters=int(tqdm_update_every),
         )
-        
+
         for step in pbar:
             # Viewer runtime may pause training and holds a lock during the step.
             tic = viewer_runtime.before_step()
@@ -161,7 +170,9 @@ class Trainer:
             loss.backward()
 
             # Limit tqdm refresh frequency to reduce terminal overhead.
-            if (int(step) % int(tqdm_update_every) == 0) or (int(step) == int(cfg.optim.max_steps) - 1):
+            if (int(step) % int(tqdm_update_every) == 0) or (
+                int(step) == int(cfg.optim.max_steps) - 1
+            ):
                 pbar.set_description(f"sh degree={active_sh_degree}| ")
 
             optimizer_coordinator.step_all(
@@ -213,8 +224,21 @@ class Trainer:
                 meta=meta,
             )
 
+            eval_summary = maybe_run_evaluation_for_step(
+                step=int(step),
+                train_cfg=cfg,
+                eval_loader=eval_loader,
+                splats=splats,
+                bilagrid=bilagrid,
+                ppisp=ppisp,
+            )
+            if eval_summary is not None:
+                pbar.write(eval_summary)
+
         viewer_runtime.complete()
-        if (not bool(cfg.viewer.disable_viewer)) and bool(cfg.viewer.keep_alive_after_train):
+        if (not bool(cfg.viewer.disable_viewer)) and bool(
+            cfg.viewer.keep_alive_after_train
+        ):
             viewer_runtime.keep_alive()
 
 

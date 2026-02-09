@@ -64,7 +64,7 @@ def _maybe_save_visualization(
         fig_cols,
         figsize=(2.0 * fig_cols, 1.35 * fig_rows),
         squeeze=False,
-        )
+    )
     fig.patch.set_facecolor("black")
 
     for b in range(B):
@@ -165,6 +165,7 @@ def test_rasterization_rgb_n_ed_batched_assets():
     _set_torch_extensions_dir()
 
     from gsplat._helper import load_test_data
+
     try:
         from gsplat.rendering import rasterization
     except Exception as e:
@@ -181,7 +182,17 @@ def test_rasterization_rgb_n_ed_batched_assets():
     torch.manual_seed(42)
 
     device = torch.device("cuda")
-    means, quats, scales, opacities, colors, viewmats, Ks, width, height = load_test_data(
+    (
+        means,
+        quats,
+        scales,
+        opacities,
+        colors,
+        viewmats,
+        Ks,
+        width,
+        height,
+    ) = load_test_data(
         data_path=_asset_path(),
         device=device,
         scene_grid=1,
@@ -190,15 +201,23 @@ def test_rasterization_rgb_n_ed_batched_assets():
     # Use all Gaussians from the NPZ to match real usage.
 
     B, C = 2, 3
-    means = torch.broadcast_to(means, (B, *means.shape)).contiguous().requires_grad_(True)
-    quats = torch.broadcast_to(quats, (B, *quats.shape)).contiguous().requires_grad_(True)
-    scales = torch.broadcast_to(scales, (B, *scales.shape)).contiguous().requires_grad_(True)
+    means = (
+        torch.broadcast_to(means, (B, *means.shape)).contiguous().requires_grad_(True)
+    )
+    quats = (
+        torch.broadcast_to(quats, (B, *quats.shape)).contiguous().requires_grad_(True)
+    )
+    scales = (
+        torch.broadcast_to(scales, (B, *scales.shape)).contiguous().requires_grad_(True)
+    )
     opacities = (
         torch.broadcast_to(opacities, (B, *opacities.shape))
         .contiguous()
         .requires_grad_(True)
     )
-    colors = torch.broadcast_to(colors, (B, *colors.shape)).contiguous().requires_grad_(True)
+    colors = (
+        torch.broadcast_to(colors, (B, *colors.shape)).contiguous().requires_grad_(True)
+    )
 
     viewmats = torch.broadcast_to(viewmats[:C], (B, C, 4, 4)).contiguous()
     Ks = torch.broadcast_to(Ks[:C], (B, C, 3, 3)).contiguous()
@@ -306,7 +325,9 @@ def test_rgb_n_ed_rejects_covars_chain():
             if "covars=None" not in str(e):
                 raise
         else:
-            raise AssertionError("Expected ValueError when render_mode='RGB+N+ED' with covars")
+            raise AssertionError(
+                "Expected ValueError when render_mode='RGB+N+ED' with covars"
+            )
 
 
 def _run_as_script() -> int:

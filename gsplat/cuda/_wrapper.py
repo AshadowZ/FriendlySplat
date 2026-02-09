@@ -327,7 +327,7 @@ def fully_fused_projection(
         This functions supports projecting Gaussians with either covariances or {quaternions, scales},
         which will be converted to covariances internally in a fused CUDA kernel. Either `covars` or
         {`quats`, `scales`} should be provided.
-        
+
         **Normals**: When `quats/scales` are provided, the CUDA projection kernels can also output a
         per-Gaussian normal (camera space) defined as the axis corresponding to the smallest scale.
         If `covars` are provided (and `quats/scales` are not), normals are not defined and will be
@@ -621,7 +621,10 @@ def rasterize_to_pixels(
         expected = (image_dims or (1,)) + (channels,)
         # Backwards-compatible: packed mode previously accepted a single global background
         # color with shape (channels,) when image_dims == ().
-        if not (backgrounds.shape == expected or (image_dims == () and backgrounds.shape == (channels,))):
+        if not (
+            backgrounds.shape == expected
+            or (image_dims == () and backgrounds.shape == (channels,))
+        ):
             raise AssertionError(backgrounds.shape)
         backgrounds = backgrounds.contiguous()
     if masks is not None:
@@ -708,7 +711,11 @@ def rasterize_to_pixels(
     ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
 
     if return_median:
-        render_colors, render_alphas, render_median = _RasterizeToPixelsWithMedian.apply(
+        (
+            render_colors,
+            render_alphas,
+            render_median,
+        ) = _RasterizeToPixelsWithMedian.apply(
             means2d.contiguous(),
             conics.contiguous(),
             colors.contiguous(),
@@ -768,20 +775,24 @@ class _RasterizeToPixelsWithMedian(torch.autograd.Function):
         flatten_ids: Tensor,  # [n_isects]
         absgrad: bool,
     ) -> Tuple[Tensor, Tensor, Tensor]:
-        render_colors, render_alphas, last_ids, render_median, median_ids = (
-            _make_lazy_cuda_func("rasterize_to_pixels_3dgs_fwd_median")(
-                means2d,
-                conics,
-                colors,
-                opacities,
-                backgrounds,
-                masks,
-                width,
-                height,
-                tile_size,
-                isect_offsets,
-                flatten_ids,
-            )
+        (
+            render_colors,
+            render_alphas,
+            last_ids,
+            render_median,
+            median_ids,
+        ) = _make_lazy_cuda_func("rasterize_to_pixels_3dgs_fwd_median")(
+            means2d,
+            conics,
+            colors,
+            opacities,
+            backgrounds,
+            masks,
+            width,
+            height,
+            tile_size,
+            isect_offsets,
+            flatten_ids,
         )
 
         ctx.save_for_backward(

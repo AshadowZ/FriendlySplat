@@ -674,13 +674,18 @@ def rasterization(
                 world_size, [radii], cnts, output_splits=collected_splits
             )
             if need_normals:
-                (means2d, depths, normals, conics, opacities, colors) = (
-                    all_to_all_tensor_list(
-                        world_size,
-                        [means2d, depths, normals, conics, opacities, colors],
-                        cnts,
-                        output_splits=collected_splits,
-                    )
+                (
+                    means2d,
+                    depths,
+                    normals,
+                    conics,
+                    opacities,
+                    colors,
+                ) = all_to_all_tensor_list(
+                    world_size,
+                    [means2d, depths, normals, conics, opacities, colors],
+                    cnts,
+                    output_splits=collected_splits,
                 )
             else:
                 (means2d, depths, conics, opacities, colors) = all_to_all_tensor_list(
@@ -736,20 +741,25 @@ def rasterization(
             radii = reshape_view(C, radii, N_world)
 
             if need_normals:
-                (means2d, depths, normals, conics, opacities, colors) = (
-                    all_to_all_tensor_list(
-                        world_size,
-                        [
-                            means2d.flatten(0, 1),
-                            depths.flatten(0, 1),
-                            normals.flatten(0, 1),
-                            conics.flatten(0, 1),
-                            opacities.flatten(0, 1),
-                            colors.flatten(0, 1),
-                        ],
-                        splits=[C_i * N for C_i in C_world],
-                        output_splits=[C * N_i for N_i in N_world],
-                    )
+                (
+                    means2d,
+                    depths,
+                    normals,
+                    conics,
+                    opacities,
+                    colors,
+                ) = all_to_all_tensor_list(
+                    world_size,
+                    [
+                        means2d.flatten(0, 1),
+                        depths.flatten(0, 1),
+                        normals.flatten(0, 1),
+                        conics.flatten(0, 1),
+                        opacities.flatten(0, 1),
+                        colors.flatten(0, 1),
+                    ],
+                    splits=[C_i * N for C_i in C_world],
+                    output_splits=[C * N_i for N_i in N_world],
                 )
             else:
                 (means2d, depths, conics, opacities, colors) = all_to_all_tensor_list(

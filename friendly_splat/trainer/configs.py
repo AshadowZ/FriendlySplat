@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional, Tuple
+from typing import Literal, Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -120,6 +120,23 @@ class ViewerConfig:
     port: int = 8080
     # Keep the viewer process alive after training finishes (Ctrl+C to exit).
     keep_alive_after_train: bool = True
+
+
+@dataclass(frozen=True)
+class EvalConfig:
+    # Enable periodic evaluation on holdout images.
+    enable: bool = False
+    # Split name to evaluate. ColmapDataParser treats non-"train" as holdout split.
+    split: str = "test"
+    # Run evaluation every N training steps (1-based, e.g. 1000 means 1000,2000,...).
+    eval_every_n: int = 1000
+    # Optional cap on evaluated images (None means full split).
+    max_images: Optional[int] = None
+    # LPIPS backbone for evaluation (aligned with Extended-GS defaults).
+    lpips_net: Literal["alex", "vgg"] = "alex"
+    # Whether to compute color-corrected metrics (cc_psnr/cc_ssim/cc_lpips).
+    # Effective only when postprocess uses bilateral grid or PPISP.
+    compute_cc_metrics: bool = True
 
 
 @dataclass(frozen=True)
@@ -284,6 +301,8 @@ class TrainConfig:
     postprocess: PostprocessConfig = field(default_factory=PostprocessConfig)
     # Online viewer configuration (viser/nerfview).
     viewer: ViewerConfig = field(default_factory=ViewerConfig)
+    # Evaluation configuration (periodic holdout metrics).
+    eval: EvalConfig = field(default_factory=EvalConfig)
 
     # Reserved for future multi-GPU training (currently not implemented / not tested here).
     # Whether to enable distributed training (not implemented in this repo).
@@ -314,6 +333,20 @@ def validate_train_config(cfg: TrainConfig) -> None:
         raise ValueError(f"world_size must be > 0, got {cfg.world_size}")
     if cfg.optim.max_steps <= 0:
         raise ValueError(f"optim.max_steps must be > 0, got {cfg.optim.max_steps}")
+    if cfg.eval.max_images is not None and int(cfg.eval.max_images) <= 0:
+        raise ValueError(
+            f"eval.max_images must be > 0 or None, got {cfg.eval.max_images}"
+        )
+    if str(cfg.eval.lpips_net) not in ("alex", "vgg"):
+        raise ValueError(
+            f"eval.lpips_net must be 'alex' or 'vgg', got {cfg.eval.lpips_net!r}"
+        )
+    if str(cfg.eval.split).strip().lower() == "train":
+        raise ValueError(
+            "eval.split must be a holdout split (e.g. 'test' or 'val'), not 'train'."
+        )
+    if int(cfg.eval.eval_every_n) <= 0:
+        raise ValueError(f"eval.eval_every_n must be > 0, got {cfg.eval.eval_every_n}")
 
     if cfg.data.preload not in ("none", "cuda"):
         raise ValueError(f"preload must be 'none' or 'cuda', got {cfg.data.preload!r}")
@@ -323,31 +356,45 @@ def validate_train_config(cfg: TrainConfig) -> None:
                 f"preload='cuda' requires io.device to be CUDA (e.g. 'cuda' or 'cuda:0'), got {cfg.io.device!r}"
             )
         if cfg.data.prefetch_to_gpu:
-            raise ValueError("preload='cuda' is incompatible with prefetch_to_gpu=True.")
+            raise ValueError(
+                "preload='cuda' is incompatible with prefetch_to_gpu=True."
+            )
         if cfg.data.num_workers not in (None, 0):
             raise ValueError("preload='cuda' requires data.num_workers=0.")
 
     if cfg.optim.sparse_grad and cfg.optim.visible_adam:
-        raise ValueError("optim.sparse_grad and optim.visible_adam are mutually exclusive.")
+        raise ValueError(
+            "optim.sparse_grad and optim.visible_adam are mutually exclusive."
+        )
     if cfg.optim.sparse_grad and not cfg.optim.packed:
-        raise ValueError("optim.sparse_grad=True requires optim.packed=True (packed rasterization).")
+        raise ValueError(
+            "optim.sparse_grad=True requires optim.packed=True (packed rasterization)."
+        )
     if cfg.strategy.key_for_gradient not in ("means2d", "gradient_2dgs"):
         raise ValueError(
             "strategy.key_for_gradient must be 'means2d' (3DGS) or 'gradient_2dgs' (2DGS), "
             f"got {cfg.strategy.key_for_gradient!r}"
         )
     if cfg.postprocess.use_bilateral_grid and cfg.postprocess.use_ppisp:
-        raise ValueError("postprocess.use_bilateral_grid and postprocess.use_ppisp are mutually exclusive.")
+        raise ValueError(
+            "postprocess.use_bilateral_grid and postprocess.use_ppisp are mutually exclusive."
+        )
 
     if not cfg.viewer.disable_viewer:
         if not (1 <= int(cfg.viewer.port) <= 65535):
-            raise ValueError(f"viewer.port must be in [1, 65535], got {cfg.viewer.port}")
+            raise ValueError(
+                f"viewer.port must be in [1, 65535], got {cfg.viewer.port}"
+            )
 
     if cfg.io.export_ply:
         if len(cfg.io.ply_steps) == 0:
-            raise ValueError("export_ply=True requires non-empty ply_steps (e.g. --io.ply_steps 15000 30000).")
+            raise ValueError(
+                "export_ply=True requires non-empty ply_steps (e.g. --io.ply_steps 15000 30000)."
+            )
         if cfg.io.ply_format not in ("ply", "ply_compressed"):
-            raise ValueError(f"ply_format must be 'ply' or 'ply_compressed', got {cfg.io.ply_format!r}")
+            raise ValueError(
+                f"ply_format must be 'ply' or 'ply_compressed', got {cfg.io.ply_format!r}"
+            )
 
     if cfg.gns.gns_enable:
         if cfg.optim.sparse_grad:
@@ -374,3 +421,8 @@ def validate_train_config(cfg: TrainConfig) -> None:
                 "gns.gns_enable=True requires gns.opacity_reg_weight > 0, "
                 f"got {cfg.gns.opacity_reg_weight}"
             )
+
+    if cfg.eval.enable and int(cfg.eval.eval_every_n) <= 0:
+        raise ValueError(
+            f"eval.enable=True requires eval.eval_every_n > 0, got {cfg.eval.eval_every_n}"
+        )

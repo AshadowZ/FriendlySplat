@@ -25,7 +25,9 @@ class PPISPPostProcessor(torch.nn.Module):
         try:
             from ppisp import PPISP, PPISPConfig  # type: ignore
         except ImportError as e:  # pragma: no cover
-            raise ImportError("To use PPISP, install the `ppisp` package and enable --postprocess.use_ppisp.") from e
+            raise ImportError(
+                "To use PPISP, install the `ppisp` package and enable --postprocess.use_ppisp."
+            ) from e
 
         ppisp_config = PPISPConfig(
             use_controller=False,
@@ -33,7 +35,9 @@ class PPISPPostProcessor(torch.nn.Module):
             controller_activation_ratio=0.0,
         )
 
-        module = PPISP(num_cameras=1, num_frames=int(num_frames), config=ppisp_config).to(device)
+        module = PPISP(
+            num_cameras=1, num_frames=int(num_frames), config=ppisp_config
+        ).to(device)
         optimizers = list(module.create_optimizers())
         return cls(module=module, optimizers=optimizers).to(device)
 
@@ -47,7 +51,11 @@ class PPISPPostProcessor(torch.nn.Module):
             return torch.device("cpu")
 
     def _pixel_coords(self, *, height: int, width: int) -> torch.Tensor:
-        if self.cached_pixel_coords is None or self.cached_h != int(height) or self.cached_w != int(width):
+        if (
+            self.cached_pixel_coords is None
+            or self.cached_h != int(height)
+            or self.cached_w != int(width)
+        ):
             self.cached_h, self.cached_w = int(height), int(width)
             pixel_y, pixel_x = torch.meshgrid(
                 torch.arange(self.cached_h, device=self.device) + 0.5,

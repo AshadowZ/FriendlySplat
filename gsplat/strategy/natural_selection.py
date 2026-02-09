@@ -41,6 +41,7 @@ class NaturalSelectionPolicy:
       - Opacity regularizer (GNS loss) computed on a fixed cadence.
       - Pruning inside the window, and final probabilistic pruning to a budget.
     """
+
     enable: bool
     densify_stop_step: int
     reg_start: int
@@ -54,7 +55,9 @@ class NaturalSelectionPolicy:
     state: NaturalSelectionState = field(init=False)
 
     def __post_init__(self) -> None:
-        self.state = NaturalSelectionState(opacity_reg_weight=float(self.opacity_reg_weight))
+        self.state = NaturalSelectionState(
+            opacity_reg_weight=float(self.opacity_reg_weight)
+        )
         self._validate()
         if self.enable and self.verbose:
             print(
@@ -65,7 +68,9 @@ class NaturalSelectionPolicy:
             )
 
     @staticmethod
-    def _num_gaussians(params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict]) -> int:
+    def _num_gaussians(
+        params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict]
+    ) -> int:
         if "means" in params:
             return int(len(params["means"]))
         return int(params["opacities"].numel())
@@ -75,26 +80,36 @@ class NaturalSelectionPolicy:
         if not cfg.enable:
             return
         if cfg.densify_stop_step < 0:
-            raise ValueError(f"densify_stop_step must be >= 0, got {cfg.densify_stop_step}")
+            raise ValueError(
+                f"densify_stop_step must be >= 0, got {cfg.densify_stop_step}"
+            )
         if cfg.reg_interval <= 0:
             raise ValueError(f"reg_interval must be > 0, got {cfg.reg_interval}")
         if cfg.final_budget <= 0:
             raise ValueError(f"final_budget must be > 0, got {cfg.final_budget}")
         if cfg.reg_end < cfg.reg_start:
-            raise ValueError(f"reg_end must be >= reg_start, got {cfg.reg_end} < {cfg.reg_start}")
+            raise ValueError(
+                f"reg_end must be >= reg_start, got {cfg.reg_end} < {cfg.reg_start}"
+            )
         if cfg.reg_start < cfg.densify_stop_step:
             raise ValueError(
                 "Natural selection must start after densification finishes, got "
                 f"reg_start={cfg.reg_start} < densify_stop_step={cfg.densify_stop_step}"
             )
         if cfg.opacity_reg_weight <= 0.0:
-            raise ValueError(f"opacity_reg_weight must be > 0, got {cfg.opacity_reg_weight}")
+            raise ValueError(
+                f"opacity_reg_weight must be > 0, got {cfg.opacity_reg_weight}"
+            )
         if cfg.opacity_lr_scale <= 0.0:
-            raise ValueError(f"opacity_lr_scale must be > 0, got {cfg.opacity_lr_scale}")
+            raise ValueError(
+                f"opacity_lr_scale must be > 0, got {cfg.opacity_lr_scale}"
+            )
         if cfg.min_opacity < 0.0:
             raise ValueError(f"min_opacity must be >= 0, got {cfg.min_opacity}")
 
-    def maybe_scale_opacity_lr(self, *, step: int, optimizers: Dict[str, torch.optim.Optimizer]) -> None:
+    def maybe_scale_opacity_lr(
+        self, *, step: int, optimizers: Dict[str, torch.optim.Optimizer]
+    ) -> None:
         cfg = self
         st = self.state
         if not cfg.enable or st.finished:
@@ -112,7 +127,9 @@ class NaturalSelectionPolicy:
             param_group["lr"] *= float(cfg.opacity_lr_scale)
         st.opacity_lr_scaled = True
 
-    def maybe_restore_opacity_lr(self, *, step: int, optimizers: Dict[str, torch.optim.Optimizer]) -> None:
+    def maybe_restore_opacity_lr(
+        self, *, step: int, optimizers: Dict[str, torch.optim.Optimizer]
+    ) -> None:
         cfg = self
         st = self.state
         if not cfg.enable:
@@ -122,10 +139,15 @@ class NaturalSelectionPolicy:
         if step != int(st.stop_step) + 1000:
             return
         if "opacities" not in optimizers:
-            raise KeyError("GNS requires optimizers['opacities'] to restore opacity LR.")
+            raise KeyError(
+                "GNS requires optimizers['opacities'] to restore opacity LR."
+            )
         if st.opacity_lr_scaled:
             if cfg.verbose:
-                print(f"[GNS] Restoring Opacity LR (1000 steps after stop) at step {step}", flush=True)
+                print(
+                    f"[GNS] Restoring Opacity LR (1000 steps after stop) at step {step}",
+                    flush=True,
+                )
             for param_group in optimizers["opacities"].param_groups:
                 param_group["lr"] /= float(cfg.opacity_lr_scale)
             st.opacity_lr_scaled = False
@@ -153,16 +175,26 @@ class NaturalSelectionPolicy:
 
         # Dynamic opacity_reg_weight adjustment on reg_interval cadence.
         if (step - 1) % int(cfg.reg_interval) == 0:
-            current_count = int(params["means"].shape[0]) if "means" in params else int(opacities_logits.shape[0])
+            current_count = (
+                int(params["means"].shape[0])
+                if "means" in params
+                else int(opacities_logits.shape[0])
+            )
             if st.start_count is None:
                 st.start_count = current_count
                 if st.start_count < int(cfg.final_budget):
                     st.start_count = int(cfg.final_budget) + 1000
 
-            den = float(cfg.reg_end - cfg.reg_start) if cfg.reg_end != cfg.reg_start else 1.0
+            den = (
+                float(cfg.reg_end - cfg.reg_start)
+                if cfg.reg_end != cfg.reg_start
+                else 1.0
+            )
             progress = float(step - cfg.reg_start) / den
             progress = max(0.0, min(1.0, progress))
-            expected_count = float(st.start_count) - (float(st.start_count - cfg.final_budget) * progress)
+            expected_count = float(st.start_count) - (
+                float(st.start_count - cfg.final_budget) * progress
+            )
 
             if float(current_count) > expected_count * 1.05:
                 st.opacity_reg_weight *= 1.2
@@ -213,8 +245,13 @@ class NaturalSelectionPolicy:
                     f"Stopping Natural Selection early at step {step}.",
                     flush=True,
                 )
-                print(f"[GNS] Step {step}: Running Final Budget Prune to {cfg.final_budget}...", flush=True)
-            n_pruned = self._final_prune(params=params, optimizers=optimizers, strategy_state=strategy_state)
+                print(
+                    f"[GNS] Step {step}: Running Final Budget Prune to {cfg.final_budget}...",
+                    flush=True,
+                )
+            n_pruned = self._final_prune(
+                params=params, optimizers=optimizers, strategy_state=strategy_state
+            )
             if cfg.verbose:
                 print(
                     f"[GNS] Final Prune removed {n_pruned} gaussians. "
@@ -247,8 +284,13 @@ class NaturalSelectionPolicy:
         # Final prune at reg_end: enforce the budget via probabilistic survival.
         if step == cfg.reg_end:
             if cfg.verbose:
-                print(f"[GNS] Step {step}: Running Final Budget Prune to {cfg.final_budget}...", flush=True)
-            n_pruned = self._final_prune(params=params, optimizers=optimizers, strategy_state=strategy_state)
+                print(
+                    f"[GNS] Step {step}: Running Final Budget Prune to {cfg.final_budget}...",
+                    flush=True,
+                )
+            n_pruned = self._final_prune(
+                params=params, optimizers=optimizers, strategy_state=strategy_state
+            )
             if cfg.verbose:
                 print(
                     f"[GNS] Final Prune removed {n_pruned} gaussians. "
@@ -271,7 +313,12 @@ class NaturalSelectionPolicy:
         is_prune = opacities < float(min_opacity)
         n_prune = int(is_prune.sum().item())
         if n_prune > 0:
-            remove(params=params, optimizers=optimizers, state=strategy_state, mask=is_prune)
+            remove(
+                params=params,
+                optimizers=optimizers,
+                state=strategy_state,
+                mask=is_prune,
+            )
         return n_prune
 
     def _final_prune(
@@ -293,5 +340,10 @@ class NaturalSelectionPolicy:
 
         n_prune = int(is_prune.sum().item())
         if n_prune > 0:
-            remove(params=params, optimizers=optimizers, state=strategy_state, mask=is_prune)
+            remove(
+                params=params,
+                optimizers=optimizers,
+                state=strategy_state,
+                mask=is_prune,
+            )
         return n_prune

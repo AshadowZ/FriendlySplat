@@ -50,7 +50,13 @@ class ColmapDataParser(DataParser):
             raise ValueError("No images found in COLMAP model.")
 
         # 2) Build per-image poses/intrinsics and 3D points.
-        image_names, camtoworlds, camera_ids, Ks_dict, imsize_dict = self._extract_poses_and_intrinsics(
+        (
+            image_names,
+            camtoworlds,
+            camera_ids,
+            Ks_dict,
+            imsize_dict,
+        ) = self._extract_poses_and_intrinsics(
             cameras=cameras,
             images=images,
         )
@@ -67,7 +73,9 @@ class ColmapDataParser(DataParser):
             imsize_dict=imsize_dict,
             image_paths=image_paths,
         )
-        Ks_per_image = np.stack([Ks_dict[camera_id].astype(np.float32) for camera_id in camera_ids], axis=0)
+        Ks_per_image = np.stack(
+            [Ks_dict[camera_id].astype(np.float32) for camera_id in camera_ids], axis=0
+        )
 
         self.transform = transform
         self.scale = scale
@@ -124,7 +132,13 @@ class ColmapDataParser(DataParser):
         *,
         cameras,
         images,
-    ) -> tuple[List[str], np.ndarray, List[int], Dict[int, np.ndarray], Dict[int, tuple[int, int]]]:
+    ) -> tuple[
+        List[str],
+        np.ndarray,
+        List[int],
+        Dict[int, np.ndarray],
+        Dict[int, tuple[int, int]],
+    ]:
         factor = int(self.factor)
 
         c2w_mats = []
@@ -151,7 +165,10 @@ class ColmapDataParser(DataParser):
             )
 
             type_ = cam.model
-            if type_ not in ("SIMPLE_PINHOLE", "PINHOLE") and camera_id not in warned_camera_ids:
+            if (
+                type_ not in ("SIMPLE_PINHOLE", "PINHOLE")
+                and camera_id not in warned_camera_ids
+            ):
                 warnings.warn(
                     f"COLMAP camera_id={camera_id} uses model={type_} (has distortion parameters). "
                     "This dataparser ignores distortion and treats the camera as pinhole using only "
@@ -183,8 +200,12 @@ class ColmapDataParser(DataParser):
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, float]:
         if self.normalize_world_space:
             if points.shape[0] == 0:
-                raise ValueError("normalize_world_space=True requires points3D in the COLMAP model.")
-            camtoworlds, points, transform, scale = transform_cameras_and_points(camtoworlds, points)
+                raise ValueError(
+                    "normalize_world_space=True requires points3D in the COLMAP model."
+                )
+            camtoworlds, points, transform, scale = transform_cameras_and_points(
+                camtoworlds, points
+            )
             return camtoworlds, points, transform.astype(np.float32), float(scale)
 
         transform = np.eye(4, dtype=np.float32)
@@ -213,7 +234,9 @@ class ColmapDataParser(DataParser):
         factor = int(self.factor)
         colmap_image_dir, image_dir = self._resolve_image_dirs()
 
-        image_files = sorted(get_rel_paths(str(image_dir))) if image_dir.exists() else []
+        image_files = (
+            sorted(get_rel_paths(str(image_dir))) if image_dir.exists() else []
+        )
         # For downsampled data, reuse existing `images_{factor}` when available.
         # Otherwise, generate it from source images.
         if factor > 1 and len(image_files) == 0:
@@ -228,7 +251,9 @@ class ColmapDataParser(DataParser):
             raise FileNotFoundError(f"No images found under {image_dir}.")
 
         colmap_file_set = set(get_rel_paths(str(colmap_image_dir)))
-        missing_in_colmap = [name for name in image_names if name not in colmap_file_set]
+        missing_in_colmap = [
+            name for name in image_names if name not in colmap_file_set
+        ]
         if missing_in_colmap:
             sample = missing_in_colmap[0]
             raise FileNotFoundError(
@@ -305,7 +330,9 @@ class ColmapDataParser(DataParser):
 
         missing = [p for p in paths if not os.path.exists(p)]
         if missing:
-            modality = "depth" if ext == ".npy" else "normal" if ext == ".png" else f"*{ext}"
+            modality = (
+                "depth" if ext == ".npy" else "normal" if ext == ".png" else f"*{ext}"
+            )
             warnings.warn(
                 f"{modality.capitalize()} directory {root} is missing {len(missing)}/{len(paths)} files. "
                 f"Falling back to per-frame {modality} usage (missing frames will skip this prior).",

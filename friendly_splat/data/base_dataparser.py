@@ -46,5 +46,7 @@ class DataparserOutputs:
 class DataParser:
     """Base dataparser interface."""
 
-    def get_dataparser_outputs(self, *, split: str) -> DataparserOutputs:  # pragma: no cover
+    def get_dataparser_outputs(
+        self, *, split: str
+    ) -> DataparserOutputs:  # pragma: no cover
         raise NotImplementedError

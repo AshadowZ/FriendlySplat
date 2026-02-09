@@ -43,9 +43,13 @@ def prepare_batch(
 
     image_u8 = batch["image_u8"]
     if not isinstance(image_u8, torch.Tensor):
-        raise TypeError(f"batch['image_u8'] must be a torch.Tensor, got {type(image_u8)}")
+        raise TypeError(
+            f"batch['image_u8'] must be a torch.Tensor, got {type(image_u8)}"
+        )
     if image_u8.dim() != 4 or image_u8.shape[-1] != 3:
-        raise ValueError(f"batch['image_u8'] must have shape [B,H,W,3], got {tuple(image_u8.shape)}")
+        raise ValueError(
+            f"batch['image_u8'] must have shape [B,H,W,3], got {tuple(image_u8.shape)}"
+        )
 
     camtoworlds = batch["camtoworld"]
     Ks = batch["K"]
@@ -139,11 +143,16 @@ def _to_device_recursive(
             return obj
         return obj.to(device, non_blocking=non_blocking)
     if isinstance(obj, dict):
-        return {k: _to_device_recursive(v, device, non_blocking=non_blocking) for k, v in obj.items()}
+        return {
+            k: _to_device_recursive(v, device, non_blocking=non_blocking)
+            for k, v in obj.items()
+        }
     if isinstance(obj, list):
         return [_to_device_recursive(v, device, non_blocking=non_blocking) for v in obj]
     if isinstance(obj, tuple):
-        return tuple(_to_device_recursive(v, device, non_blocking=non_blocking) for v in obj)
+        return tuple(
+            _to_device_recursive(v, device, non_blocking=non_blocking) for v in obj
+        )
     return obj
 
 
@@ -172,11 +181,15 @@ class _InfiniteRandomSampler(torch.utils.data.Sampler[int]):
 class _CudaPrefetcher:
     """Prefetch DataLoader batches to GPU on a dedicated CUDA stream."""
 
-    def __init__(self, loader_iter: Iterator[object], device: Union[str, torch.device]) -> None:
+    def __init__(
+        self, loader_iter: Iterator[object], device: Union[str, torch.device]
+    ) -> None:
         self.loader_iter = loader_iter
         self.device = torch.device(device)
         if self.device.type != "cuda":
-            raise ValueError(f"_CudaPrefetcher requires a CUDA device, got {self.device}")
+            raise ValueError(
+                f"_CudaPrefetcher requires a CUDA device, got {self.device}"
+            )
         self.stream = torch.cuda.Stream(device=self.device)
         self._next_batch: Optional[object] = None
         self._preload()
@@ -259,11 +272,17 @@ class DataLoader:
         # Optional dataset-wide preloading to CUDA is owned by the loader, not the dataset.
         if self.preload == "cuda":
             if device.type != "cuda":
-                raise ValueError(f"preload='cuda' requires a CUDA device, got {device}.")
+                raise ValueError(
+                    f"preload='cuda' requires a CUDA device, got {device}."
+                )
             if self.prefetch_to_gpu:
-                raise ValueError("prefetch_to_gpu=True is incompatible with preload='cuda'.")
+                raise ValueError(
+                    "prefetch_to_gpu=True is incompatible with preload='cuda'."
+                )
             if self.num_workers not in (None, 0):
-                raise ValueError("preload='cuda' requires num_workers=0 (DataLoader workers + CUDA tensors).")
+                raise ValueError(
+                    "preload='cuda' requires num_workers=0 (DataLoader workers + CUDA tensors)."
+                )
             if self.pin_memory:
                 raise ValueError("preload='cuda' is incompatible with pin_memory=True.")
             dataset = _PreloadedDataset(dataset, device=device)
@@ -298,7 +317,7 @@ class DataLoader:
             pin_memory=pin_memory,
         )
 
-    def __iter__(self) -> Iterator[PreparedBatch]:
+    def _iterate(self, *, restart_on_end: bool) -> Iterator[PreparedBatch]:
         device = self.device
         use_prefetch = (
             self.prefetch_to_gpu
@@ -316,11 +335,15 @@ class DataLoader:
                 try:
                     batch = next(loader_iter)
                 except StopIteration:
+                    if not restart_on_end:
+                        return
                     # Infinite iteration: restart underlying torch DataLoader.
                     loader_iter = iter(self._torch_loader)
                     batch = next(loader_iter)
             else:
                 if batch is None:
+                    if not restart_on_end:
+                        return
                     loader_iter = iter(self._torch_loader)
                     prefetcher = _CudaPrefetcher(loader_iter, device)
                     batch = prefetcher.next()
@@ -331,3 +354,10 @@ class DataLoader:
 
             if prefetcher is not None:
                 batch = prefetcher.next()
+
+    def __iter__(self) -> Iterator[PreparedBatch]:
+        return self._iterate(restart_on_end=True)
+
+    def iter_once(self) -> Iterator[PreparedBatch]:
+        """Iterate over the underlying torch DataLoader exactly once."""
+        return self._iterate(restart_on_end=False)

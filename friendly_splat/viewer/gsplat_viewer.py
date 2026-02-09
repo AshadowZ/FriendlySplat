@@ -30,7 +30,9 @@ class GsplatRenderTabState(RenderTabState):
     ] = "rgb"
     normalize_nearfar: bool = False
     inverse: bool = False
-    colormap: Literal["turbo", "viridis", "magma", "inferno", "cividis", "gray"] = "turbo"
+    colormap: Literal[
+        "turbo", "viridis", "magma", "inferno", "cividis", "gray"
+    ] = "turbo"
     rasterize_mode: Literal["classic", "antialiased"] = "classic"
     camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole"
 
@@ -88,7 +90,10 @@ class GsplatViewer(Viewer):
 
                 near_far_plane_vec2 = server.gui.add_vector2(
                     "Near/Far",
-                    initial_value=(self.render_tab_state.near_plane, self.render_tab_state.far_plane),
+                    initial_value=(
+                        self.render_tab_state.near_plane,
+                        self.render_tab_state.far_plane,
+                    ),
                     min=(1e-3, 1e1),
                     max=(1e1, 1e3),
                     step=1e-3,
@@ -183,7 +188,9 @@ class GsplatViewer(Viewer):
 
                 @normalize_nearfar_checkbox.on_update
                 def _(_) -> None:
-                    self.render_tab_state.normalize_nearfar = normalize_nearfar_checkbox.value
+                    self.render_tab_state.normalize_nearfar = (
+                        normalize_nearfar_checkbox.value
+                    )
                     self.rerender(_)
 
                 @inverse_checkbox.on_update
@@ -247,5 +254,9 @@ class GsplatViewer(Viewer):
 
     def _after_render(self) -> None:
         # Sync GUI read-only values from state.
-        self._rendering_tab_handles["total_gs_count_number"].value = self.render_tab_state.total_gs_count
-        self._rendering_tab_handles["rendered_gs_count_number"].value = self.render_tab_state.rendered_gs_count
+        self._rendering_tab_handles[
+            "total_gs_count_number"
+        ].value = self.render_tab_state.total_gs_count
+        self._rendering_tab_handles[
+            "rendered_gs_count_number"
+        ].value = self.render_tab_state.rendered_gs_count
