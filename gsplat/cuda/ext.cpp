@@ -52,6 +52,14 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def(
         "rasterize_to_pixels_3dgs_bwd", &gsplat::rasterize_to_pixels_3dgs_bwd
     );
+    m.def(
+        "rasterize_to_pixels_3dgs_fwd_median",
+        &gsplat::rasterize_to_pixels_3dgs_fwd_median
+    );
+    m.def(
+        "rasterize_to_pixels_3dgs_bwd_median",
+        &gsplat::rasterize_to_pixels_3dgs_bwd_median
+    );
     m.def("rasterize_to_indices_3dgs", &gsplat::rasterize_to_indices_3dgs);
 
     m.def("projection_2dgs_fused_fwd", &gsplat::projection_2dgs_fused_fwd);

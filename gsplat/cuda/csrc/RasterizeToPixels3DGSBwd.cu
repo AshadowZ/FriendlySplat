@@ -36,11 +36,14 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
     const scalar_t
         *__restrict__ render_alphas,      // [..., image_height, image_width, 1]
     const int32_t *__restrict__ last_ids, // [..., image_height, image_width]
+    const int32_t *__restrict__ median_ids, // [..., image_height, image_width] optional
     // grad outputs
     const scalar_t *__restrict__ v_render_colors, // [..., image_height,
                                                   // image_width, CDIM]
     const scalar_t
         *__restrict__ v_render_alphas, // [..., image_height, image_width, 1]
+    const scalar_t
+        *__restrict__ v_render_median, // [..., image_height, image_width, 1] optional
     // grad inputs
     vec2 *__restrict__ v_means2d_abs,  // [..., N, 2] or [nnz, 2]
     vec2 *__restrict__ v_means2d,      // [..., N, 2] or [nnz, 2]
@@ -58,8 +61,14 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
     tile_offsets += image_id * tile_height * tile_width;
     render_alphas += image_id * image_height * image_width;
     last_ids += image_id * image_height * image_width;
+    if (median_ids != nullptr) {
+        median_ids += image_id * image_height * image_width;
+    }
     v_render_colors += image_id * image_height * image_width * CDIM;
     v_render_alphas += image_id * image_height * image_width;
+    if (v_render_median != nullptr) {
+        v_render_median += image_id * image_height * image_width;
+    }
     if (backgrounds != nullptr) {
         backgrounds += image_id * CDIM;
     }
@@ -110,6 +119,9 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
     float buffer[CDIM] = {0.f};
     // index of last gaussian to contribute to this pixel
     const int32_t bin_final = inside ? last_ids[pix_id] : 0;
+    // index of gaussian that contributes to median depth (optional)
+    const int32_t median_idx =
+        (inside && median_ids != nullptr) ? median_ids[pix_id] : -1;
 
     // df/d_out for this pixel
     float v_render_c[CDIM];
@@ -118,6 +130,7 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
         v_render_c[k] = v_render_colors[pix_id * CDIM + k];
     }
     const float v_render_a = v_render_alphas[pix_id];
+    const float v_median = v_render_median != nullptr ? v_render_median[pix_id] : 0.f;
 
     // collect and process batches of gaussians
     // each thread loads one gaussian at a time before rasterizing
@@ -191,6 +204,9 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
             float v_opacity_local = 0.f;
             // initialize everything to 0, only set if the lane is valid
             if (valid) {
+                if (batch_end - t == median_idx) {
+                    v_rgb_local[CDIM - 1] += v_median;
+                }
                 // compute the current T for this gaussian
                 float ra = 1.0f / (1.0f - alpha);
                 T *= ra;
@@ -296,9 +312,11 @@ void launch_rasterize_to_pixels_3dgs_bwd_kernel(
     // forward outputs
     const at::Tensor render_alphas, // [..., image_height, image_width, 1]
     const at::Tensor last_ids,      // [..., image_height, image_width]
+    const at::optional<at::Tensor> median_ids, // [..., image_height, image_width]
     // gradients of outputs
     const at::Tensor v_render_colors, // [..., image_height, image_width, 3]
     const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
+    const at::optional<at::Tensor> v_render_median, // [..., image_height, image_width, 1]
     // outputs
     at::optional<at::Tensor> v_means2d_abs, // [..., N, 2] or [nnz, 2]
     at::Tensor v_means2d,                   // [..., N, 2] or [nnz, 2]
@@ -365,8 +383,12 @@ void launch_rasterize_to_pixels_3dgs_bwd_kernel(
             flatten_ids.data_ptr<int32_t>(),
             render_alphas.data_ptr<float>(),
             last_ids.data_ptr<int32_t>(),
+            median_ids.has_value() ? median_ids.value().data_ptr<int32_t>()
+                                   : nullptr,
             v_render_colors.data_ptr<float>(),
             v_render_alphas.data_ptr<float>(),
+            v_render_median.has_value() ? v_render_median.value().data_ptr<float>()
+                                        : nullptr,
             v_means2d_abs.has_value()
                 ? reinterpret_cast<vec2 *>(
                       v_means2d_abs.value().data_ptr<float>()
@@ -397,8 +419,10 @@ void launch_rasterize_to_pixels_3dgs_bwd_kernel(
         const at::Tensor flatten_ids,                                          \
         const at::Tensor render_alphas,                                        \
         const at::Tensor last_ids,                                             \
+        const at::optional<at::Tensor> median_ids,                             \
         const at::Tensor v_render_colors,                                      \
         const at::Tensor v_render_alphas,                                      \
+        const at::optional<at::Tensor> v_render_median,                        \
         at::optional<at::Tensor> v_means2d_abs,                                \
         at::Tensor v_means2d,                                                  \
         at::Tensor v_conics,                                                   \

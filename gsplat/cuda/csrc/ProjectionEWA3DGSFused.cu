@@ -35,6 +35,7 @@ __global__ void projection_ewa_3dgs_fused_fwd_kernel(
     int32_t *__restrict__ radii,         // [B, C, N, 2]
     scalar_t *__restrict__ means2d,      // [B, C, N, 2]
     scalar_t *__restrict__ depths,       // [B, C, N]
+    scalar_t *__restrict__ normals,      // [B, C, N, 3]
     scalar_t *__restrict__ conics,       // [B, C, N, 3]
     scalar_t *__restrict__ compensations // [B, C, N] optional
 ) {
@@ -197,12 +198,37 @@ __global__ void projection_ewa_3dgs_fused_fwd_kernel(
         return;
     }
 
+    // normals (camera space)
+    vec3 normal_c(0.f);
+    if (quats != nullptr && scales != nullptr) {
+        // NOTE: When `covars == nullptr` we already shifted `quats/scales` to the
+        // current (bid, gid) above (for covar computation). Do NOT apply the
+        // (bid, gid) offset again here, otherwise it will read out-of-bounds.
+        mat3 R_gauss = quat_to_rotmat(glm::make_vec4(quats));
+
+        // Find the axis with the smallest scale. This branch is non-differentiable.
+        float sx = scales[0], sy = scales[1], sz = scales[2];
+        int min_idx = (sy < sx) ? 1 : 0;
+        min_idx = (sz < ((min_idx == 0) ? sx : sy)) ? 2 : min_idx;
+
+        // The column vector corresponding to the smallest scale is the normal.
+        vec3 normal_w = R_gauss[min_idx];
+        normal_c = R * normal_w;
+
+        // Flip if it is pointing away from the camera.
+        float multiplier = glm::dot(-normal_c, mean_c) > 0 ? 1.f : -1.f;
+        normal_c *= multiplier;
+    }
+
     // write to outputs
     radii[idx * 2] = (int32_t)radius_x;
     radii[idx * 2 + 1] = (int32_t)radius_y;
     means2d[idx * 2] = mean2d.x;
     means2d[idx * 2 + 1] = mean2d.y;
     depths[idx] = mean_c.z;
+    normals[idx * 3 + 0] = normal_c.x;
+    normals[idx * 3 + 1] = normal_c.y;
+    normals[idx * 3 + 2] = normal_c.z;
     conics[idx * 3] = covar2d_inv[0][0];
     conics[idx * 3 + 1] = covar2d_inv[0][1];
     conics[idx * 3 + 2] = covar2d_inv[1][1];
@@ -231,6 +257,7 @@ void launch_projection_ewa_3dgs_fused_fwd_kernel(
     at::Tensor radii,                      // [..., C, N, 2]
     at::Tensor means2d,                    // [..., C, N, 2]
     at::Tensor depths,                     // [..., C, N]
+    at::Tensor normals,                    // [..., C, N, 3]
     at::Tensor conics,                     // [..., C, N, 3]
     at::optional<at::Tensor> compensations // [..., C, N] optional
 ) {
@@ -281,6 +308,7 @@ void launch_projection_ewa_3dgs_fused_fwd_kernel(
                     radii.data_ptr<int32_t>(),
                     means2d.data_ptr<scalar_t>(),
                     depths.data_ptr<scalar_t>(),
+                    normals.data_ptr<scalar_t>(),
                     conics.data_ptr<scalar_t>(),
                     compensations.has_value()
                         ? compensations.value().data_ptr<scalar_t>()
@@ -313,6 +341,7 @@ __global__ void projection_ewa_3dgs_fused_bwd_kernel(
     // grad outputs
     const scalar_t *__restrict__ v_means2d,       // [B, C, N, 2]
     const scalar_t *__restrict__ v_depths,        // [B, C, N]
+    const scalar_t *__restrict__ v_normals,       // [B, C, N, 3]
     const scalar_t *__restrict__ v_conics,        // [B, C, N, 3]
     const scalar_t *__restrict__ v_compensations, // [B, C, N] optional
     // grad inputs
@@ -340,6 +369,7 @@ __global__ void projection_ewa_3dgs_fused_bwd_kernel(
 
     v_means2d += idx * 2;
     v_depths += idx;
+    v_normals += idx * 3;
     v_conics += idx * 3;
 
     // vjp: compute the inverse of the 2d covariance
@@ -348,6 +378,7 @@ __global__ void projection_ewa_3dgs_fused_bwd_kernel(
         mat2(v_conics[0], v_conics[1] * .5f, v_conics[1] * .5f, v_conics[2]);
     mat2 v_covar2d(0.f);
     inverse_vjp(covar2d_inv, v_covar2d_inv, v_covar2d);
+    vec3 v_normal = {v_normals[0], v_normals[1], v_normals[2]};
 
     if (v_compensations != nullptr) {
         // vjp: compensation term
@@ -466,6 +497,34 @@ __global__ void projection_ewa_3dgs_fused_bwd_kernel(
     posW2C_VJP(R, t, glm::make_vec3(means), v_mean_c, v_R, v_t, v_mean);
     covarW2C_VJP(R, covar, v_covar_c, v_R, v_covar);
 
+    // vjp: normal gradients (only valid when projecting from quats/scales).
+    // NOTE:
+    // - The min-axis selection and the flip are non-differentiable.
+    // - If `covars` are provided, `quats/scales` are nullptr and this path is skipped.
+    vec4 v_quat_from_normal(0.f);
+    if (quats != nullptr && scales != nullptr) {
+        mat3 R_gauss = quat_to_rotmat(quat);
+
+        float sx = scale.x, sy = scale.y, sz = scale.z;
+        int min_idx = (sy < sx) ? 1 : 0;
+        min_idx = (sz < ((min_idx == 0) ? sx : sy)) ? 2 : min_idx;
+
+        vec3 normal_w = R_gauss[min_idx];
+        vec3 normal_c_pre_flip = R * normal_w;
+        float multiplier = glm::dot(-normal_c_pre_flip, mean_c) > 0 ? 1.f : -1.f;
+
+        vec3 v_normal_c = v_normal * multiplier;
+        vec3 v_normal_w = glm::transpose(R) * v_normal_c;
+
+        // gradient w.r.t camera rotation R
+        v_R += glm::outerProduct(v_normal_c, normal_w);
+
+        // gradient w.r.t quaternion via the selected column of R_gauss
+        mat3 v_R_gauss(0.f);
+        v_R_gauss[min_idx] = v_normal_w;
+        quat_to_rotmat_vjp(quat, v_R_gauss, v_quat_from_normal);
+    }
+
     // #if __CUDA_ARCH__ >= 700
     // write out results with warp-level reduction
     auto warp = cg::tiled_partition<32>(cg::this_thread_block());
@@ -498,6 +557,7 @@ __global__ void projection_ewa_3dgs_fused_bwd_kernel(
         vec4 v_quat(0.f);
         vec3 v_scale(0.f);
         quat_scale_to_covar_vjp(quat, scale, rotmat, v_covar, v_quat, v_scale);
+        v_quat += v_quat_from_normal;
         warpSum(v_quat, warp_group_g);
         warpSum(v_scale, warp_group_g);
         if (warp_group_g.thread_rank() == 0) {
@@ -550,6 +610,7 @@ void launch_projection_ewa_3dgs_fused_bwd_kernel(
     // grad outputs
     const at::Tensor v_means2d,                     // [..., C, N, 2]
     const at::Tensor v_depths,                      // [..., C, N]
+    const at::Tensor v_normals,                     // [..., C, N, 3]
     const at::Tensor v_conics,                      // [..., C, N, 3]
     const at::optional<at::Tensor> v_compensations, // [..., C, N] optional
     const bool viewmats_requires_grad,
@@ -606,6 +667,7 @@ void launch_projection_ewa_3dgs_fused_bwd_kernel(
                         : nullptr,
                     v_means2d.data_ptr<scalar_t>(),
                     v_depths.data_ptr<scalar_t>(),
+                    v_normals.data_ptr<scalar_t>(),
                     v_conics.data_ptr<scalar_t>(),
                     v_compensations.has_value()
                         ? v_compensations.value().data_ptr<scalar_t>()
