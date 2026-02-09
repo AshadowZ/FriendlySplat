@@ -1,6 +1,7 @@
 import numpy as np
 from typing import Callable, Dict, List, Union
 
+import math
 import torch
 import torch.nn.functional as F
 from torch import Tensor
@@ -171,6 +172,86 @@ def split(
     # update the parameters and the state in the optimizers
     _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
     # update the extra running state
+    for k, v in state.items():
+        if isinstance(v, torch.Tensor):
+            repeats = [2] + [1] * (v.dim() - 1)
+            v_new = v[sel].repeat(repeats)
+            state[k] = torch.cat((v[rest], v_new))
+
+
+@torch.no_grad()
+def long_axis_split(
+    params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
+    optimizers: Dict[str, torch.optim.Optimizer],
+    state: Dict[str, Tensor],
+    mask: Tensor,
+    opacity_reduction: float = 1.0,
+):
+    """Inplace split Gaussians along their longest axis.
+
+    Compared to :func:`split`, this always splits along the longest axis of the
+    3D Gaussian (in its local frame), which can be more stable for densification.
+
+    Notes:
+      - This replaces each selected Gaussian with two children (net +1 Gaussian).
+      - Opacity can optionally be reduced for the children via `opacity_reduction`.
+    """
+    device = mask.device
+    sel = torch.where(mask)[0]
+    rest = torch.where(~mask)[0]
+
+    if sel.numel() == 0:
+        return
+
+    scales = torch.exp(params["scales"][sel])  # [N, 3]
+    quats = F.normalize(params["quats"][sel], dim=-1)
+    rotmats = normalized_quat_to_rotmat(quats)  # [N, 3, 3]
+
+    # Identify the longest local axis for each Gaussian.
+    max_values, max_indices = torch.max(scales, dim=1, keepdim=True)  # [N, 1]
+    axis_mask = torch.zeros_like(scales, dtype=torch.bool, device=device).scatter(
+        1, max_indices, True
+    )
+
+    # Offset along the long axis and rotate to world space.
+    samples_local = scales * axis_mask.to(scales.dtype) * 3.0  # [N, 3]
+    rate = 0.45
+    x_local = samples_local * rate
+
+    rate_w = 1.0 - rate
+    rate_h = math.sqrt(max(0.0, 1.0 - rate * rate))
+
+    x_pair = torch.stack([x_local, -x_local], dim=0)  # [2, N, 3]
+    samples_world = torch.einsum("nij,bnj->bni", rotmats, x_pair)  # [2, N, 3]
+
+    def param_fn(name: str, p: Tensor) -> Tensor:
+        repeats = [2] + [1] * (p.dim() - 1)
+        if name == "means":
+            p_split = (p[sel].unsqueeze(0) + samples_world).reshape(-1, 3)  # [2N, 3]
+        elif name == "scales":
+            new_std_parent = scales.scatter(
+                1, max_indices, max_values * (rate_w / rate_h)
+            )
+            new_std_child = new_std_parent * rate_h
+            p_split = torch.log(new_std_child.repeat(repeats))  # [2N, 3]
+        elif name == "opacities":
+            opacity = torch.sigmoid(p[sel])
+            reduced = opacity * opacity_reduction
+            p_split = torch.logit(reduced.clamp(min=1e-6, max=1.0 - 1e-6)).repeat(
+                repeats
+            )
+        else:
+            p_split = p[sel].repeat(repeats)
+
+        p_new = torch.cat([p[rest], p_split])
+        return torch.nn.Parameter(p_new, requires_grad=p.requires_grad)
+
+    def optimizer_fn(key: str, v: Tensor) -> Tensor:
+        v_split = torch.zeros((2 * len(sel), *v.shape[1:]), device=device)
+        return torch.cat([v[rest], v_split])
+
+    _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
+
     for k, v in state.items():
         if isinstance(v, torch.Tensor):
             repeats = [2] + [1] * (v.dim() - 1)
