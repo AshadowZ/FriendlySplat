@@ -1,0 +1,21 @@
+# Extra dependencies for scripts under `friendly_splat/`.
+#
+# SSIM loss acceleration used by `friendly_splat/trainer.py`.
+git+https://github.com/rahul-goel/fused-ssim@328dc9836f513d00c4b5bc38fe30478b4435cbb5
+
+# KNN-based scale initialization used by `friendly_splat/trainer.py`.
+scikit-learn
+
+# CLI for `friendly_splat/trainer.py` (dataclass-based args).
+tyro>=0.8.8
+
+# Progress bar for training output.
+tqdm
+
+# Image/mask IO for dataset loading.
+imageio
+opencv-python
+
+# (Optional) Online viewer used when `--viewer.disable_viewer False`.
+viser
+git+https://github.com/nerfstudio-project/nerfview@4538024fe0d15fd1a0e4d760f3695fc44ca72787
