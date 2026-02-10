@@ -31,6 +31,7 @@ class ViewerRuntime:
         sync_frustums_to_render: bool = True,
         frustum_show_after_static_sec: float = 0.12,
         focus_frustum_on_click: bool = True,
+        metrics_max_points: int = 2000,
     ) -> None:
         self.disable_viewer = bool(disable_viewer)
         self.port = int(port)
@@ -47,6 +48,7 @@ class ViewerRuntime:
         self.sync_frustums_to_render = bool(sync_frustums_to_render)
         self.frustum_show_after_static_sec = float(frustum_show_after_static_sec)
         self.focus_frustum_on_click = bool(focus_frustum_on_click)
+        self.metrics_max_points = max(64, int(metrics_max_points))
 
         self.server: Any = None
         self.viewer: Any = None
@@ -61,6 +63,16 @@ class ViewerRuntime:
         self._render_splats_fn: Any = None
         self._get_implied_normal_from_depth_fn: Any = None
         self._gsplat_render_tab_state_cls: Any = None
+        self._metrics_history: dict[str, list[tuple[int, float]]] = {
+            "psnr": [],
+            "ssim": [],
+            "lpips": [],
+        }
+        self._metrics_plot_handles: dict[str, Any] = {}
+        self._metrics_show_checkbox: Any = None
+        self._metrics_window_slider: Any = None
+        self._metrics_last_value_handles: dict[str, Any] = {}
+        self._metrics_latest_train_step: int = 0
 
         if self.disable_viewer:
             return
@@ -82,7 +94,7 @@ class ViewerRuntime:
             output_dir=self.output_dir,
             mode="training",
             after_render_hook=self._on_after_render,
-            after_render_tab_populated_hook=self._install_frustum_visibility_toggle,
+            after_render_tab_populated_hook=self._install_render_tab_extras,
         )
         self._init_train_camera_frustums()
         self._install_frustum_sync_callbacks()
@@ -140,6 +152,46 @@ class ViewerRuntime:
         except KeyboardInterrupt:
             return
 
+    def push_eval_metrics(
+        self, *, step: int, stats: dict[str, float | int]
+    ) -> None:
+        """Record one eval point and refresh viewer plots."""
+        if self.viewer is None or self.server is None:
+            return
+
+        train_step_raw = stats.get("train_step", int(step) + 1)
+        train_step = int(train_step_raw)
+        self._metrics_latest_train_step = max(
+            int(self._metrics_latest_train_step),
+            int(train_step),
+        )
+        updated = False
+        for metric_name in ("psnr", "ssim", "lpips"):
+            value = self._to_float_scalar(stats.get(metric_name))
+            if value is None:
+                continue
+            series = self._metrics_history[metric_name]
+            series.append((train_step, float(value)))
+            max_points = int(self.metrics_max_points)
+            if len(series) > max_points:
+                del series[: len(series) - max_points]
+            updated = True
+
+        if not updated:
+            return
+
+        self._refresh_metric_plots()
+
+    @staticmethod
+    def _to_float_scalar(value: object) -> Optional[float]:
+        if isinstance(value, torch.Tensor):
+            if int(value.numel()) != 1:
+                return None
+            return float(value.detach().item())
+        if isinstance(value, (int, float)):
+            return float(value)
+        return None
+
     def _pick_drawn_camera_indices(self, total_num: int) -> list[int]:
         if total_num <= 0:
             return []
@@ -179,6 +231,10 @@ class ViewerRuntime:
             return
         self._set_camera_frustums_visible(True)
 
+    def _install_render_tab_extras(self, viewer: Any) -> None:
+        self._install_frustum_visibility_toggle(viewer)
+        self._install_metrics_panel(viewer)
+
     def _install_frustum_visibility_toggle(self, viewer: Any) -> None:
         if self.server is None:
             return
@@ -208,6 +264,130 @@ class ViewerRuntime:
             if self.show_camera_frustums:
                 self._frustums_hidden_for_sync = False
             self._apply_frustum_visibility_state()
+
+    def _install_metrics_panel(self, viewer: Any) -> None:
+        if self.server is None:
+            return
+        try:
+            import numpy as np  # type: ignore
+            from viser import uplot  # type: ignore
+        except Exception:
+            return
+
+        default_x = np.asarray([0.0, 1.0], dtype=np.float32)
+        default_y = np.asarray([0.0, 0.0], dtype=np.float32)
+        metric_specs = (
+            ("psnr", "PSNR", "#00c389"),
+            ("ssim", "SSIM", "#ff8c42"),
+            ("lpips", "LPIPS", "#5b8ff9"),
+        )
+
+        with viewer._rendering_folder:
+            with self.server.gui.add_folder("Eval Metrics"):
+                self._metrics_show_checkbox = self.server.gui.add_checkbox(
+                    "Show Metric Plots",
+                    initial_value=True,
+                    hint="Show or hide PSNR/SSIM/LPIPS curves (eval updates only).",
+                )
+                self._metrics_window_slider = self.server.gui.add_slider(
+                    "Window (points)",
+                    min=0,
+                    max=int(self.metrics_max_points),
+                    step=10,
+                    initial_value=0,
+                    hint="0 means full history; otherwise show only the latest N points.",
+                )
+
+                for metric_name, metric_title, metric_color in metric_specs:
+                    self._metrics_last_value_handles[metric_name] = self.server.gui.add_number(
+                        f"{metric_title} (latest)",
+                        initial_value=0.0,
+                        disabled=True,
+                    )
+                    self._metrics_plot_handles[metric_name] = self.server.gui.add_uplot(
+                        data=(default_x, default_y),
+                        series=(
+                            uplot.Series(label="step", show=False),
+                            uplot.Series(
+                                label=metric_title,
+                                stroke=metric_color,
+                                width=2.0,
+                            ),
+                        ),
+                        title=f"{metric_title} vs Train Step",
+                        scales={
+                            "x": uplot.Scale(
+                                time=False,
+                                auto=False,
+                                range=(0.0, 1.0),
+                            ),
+                        },
+                        aspect=2.0,
+                    )
+
+        @self._metrics_show_checkbox.on_update
+        def _(_: Any) -> None:
+            self._apply_metrics_visibility()
+
+        @self._metrics_window_slider.on_update
+        def _(_: Any) -> None:
+            self._refresh_metric_plots()
+
+        self._apply_metrics_visibility()
+        self._refresh_metric_plots()
+
+    def _apply_metrics_visibility(self) -> None:
+        visible = True
+        if self._metrics_show_checkbox is not None:
+            visible = bool(self._metrics_show_checkbox.value)
+        for handle in self._metrics_plot_handles.values():
+            handle.visible = visible
+        for handle in self._metrics_last_value_handles.values():
+            handle.visible = visible
+        if self._metrics_window_slider is not None:
+            self._metrics_window_slider.visible = visible
+
+    def _get_metric_view_data(
+        self, metric_name: str
+    ) -> tuple["np.ndarray", "np.ndarray"]:
+        import numpy as np  # type: ignore
+
+        history = self._metrics_history.get(metric_name, [])
+        if len(history) == 0:
+            return (
+                np.asarray([0.0, 1.0], dtype=np.float32),
+                np.asarray([0.0, 0.0], dtype=np.float32),
+            )
+
+        window = 0
+        if self._metrics_window_slider is not None:
+            window = int(self._metrics_window_slider.value)
+        if window > 0 and len(history) > window:
+            history = history[-window:]
+
+        x = np.asarray([float(step) for step, _ in history], dtype=np.float32)
+        y = np.asarray([float(value) for _, value in history], dtype=np.float32)
+        return x, y
+
+    def _refresh_metric_plots(self) -> None:
+        if self.server is None or len(self._metrics_plot_handles) == 0:
+            return
+        current_step = max(1, int(self._metrics_latest_train_step))
+        with self.server.atomic():
+            for metric_name, plot_handle in self._metrics_plot_handles.items():
+                x, y = self._get_metric_view_data(metric_name)
+                plot_handle.data = (x, y)
+                plot_handle.scales = {
+                    "x": {
+                        "time": False,
+                        "auto": False,
+                        "range": (0.0, float(current_step)),
+                    }
+                }
+                latest = float(y[-1]) if int(y.shape[0]) > 0 else 0.0
+                latest_handle = self._metrics_last_value_handles.get(metric_name)
+                if latest_handle is not None:
+                    latest_handle.value = latest
 
     def _on_after_render(self) -> None:
         if not self.sync_frustums_to_render:
