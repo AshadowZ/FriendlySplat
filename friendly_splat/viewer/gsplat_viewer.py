@@ -63,7 +63,19 @@ class GsplatViewer(Viewer):
     def _init_rendering_tab(self) -> None:
         self.render_tab_state = GsplatRenderTabState()
         self._rendering_tab_handles = {}
-        self._rendering_folder = self.server.gui.add_folder("Rendering")
+        self._render_tabs = self.server.gui.add_tab_group()
+
+        settings_icon = getattr(viser.Icon, "SETTINGS", None)
+        chart_icon = getattr(viser.Icon, "CHART_DOTS", None)
+
+        controls_kwargs = {"icon": settings_icon} if settings_icon is not None else {}
+        metrics_kwargs = {"icon": chart_icon} if chart_icon is not None else {}
+
+        self.controls_tab = self._render_tabs.add_tab("Controls", **controls_kwargs)
+        self.metrics_tab = self._render_tabs.add_tab("Metrics", **metrics_kwargs)
+
+        with self.controls_tab:
+            self._rendering_folder = self.server.gui.add_folder("Rendering")
 
     def _bind_render_state_attr(
         self,

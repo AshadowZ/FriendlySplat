@@ -12,6 +12,7 @@ if TYPE_CHECKING:
 
 class ViewerRuntime:
     """Runtime controller for viewer lifecycle and camera-frustum interactions."""
+    _UNIVERSAL_EMPTY_OPTION = "(no data yet)"
 
     def __init__(
         self,
@@ -32,6 +33,7 @@ class ViewerRuntime:
         frustum_show_after_static_sec: float = 0.12,
         focus_frustum_on_click: bool = True,
         metrics_max_points: int = 2000,
+        scalar_max_points: int = 5000,
     ) -> None:
         self.disable_viewer = bool(disable_viewer)
         self.port = int(port)
@@ -49,6 +51,7 @@ class ViewerRuntime:
         self.frustum_show_after_static_sec = float(frustum_show_after_static_sec)
         self.focus_frustum_on_click = bool(focus_frustum_on_click)
         self.metrics_max_points = max(64, int(metrics_max_points))
+        self.scalar_max_points = max(256, int(scalar_max_points))
 
         self.server: Any = None
         self.viewer: Any = None
@@ -73,6 +76,12 @@ class ViewerRuntime:
         self._metrics_window_slider: Any = None
         self._metrics_last_value_handles: dict[str, Any] = {}
         self._metrics_latest_train_step: int = 0
+        self._scalar_history: dict[str, list[tuple[int, float]]] = {}
+        self._scalar_latest_train_step: int = 0
+        self._universal_metric_dropdown: Any = None
+        self._universal_metric_plot: Any = None
+        self._universal_metric_window_slider: Any = None
+        self._universal_metric_latest_number: Any = None
 
         if self.disable_viewer:
             return
@@ -182,6 +191,40 @@ class ViewerRuntime:
 
         self._refresh_metric_plots()
 
+    def log_scalars(self, *, step: int, scalars: dict[str, object]) -> None:
+        """Record arbitrary scalar streams for universal metric plotting."""
+        if self.viewer is None or self.server is None:
+            return
+
+        train_step = max(0, int(step))
+        if train_step > 0:
+            self._scalar_latest_train_step = max(
+                int(self._scalar_latest_train_step),
+                train_step,
+            )
+
+        any_updated = False
+        for key, raw_value in scalars.items():
+            if not isinstance(key, str) or len(key.strip()) == 0:
+                continue
+            scalar = self._to_float_scalar(raw_value)
+            if scalar is None:
+                continue
+
+            tag = key.strip()
+            series = self._scalar_history.setdefault(tag, [])
+            series.append((train_step, float(scalar)))
+            max_points = int(self.scalar_max_points)
+            if len(series) > max_points:
+                del series[: len(series) - max_points]
+            any_updated = True
+
+        if not any_updated:
+            return
+
+        self._update_universal_metric_dropdown_options()
+        self._refresh_universal_metric_plot()
+
     @staticmethod
     def _to_float_scalar(value: object) -> Optional[float]:
         if isinstance(value, torch.Tensor):
@@ -282,48 +325,59 @@ class ViewerRuntime:
             ("lpips", "LPIPS", "#5b8ff9"),
         )
 
-        with viewer._rendering_folder:
-            with self.server.gui.add_folder("Eval Metrics"):
-                self._metrics_show_checkbox = self.server.gui.add_checkbox(
-                    "Show Metric Plots",
-                    initial_value=True,
-                    hint="Show or hide PSNR/SSIM/LPIPS curves (eval updates only).",
+        def _populate_metrics_controls() -> None:
+            self._metrics_show_checkbox = self.server.gui.add_checkbox(
+                "Show Metric Plots",
+                initial_value=True,
+                hint="Show or hide PSNR/SSIM/LPIPS curves (eval updates only).",
+            )
+            self._metrics_window_slider = self.server.gui.add_slider(
+                "Window (points)",
+                min=0,
+                max=int(self.metrics_max_points),
+                step=10,
+                initial_value=0,
+                hint="0 means full history; otherwise show only the latest N points.",
+            )
+
+            for metric_name, metric_title, metric_color in metric_specs:
+                self._metrics_last_value_handles[metric_name] = self.server.gui.add_number(
+                    f"{metric_title} (latest)",
+                    initial_value=0.0,
+                    disabled=True,
                 )
-                self._metrics_window_slider = self.server.gui.add_slider(
-                    "Window (points)",
-                    min=0,
-                    max=int(self.metrics_max_points),
-                    step=10,
-                    initial_value=0,
-                    hint="0 means full history; otherwise show only the latest N points.",
+                self._metrics_plot_handles[metric_name] = self.server.gui.add_uplot(
+                    data=(default_x, default_y),
+                    series=(
+                        uplot.Series(label="step", show=False),
+                        uplot.Series(
+                            label=metric_title,
+                            stroke=metric_color,
+                            width=2.0,
+                        ),
+                    ),
+                    title=f"{metric_title} vs Train Step",
+                    scales={
+                        "x": uplot.Scale(
+                            time=False,
+                            auto=False,
+                            range=(0.0, 1.0),
+                        ),
+                    },
+                    aspect=2.0,
                 )
 
-                for metric_name, metric_title, metric_color in metric_specs:
-                    self._metrics_last_value_handles[metric_name] = self.server.gui.add_number(
-                        f"{metric_title} (latest)",
-                        initial_value=0.0,
-                        disabled=True,
-                    )
-                    self._metrics_plot_handles[metric_name] = self.server.gui.add_uplot(
-                        data=(default_x, default_y),
-                        series=(
-                            uplot.Series(label="step", show=False),
-                            uplot.Series(
-                                label=metric_title,
-                                stroke=metric_color,
-                                width=2.0,
-                            ),
-                        ),
-                        title=f"{metric_title} vs Train Step",
-                        scales={
-                            "x": uplot.Scale(
-                                time=False,
-                                auto=False,
-                                range=(0.0, 1.0),
-                            ),
-                        },
-                        aspect=2.0,
-                    )
+        metrics_tab = getattr(viewer, "metrics_tab", None)
+        if metrics_tab is not None:
+            with metrics_tab:
+                self._install_universal_plot_panel(np_module=np, uplot_module=uplot)
+                _populate_metrics_controls()
+        else:
+            with viewer._rendering_folder:
+                with self.server.gui.add_folder("Universal Plot"):
+                    self._install_universal_plot_panel(np_module=np, uplot_module=uplot)
+                with self.server.gui.add_folder("Eval Metrics"):
+                    _populate_metrics_controls()
 
         @self._metrics_show_checkbox.on_update
         def _(_: Any) -> None:
@@ -335,6 +389,151 @@ class ViewerRuntime:
 
         self._apply_metrics_visibility()
         self._refresh_metric_plots()
+        self._update_universal_metric_dropdown_options()
+        self._refresh_universal_metric_plot()
+
+    def _install_universal_plot_panel(self, *, np_module: Any, uplot_module: Any) -> None:
+        self._universal_metric_dropdown = self.server.gui.add_dropdown(
+            "Select Metric",
+            (self._UNIVERSAL_EMPTY_OPTION,),
+            initial_value=self._UNIVERSAL_EMPTY_OPTION,
+            hint="Select any runtime scalar stream to visualize.",
+        )
+        self._universal_metric_window_slider = self.server.gui.add_slider(
+            "Universal Window (points)",
+            min=0,
+            max=int(self.scalar_max_points),
+            step=10,
+            initial_value=0,
+            hint="0 means full history; otherwise show only the latest N points.",
+        )
+        self._universal_metric_latest_number = self.server.gui.add_number(
+            "Selected Metric (latest)",
+            initial_value=0.0,
+            disabled=True,
+        )
+        self._universal_metric_plot = self.server.gui.add_uplot(
+            data=(
+                np_module.asarray([0.0, 1.0], dtype=np_module.float32),
+                np_module.asarray([0.0, 0.0], dtype=np_module.float32),
+            ),
+            series=(
+                uplot_module.Series(label="step", show=False),
+                uplot_module.Series(
+                    label="value",
+                    stroke="#7aa2ff",
+                    width=2.0,
+                ),
+            ),
+            title="Universal Metric Plot",
+            scales={
+                "x": uplot_module.Scale(
+                    time=False,
+                    auto=False,
+                    range=(0.0, 1.0),
+                ),
+            },
+            aspect=2.0,
+        )
+
+        @self._universal_metric_dropdown.on_update
+        def _(_: Any) -> None:
+            self._refresh_universal_metric_plot()
+
+        @self._universal_metric_window_slider.on_update
+        def _(_: Any) -> None:
+            self._refresh_universal_metric_plot()
+
+    def _update_universal_metric_dropdown_options(self) -> None:
+        dropdown = self._universal_metric_dropdown
+        if dropdown is None:
+            return
+
+        keys = sorted(self._scalar_history.keys())
+        if len(keys) == 0:
+            options = (self._UNIVERSAL_EMPTY_OPTION,)
+            dropdown.options = options
+            dropdown.value = self._UNIVERSAL_EMPTY_OPTION
+            return
+
+        options = tuple(keys)
+        if tuple(dropdown.options) != options:
+            dropdown.options = options
+        if dropdown.value not in self._scalar_history:
+            dropdown.value = options[0]
+
+    def _get_universal_metric_view_data(
+        self, metric_name: str
+    ) -> tuple["np.ndarray", "np.ndarray"]:
+        import numpy as np  # type: ignore
+
+        history = self._scalar_history.get(metric_name, [])
+        if len(history) == 0:
+            return (
+                np.asarray([0.0, 1.0], dtype=np.float32),
+                np.asarray([0.0, 0.0], dtype=np.float32),
+            )
+
+        window = 0
+        if self._universal_metric_window_slider is not None:
+            window = int(self._universal_metric_window_slider.value)
+        if window > 0 and len(history) > window:
+            history = history[-window:]
+
+        x = np.asarray([float(step) for step, _ in history], dtype=np.float32)
+        y = np.asarray([float(value) for _, value in history], dtype=np.float32)
+
+        # Keep UI responsive when a metric accumulates many points.
+        max_plot_points = 2000
+        if int(x.shape[0]) > max_plot_points:
+            indices = np.linspace(0, int(x.shape[0]) - 1, max_plot_points, dtype=np.int64)
+            x = x[indices]
+            y = y[indices]
+        return x, y
+
+    def _refresh_universal_metric_plot(self) -> None:
+        if self.server is None or self._universal_metric_plot is None:
+            return
+        dropdown = self._universal_metric_dropdown
+        if dropdown is None:
+            return
+        selected = str(dropdown.value)
+        current_step = max(1, int(self._scalar_latest_train_step))
+
+        with self.server.atomic():
+            if selected not in self._scalar_history:
+                import numpy as np  # type: ignore
+
+                self._universal_metric_plot.data = (
+                    np.asarray([0.0, 1.0], dtype=np.float32),
+                    np.asarray([0.0, 0.0], dtype=np.float32),
+                )
+                self._universal_metric_plot.title = "Universal Metric Plot"
+                self._universal_metric_plot.scales = {
+                    "x": {
+                        "time": False,
+                        "auto": False,
+                        "range": (0.0, float(current_step)),
+                    }
+                }
+                if self._universal_metric_latest_number is not None:
+                    self._universal_metric_latest_number.value = 0.0
+                return
+
+            x, y = self._get_universal_metric_view_data(selected)
+            self._universal_metric_plot.data = (x, y)
+            self._universal_metric_plot.title = f"{selected} vs Train Step"
+            self._universal_metric_plot.scales = {
+                "x": {
+                    "time": False,
+                    "auto": False,
+                    "range": (0.0, float(current_step)),
+                }
+            }
+            if self._universal_metric_latest_number is not None:
+                self._universal_metric_latest_number.value = (
+                    float(y[-1]) if int(y.shape[0]) > 0 else 0.0
+                )
 
     def _apply_metrics_visibility(self) -> None:
         visible = True

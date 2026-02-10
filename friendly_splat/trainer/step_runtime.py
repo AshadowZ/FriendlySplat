@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Collection, Dict, Mapping, Optional
 
 import torch
 
@@ -295,6 +295,130 @@ def maybe_run_evaluation_for_step(
     )
 
 
+def filter_train_loss_items_for_logging(
+    *,
+    train_cfg: TrainConfig,
+    loss_items: Mapping[str, object],
+) -> dict[str, object]:
+    """Filter training loss items for TB/viewer logging.
+
+    Rules:
+    - Always drop: rgb_l1, rgb_ssim, gns.
+    - Keep core items: total, rgb.
+    - Keep optional items only when corresponding feature is enabled.
+    """
+    keep_keys: set[str] = {"total", "rgb"}
+    reg_cfg = train_cfg.reg
+    post_cfg = train_cfg.postprocess
+
+    if float(reg_cfg.sky_loss_weight) > 0.0:
+        keep_keys.add("sky")
+    if float(reg_cfg.depth_loss_weight) > 0.0:
+        keep_keys.add("depth")
+    if float(reg_cfg.normal_loss_weight) > 0.0:
+        keep_keys.add("render_normal")
+    if float(reg_cfg.surf_normal_loss_weight) > 0.0:
+        keep_keys.add("surf_normal")
+    if float(reg_cfg.consistency_normal_loss_weight) > 0.0:
+        keep_keys.add("consistency_normal")
+    if float(reg_cfg.flat_reg_weight) > 0.0:
+        keep_keys.add("flat_reg")
+    if float(reg_cfg.scale_reg_weight) > 0.0:
+        keep_keys.add("scale_reg")
+
+    if bool(post_cfg.use_bilateral_grid):
+        keep_keys.add("bilagrid_tv")
+    if bool(post_cfg.use_ppisp):
+        keep_keys.add("ppisp_reg")
+
+    drop_keys = {"rgb_l1", "rgb_ssim", "gns"}
+
+    filtered: dict[str, object] = {}
+    for key, value in loss_items.items():
+        if key in drop_keys:
+            continue
+        if key in keep_keys:
+            filtered[key] = value
+    return filtered
+
+
+def extract_prefixed_scalar_dict(
+    *,
+    values: Mapping[str, object],
+    prefix: str,
+    exclude_keys: Collection[str] = (),
+) -> dict[str, float]:
+    """Extract numeric scalars and prefix names for viewer logging."""
+    excluded = set(str(x) for x in exclude_keys)
+    out: dict[str, float] = {}
+    for key, value in values.items():
+        key_s = str(key)
+        if key_s in excluded:
+            continue
+        if isinstance(value, torch.Tensor):
+            if int(value.numel()) != 1:
+                continue
+            out[f"{prefix}{key_s}"] = float(value.detach().item())
+        elif isinstance(value, (int, float)):
+            out[f"{prefix}{key_s}"] = float(value)
+    return out
+
+
+def build_viewer_train_scalars(
+    *,
+    device: torch.device,
+    splats: torch.nn.ParameterDict,
+    filtered_loss_items: Mapping[str, object],
+    optimizer_coordinator: Any,
+) -> dict[str, float]:
+    """Build per-step scalar payload for viewer universal plot."""
+    train_scalars = extract_prefixed_scalar_dict(
+        values=filtered_loss_items,
+        prefix="train/",
+    )
+    means_opt = optimizer_coordinator.splat_optimizers.get("means")
+    if means_opt is not None and len(means_opt.param_groups) > 0:
+        lr_value = means_opt.param_groups[0].get("lr")
+        if isinstance(lr_value, (int, float)):
+            train_scalars["train/lr_means"] = float(lr_value)
+    train_scalars["train/num_gs"] = float(splats["means"].shape[0])
+    if device.type == "cuda":
+        train_scalars["train/mem_gb"] = float(
+            torch.cuda.max_memory_allocated(device=device) / (1024**3)
+        )
+    return train_scalars
+
+
+def handle_eval_complete_logging(
+    *,
+    eval_step: int,
+    stats: Mapping[str, object],
+    tb_runtime: Any,
+    viewer_runtime: Any,
+) -> None:
+    """Forward eval completion outputs to TensorBoard + viewer."""
+    stats_dict = dict(stats)
+    tb_runtime.log_eval(
+        step=int(eval_step),
+        stats=stats_dict,
+        stage="eval",
+    )
+    viewer_runtime.push_eval_metrics(
+        step=int(eval_step),
+        stats=stats_dict,
+    )
+    eval_scalars = extract_prefixed_scalar_dict(
+        values=stats_dict,
+        prefix="eval/",
+        exclude_keys=("step", "train_step"),
+    )
+    eval_train_step = int(stats_dict.get("train_step", int(eval_step) + 1))
+    viewer_runtime.log_scalars(
+        step=int(eval_train_step),
+        scalars=eval_scalars,
+    )
+
+
 def maybe_log_training_scalars_for_step(
     *,
     step: int,
@@ -303,6 +427,7 @@ def maybe_log_training_scalars_for_step(
     loss_output: LossOutput,
     optimizer_coordinator: Any,
     tb_runtime: Any,
+    loss_items_override: Optional[Mapping[str, object]] = None,
 ) -> None:
     """Collect and write training scalars to TensorBoard (if enabled)."""
     means_opt = optimizer_coordinator.splat_optimizers.get("means")
@@ -318,7 +443,9 @@ def maybe_log_training_scalars_for_step(
 
     tb_runtime.log_train(
         step=int(step),
-        loss_items=loss_output.items,
+        loss_items=loss_items_override
+        if loss_items_override is not None
+        else loss_output.items,
         num_gs=int(splats["means"].shape[0]),
         lr_means=lr_means,
         mem_gb=mem_gb,
