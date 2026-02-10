@@ -59,14 +59,13 @@ class Trainer:
         self.eval_dataset = context.eval_dataset
         self.eval_loader = context.eval_loader
         self.gaussian_model = context.gaussian_model
-        self.splats = context.splats
         self.postprocessor = context.postprocessor
         self.pose_adjust = context.pose_adjust
         self.natural_selection_policy = context.natural_selection_policy
         self.strategy = context.strategy
         self.strategy_state = context.strategy_state
         self.optimizer_coordinator = context.optimizer_coordinator
-        print(f"Initialized {self.splats['means'].shape[0]} gaussians.")
+        print(f"Initialized {self.gaussian_model.num_gaussians} gaussians.")
 
         torch.backends.cudnn.benchmark = True
 
@@ -76,7 +75,7 @@ class Trainer:
 
     def train(self) -> None:
         cfg = self.cfg
-        splats = self.splats
+        gaussian_model = self.gaussian_model
         eval_loader = self.eval_loader
         postprocessor = self.postprocessor
         pose_adjust = self.pose_adjust
@@ -91,7 +90,7 @@ class Trainer:
             disable_viewer=cfg.viewer.disable_viewer,
             port=cfg.viewer.port,
             device=self.device,
-            splats=splats,
+            gaussian_model=gaussian_model,
             output_dir=cfg.io.result_dir,
             train_dataset=self.dataset,
         )
@@ -133,7 +132,7 @@ class Trainer:
             # Render with optional postprocessing.
             render_out = render_from_prepared_batch(
                 prepared_batch=prepared_batch,
-                splats=splats,
+                gaussian_model=gaussian_model,
                 optim_cfg=cfg.optim,
                 schedule=schedule,
                 absgrad=bool(cfg.strategy.absgrad),
@@ -149,7 +148,7 @@ class Trainer:
                 step=step,
                 prepared_batch=prepared_batch,
                 render_out=render_out,
-                splats=splats,
+                gaussian_model=gaussian_model,
                 postprocessor=postprocessor,
                 gns=gns,
             )
@@ -158,7 +157,7 @@ class Trainer:
             # /*-------------------- Backward + Optimizer Step --------------------*/
             # Run pre-backward strategy hooks.
             strategy.step_pre_backward(
-                splats,
+                gaussian_model.splats,
                 optimizer_coordinator.splat_optimizers,
                 strategy_state,
                 step,
@@ -178,7 +177,7 @@ class Trainer:
             # /*-------------------- Strategy Post Update --------------------*/
             # Run post-update densification/pruning hooks.
             strategy.step_post_backward(
-                params=splats,
+                params=gaussian_model.splats,
                 optimizers=optimizer_coordinator.splat_optimizers,
                 state=strategy_state,
                 step=step,
@@ -189,7 +188,7 @@ class Trainer:
             if gns is not None:
                 gns.step_post_update(
                     step=step,
-                    params=splats,
+                    params=gaussian_model.splats,
                     optimizers=optimizer_coordinator.splat_optimizers,
                     strategy_state=strategy_state,
                 )
@@ -210,13 +209,13 @@ class Trainer:
                 step=int(step),
                 train_cfg=cfg,
                 eval_loader=eval_loader,
-                splats=splats,
+                gaussian_model=gaussian_model,
                 postprocessor=postprocessor,
             )
             log_payload = handle_step_logging(
                 step=int(step),
                 device=self.device,
-                num_gs=int(splats["means"].shape[0]),
+                num_gs=int(gaussian_model.num_gaussians),
                 train_loss_items=loss_output.items,
                 eval_stats=eval_output.stats if eval_output is not None else None,
                 tb_writer=tb_writer,
@@ -235,7 +234,7 @@ class Trainer:
                 train_cfg=cfg,
                 step=int(step),
                 max_steps=int(cfg.optim.max_steps),
-                splats=splats,
+                gaussian_model=gaussian_model,
                 active_sh_degree=int(active_sh_degree),
                 pose_adjust=pose_adjust,
                 postprocessor=postprocessor,

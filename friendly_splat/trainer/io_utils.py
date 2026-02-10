@@ -8,6 +8,7 @@ from typing import Dict, Optional, Set
 import torch
 import yaml
 
+from friendly_splat.models.gaussian import GaussianModel
 from friendly_splat.models.postprocess import PostProcessor
 from friendly_splat.trainer.configs import (
     EvalConfig,
@@ -86,7 +87,7 @@ def save_checkpoint(
     train_cfg: TrainConfig,
     pose_cfg: PoseConfig,
     step: int,
-    splats: torch.nn.ParameterDict,
+    gaussian_model: GaussianModel,
     ckpt_dir: str,
     pose_adjust: Optional[torch.nn.Module] = None,
     postprocessor: Optional[PostProcessor] = None,
@@ -97,7 +98,7 @@ def save_checkpoint(
         "step": int(step),
         "train_step": int(train_step),
         "cfg": asdict(train_cfg),
-        "splats": splats.state_dict(),
+        "splats": gaussian_model.splats_state_dict(),
     }
     if pose_cfg.pose_opt and pose_adjust is not None:
         data["pose_adjust"] = pose_adjust.state_dict()
@@ -129,7 +130,7 @@ def export_ply(
     step: int,
     ply_dir: str,
     ply_format: str,
-    splats: torch.nn.ParameterDict,
+    gaussian_model: GaussianModel,
     active_sh_degree: int,
 ) -> str:
     train_step = int(step) + 1
@@ -138,13 +139,13 @@ def export_ply(
 
     out_path = os.path.join(str(ply_dir), f"splats_step{int(train_step):06d}.ply")
     with torch.no_grad():
-        sh0 = splats["sh0"].detach()
-        shN = splats["shN"].detach()
+        sh0 = gaussian_model.sh0.detach()
+        shN = gaussian_model.shN.detach()
         export_splats(
-            means=splats["means"].detach(),
-            scales=splats["scales"].detach(),  # log-scales (3DGS convention)
-            quats=splats["quats"].detach(),
-            opacities=splats["opacities"].detach(),  # logits (3DGS convention)
+            means=gaussian_model.means.detach(),
+            scales=gaussian_model.log_scales.detach(),  # log-scales (3DGS convention)
+            quats=gaussian_model.quats.detach(),
+            opacities=gaussian_model.opacity_logits.detach(),  # logits (3DGS convention)
             sh0=sh0,
             shN=shN,
             format=str(ply_format),
@@ -161,7 +162,7 @@ def maybe_save_outputs(
     train_cfg: TrainConfig,
     step: int,
     max_steps: int,
-    splats: torch.nn.ParameterDict,
+    gaussian_model: GaussianModel,
     active_sh_degree: int,
     pose_adjust: Optional[torch.nn.Module] = None,
     postprocessor: Optional[PostProcessor] = None,
@@ -190,7 +191,7 @@ def maybe_save_outputs(
             train_cfg=train_cfg,
             pose_cfg=pose_cfg,
             step=int(step),
-            splats=splats,
+            gaussian_model=gaussian_model,
             ckpt_dir=ckpt_dir,
             pose_adjust=pose_adjust,
             postprocessor=postprocessor,
@@ -205,6 +206,6 @@ def maybe_save_outputs(
             step=int(step),
             ply_dir=ply_dir,
             ply_format=ply_format,
-            splats=splats,
+            gaussian_model=gaussian_model,
             active_sh_degree=int(active_sh_degree),
         )
