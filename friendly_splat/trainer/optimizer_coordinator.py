@@ -14,8 +14,7 @@ from gsplat.strategy.natural_selection import NaturalSelectionPolicy
 class OptimizerBundle:
     splat_optimizers: Dict[str, torch.optim.Optimizer]
     pose_optimizers: list[torch.optim.Optimizer]
-    bilagrid_optimizers: list[torch.optim.Optimizer]
-    ppisp_optimizers: list[torch.optim.Optimizer]
+    postprocess_optimizers: list[torch.optim.Optimizer]
     schedulers: list[object]
 
 
@@ -61,9 +60,7 @@ class OptimizerCoordinator:
             opt.zero_grad(set_to_none=True)
         for opt in self.optimizers.pose_optimizers:
             opt.zero_grad(set_to_none=True)
-        for opt in self.optimizers.bilagrid_optimizers:
-            opt.zero_grad(set_to_none=True)
-        for opt in self.optimizers.ppisp_optimizers:
+        for opt in self.optimizers.postprocess_optimizers:
             opt.zero_grad(set_to_none=True)
 
     def step_all(
@@ -168,9 +165,7 @@ class OptimizerCoordinator:
         # Step non-splat optimizers and then schedulers.
         for opt in self.optimizers.pose_optimizers:
             opt.step()
-        for opt in self.optimizers.bilagrid_optimizers:
-            opt.step()
-        for opt in self.optimizers.ppisp_optimizers:
+        for opt in self.optimizers.postprocess_optimizers:
             opt.step()
         for sch in self.optimizers.schedulers:
             sch.step()

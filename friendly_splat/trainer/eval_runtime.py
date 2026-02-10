@@ -7,8 +7,7 @@ from typing import Dict, Mapping, Optional, Tuple
 import torch
 
 from friendly_splat.data.dataloader import DataLoader, PreparedBatch
-from friendly_splat.models.bilateral_grid import BilateralGridPostProcessor
-from friendly_splat.models.ppisp import PPISPPostProcessor
+from friendly_splat.models.postprocess import PostProcessor, apply_postprocess
 from friendly_splat.renderer.renderer import render_splats
 from friendly_splat.trainer.configs import (
     EvalConfig,
@@ -121,13 +120,8 @@ def run_evaluation(
     step: int,
     eval_loader: DataLoader,
     splats: torch.nn.ParameterDict,
-    bilagrid: Optional[BilateralGridPostProcessor] = None,
-    ppisp: Optional[PPISPPostProcessor] = None,
+    postprocessor: Optional[PostProcessor] = None,
 ) -> EvalOutput:
-    # Import inside function to avoid circular import:
-    # step_runtime imports eval_runtime for scheduling/dispatch.
-    from friendly_splat.trainer.step_runtime import apply_postprocess, postprocess_enabled
-
     max_images = cfg.eval.max_images
     active_sh_degree = _active_sh_degree_for_step(step=int(step), optim_cfg=cfg.optim)
     eval_metrics = _get_eval_metrics(
@@ -143,7 +137,7 @@ def run_evaluation(
     total_cc_lpips = 0.0
     total_images = 0
     compute_cc_metrics = bool(cfg.eval.compute_cc_metrics) and (
-        bool(cfg.postprocess.use_bilateral_grid) or bool(cfg.postprocess.use_ppisp)
+        postprocessor is not None
     )
 
     tic = time.time()
@@ -176,14 +170,11 @@ def run_evaluation(
         )
         pred_rgb = out.pred_rgb
 
-        if postprocess_enabled(cfg.postprocess):
-            pred_rgb = apply_postprocess(
-                pred_rgb=pred_rgb,
-                image_ids=prepared_batch.image_ids,
-                postprocess_cfg=cfg.postprocess,
-                bilagrid=bilagrid,
-                ppisp=ppisp,
-            )
+        pred_rgb = apply_postprocess(
+            pred_rgb=pred_rgb,
+            image_ids=prepared_batch.image_ids,
+            postprocessor=postprocessor,
+        )
 
         pred_rgb = pred_rgb.clamp(0.0, 1.0)
         target_rgb = prepared_batch.pixels

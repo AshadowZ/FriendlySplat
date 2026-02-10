@@ -60,8 +60,7 @@ class Trainer:
         self.eval_loader = context.eval_loader
         self.gaussian_model = context.gaussian_model
         self.splats = context.splats
-        self.bilagrid = context.bilagrid
-        self.ppisp = context.ppisp
+        self.postprocessor = context.postprocessor
         self.pose_adjust = context.pose_adjust
         self.natural_selection_policy = context.natural_selection_policy
         self.strategy = context.strategy
@@ -79,8 +78,7 @@ class Trainer:
         cfg = self.cfg
         splats = self.splats
         eval_loader = self.eval_loader
-        bilagrid = self.bilagrid
-        ppisp = self.ppisp
+        postprocessor = self.postprocessor
         pose_adjust = self.pose_adjust
         strategy = self.strategy
         strategy_state = self.strategy_state
@@ -137,11 +135,9 @@ class Trainer:
                 prepared_batch=prepared_batch,
                 splats=splats,
                 optim_cfg=cfg.optim,
-                postprocess_cfg=cfg.postprocess,
                 schedule=schedule,
                 absgrad=bool(cfg.strategy.absgrad),
-                bilagrid=bilagrid,
-                ppisp=ppisp,
+                postprocessor=postprocessor,
             )
             meta = render_out.meta
             active_sh_degree = render_out.active_sh_degree
@@ -149,14 +145,12 @@ class Trainer:
             # Assemble total loss and per-term loss items.
             loss_output = compute_losses_from_prepared_batch_and_render(
                 reg_cfg=cfg.reg,
-                postprocess_cfg=cfg.postprocess,
                 schedule=schedule,
                 step=step,
                 prepared_batch=prepared_batch,
                 render_out=render_out,
                 splats=splats,
-                bilagrid=bilagrid,
-                ppisp=ppisp,
+                postprocessor=postprocessor,
                 gns=gns,
             )
             loss = loss_output.total
@@ -217,8 +211,7 @@ class Trainer:
                 train_cfg=cfg,
                 eval_loader=eval_loader,
                 splats=splats,
-                bilagrid=bilagrid,
-                ppisp=ppisp,
+                postprocessor=postprocessor,
             )
             log_payload = handle_step_logging(
                 step=int(step),
@@ -239,15 +232,13 @@ class Trainer:
             maybe_save_outputs(
                 io_cfg=cfg.io,
                 pose_cfg=cfg.pose,
-                postprocess_cfg=cfg.postprocess,
                 train_cfg=cfg,
                 step=int(step),
                 max_steps=int(cfg.optim.max_steps),
                 splats=splats,
                 active_sh_degree=int(active_sh_degree),
                 pose_adjust=pose_adjust,
-                bilagrid=bilagrid,
-                ppisp=ppisp,
+                postprocessor=postprocessor,
             )
 
         tb_writer.close()
