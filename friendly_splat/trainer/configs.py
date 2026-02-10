@@ -130,8 +130,6 @@ class TensorBoardConfig:
     every_n: int = 100
     # Flush TensorBoard event file every N logged training steps.
     flush_every_n: int = 500
-    # Log CUDA memory usage (GB) under train/mem_gb when CUDA is used.
-    log_memory: bool = True
 
 
 @dataclass(frozen=True)

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Optional
+from typing import TYPE_CHECKING, Any, Literal, Mapping, Optional
 
 import torch
 
@@ -224,6 +224,38 @@ class ViewerRuntime:
 
         self._update_universal_metric_dropdown_options()
         self._refresh_universal_metric_plot()
+
+    def log_payload(self, *, payload: object) -> None:
+        """Consume trainer log payload and update viewer plots."""
+        if self.viewer is None or self.server is None:
+            return
+
+        step_raw = getattr(payload, "step", None)
+        if step_raw is None:
+            return
+        step = max(0, int(step_raw))
+
+        train_scalars = getattr(payload, "train_scalars", None)
+        if isinstance(train_scalars, Mapping):
+            self.log_scalars(step=step, scalars=dict(train_scalars))
+
+        eval_metrics = getattr(payload, "eval_metrics", None)
+        if not isinstance(eval_metrics, Mapping) or len(eval_metrics) == 0:
+            return
+
+        eval_stats: dict[str, object] = {"train_step": int(step)}
+        eval_scalars: dict[str, object] = {}
+        for key, value in eval_metrics.items():
+            if not isinstance(key, str):
+                continue
+            metric_name = key.strip()
+            if len(metric_name) == 0:
+                continue
+            eval_stats[metric_name] = value
+            eval_scalars[f"eval/{metric_name}"] = value
+
+        self.push_eval_metrics(step=step, stats=eval_stats)
+        self.log_scalars(step=step, scalars=eval_scalars)
 
     @staticmethod
     def _to_float_scalar(value: object) -> Optional[float]:
