@@ -13,7 +13,6 @@ from friendly_splat.renderer.renderer import render_splats
 from friendly_splat.trainer.configs import (
     EvalConfig,
     OptimConfig,
-    PostprocessConfig,
     TrainConfig,
 )
 from friendly_splat.trainer.metrics import (
@@ -49,7 +48,7 @@ def _get_eval_metrics(*, device: torch.device, lpips_net: str) -> EvalMetricBund
 
 @dataclass(frozen=True)
 class EvalOutput:
-    stats: Dict[str, float]
+    stats: Dict[str, float | int]
 
 
 def should_run_evaluation(*, eval_cfg: EvalConfig, step: int) -> bool:
@@ -70,7 +69,7 @@ def _slice_batch(batch: PreparedBatch, n: int) -> PreparedBatch:
     return PreparedBatch(
         pixels=batch.pixels[:n],
         camtoworlds=batch.camtoworlds[:n],
-        camtoworlds_gt=batch.camtoworlds_gt[:n],
+        camtoworlds_input=batch.camtoworlds_input[:n],
         Ks=batch.Ks[:n],
         height=int(batch.height),
         width=int(batch.width),
@@ -102,6 +101,10 @@ def run_evaluation(
     bilagrid: Optional[BilateralGridPostProcessor] = None,
     ppisp: Optional[PPISPPostProcessor] = None,
 ) -> EvalOutput:
+    # Import inside function to avoid circular import:
+    # step_runtime imports eval_runtime for scheduling/dispatch.
+    from friendly_splat.trainer.step_runtime import apply_postprocess, postprocess_enabled
+
     max_images = cfg.eval.max_images
     active_sh_degree = _active_sh_degree_for_step(step=int(step), optim_cfg=cfg.optim)
     eval_metrics = _get_eval_metrics(
@@ -151,14 +154,9 @@ def run_evaluation(
         pred_rgb = out.pred_rgb
 
         if postprocess_enabled(cfg.postprocess):
-            image_ids = prepared_batch.image_ids
-            if image_ids is None:
-                raise KeyError(
-                    "Evaluation postprocess requires `image_id` in the batch."
-                )
             pred_rgb = apply_postprocess(
                 pred_rgb=pred_rgb,
-                image_ids=image_ids,
+                image_ids=prepared_batch.image_ids,
                 postprocess_cfg=cfg.postprocess,
                 bilagrid=bilagrid,
                 ppisp=ppisp,
@@ -194,45 +192,19 @@ def run_evaluation(
             "Evaluation produced zero images. Check eval split and eval.max_images."
         )
 
-    stats: Dict[str, float] = {
-        "step": float(int(step)),
-        "train_step": float(int(step) + 1),
+    stats: Dict[str, float | int] = {
+        "step": int(step),
+        "train_step": int(step) + 1,
         "psnr": float(total_psnr / float(total_images)),
         "ssim": float(total_ssim / float(total_images)),
         "lpips": float(total_lpips / float(total_images)),
         "seconds_per_image": float(elapsed / float(total_images)),
-        "num_eval_images": float(total_images),
-        "num_gaussians": float(int(splats["means"].shape[0])),
-        "active_sh_degree": float(int(active_sh_degree)),
+        "num_eval_images": int(total_images),
+        "num_gaussians": int(splats["means"].shape[0]),
+        "active_sh_degree": int(active_sh_degree),
     }
     if compute_cc_metrics:
         stats["cc_psnr"] = float(total_cc_psnr / float(total_images))
         stats["cc_ssim"] = float(total_cc_ssim / float(total_images))
         stats["cc_lpips"] = float(total_cc_lpips / float(total_images))
     return EvalOutput(stats=stats)
-
-
-def postprocess_enabled(postprocess_cfg: PostprocessConfig) -> bool:
-    return bool(postprocess_cfg.use_bilateral_grid) or bool(postprocess_cfg.use_ppisp)
-
-
-def apply_postprocess(
-    *,
-    pred_rgb: torch.Tensor,
-    image_ids: torch.Tensor,
-    postprocess_cfg: PostprocessConfig,
-    bilagrid: Optional[BilateralGridPostProcessor] = None,
-    ppisp: Optional[PPISPPostProcessor] = None,
-) -> torch.Tensor:
-    out_rgb = pred_rgb
-    if postprocess_cfg.use_bilateral_grid:
-        if bilagrid is None:
-            raise RuntimeError(
-                "use_bilateral_grid=True but bilagrid is not initialized."
-            )
-        out_rgb = bilagrid.apply(rgb=out_rgb, image_ids=image_ids)
-    elif postprocess_cfg.use_ppisp:
-        if ppisp is None:
-            raise RuntimeError("use_ppisp=True but ppisp is not initialized.")
-        out_rgb = ppisp.apply(rgb=out_rgb, image_ids=image_ids)
-    return out_rgb

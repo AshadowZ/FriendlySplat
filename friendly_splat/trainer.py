@@ -30,7 +30,6 @@ from friendly_splat.trainer.configs import TrainConfig, validate_train_config
 from friendly_splat.utils.common_utils import set_seed
 from friendly_splat.trainer.io_utils import (
     init_output_paths,
-    init_eval_output_paths,
     save_train_config_snapshot,
     maybe_save_outputs,
 )
@@ -51,8 +50,7 @@ class Trainer:
             raise RuntimeError("CUDA requested but torch.cuda.is_available() is False.")
 
         # Prepare output folders (checkpoints / PLY exports).
-        init_output_paths(io_cfg=cfg.io)
-        init_eval_output_paths(io_cfg=cfg.io, eval_cfg=cfg.eval)
+        init_output_paths(io_cfg=cfg.io, eval_cfg=cfg.eval)
         save_train_config_snapshot(io_cfg=cfg.io, train_cfg=cfg)
 
         context = build_training_context(cfg)
@@ -106,24 +104,25 @@ class Trainer:
         )
 
         for step in pbar:
-            # Viewer runtime may pause training and holds a lock during the step.
+            # /*-------------------- Viewer / Step Preamble --------------------*/
+            # Respect viewer pause state and take the step lock.
             tic = viewer_runtime.before_step()
 
-            # Step 0: Prepare per-step optimizer/GNS state.
-            # If GNS is enabled, opacity LR is boosted during GNS (default 4x).
+            # Apply per-step optimizer/GNS policy updates.
             optimizer_coordinator.prepare_step(step=int(step))
 
-            # Step 1: Fetch the next training batch.
+            # /*-------------------- Data + Schedule --------------------*/
+            # Load one training batch.
             prepared_batch = next(loader_iter)
 
-            # Step 2: Apply optional pose optimization adjustment.
+            # Optionally adjust camera poses for this batch.
             prepared_batch = prepare_training_batch(
                 prepared_batch=prepared_batch,
                 pose_opt=bool(cfg.pose.pose_opt),
                 pose_adjust=pose_adjust,
             )
 
-            # Step 3: Build the per-step schedule (active regs + render mode).
+            # Build the step schedule (active regs + render mode).
             schedule = build_step_schedule_from_prepared_batch(
                 step=step,
                 optim_cfg=cfg.optim,
@@ -131,7 +130,8 @@ class Trainer:
                 prepared_batch=prepared_batch,
             )
 
-            # Step 4: Render and apply optional postprocessing.
+            # /*-------------------- Forward Render + Loss --------------------*/
+            # Render with optional postprocessing.
             render_out = render_from_prepared_batch(
                 prepared_batch=prepared_batch,
                 splats=splats,
@@ -145,7 +145,7 @@ class Trainer:
             meta = render_out.meta
             active_sh_degree = render_out.active_sh_degree
 
-            # Step 5: Compute total training loss.
+            # Assemble total loss and per-term loss items.
             loss_output = compute_losses_from_prepared_batch_and_render(
                 reg_cfg=cfg.reg,
                 postprocess_cfg=cfg.postprocess,
@@ -160,7 +160,8 @@ class Trainer:
             )
             loss = loss_output.total
 
-            # Step 6: Run pre-backward strategy hook.
+            # /*-------------------- Backward + Optimizer Step --------------------*/
+            # Run pre-backward strategy hooks.
             strategy.step_pre_backward(
                 splats,
                 optimizer_coordinator.splat_optimizers,
@@ -169,7 +170,7 @@ class Trainer:
                 meta,
             )
 
-            # Step 7: Backpropagate and update optimizers/schedulers.
+            # Backpropagate and apply optimizer/scheduler updates.
             optimizer_coordinator.zero_grad()
             loss.backward()
 
@@ -185,7 +186,8 @@ class Trainer:
                 batch_size=int(prepared_batch.pixels.shape[0]),
             )
 
-            # Step 8: Run post-update densification / pruning hooks.
+            # /*-------------------- Strategy Post Update --------------------*/
+            # Run post-update densification/pruning hooks.
             strategy.step_post_backward(
                 params=splats,
                 optimizers=optimizer_coordinator.splat_optimizers,
@@ -203,6 +205,8 @@ class Trainer:
                     strategy_state=strategy_state,
                 )
 
+            # /*-------------------- Outputs / Viewer / Eval --------------------*/
+            # Log training scalars if TensorBoard logging is enabled.
             maybe_log_training_scalars_for_step(
                 step=int(step),
                 device=self.device,
@@ -212,7 +216,7 @@ class Trainer:
                 tb_runtime=tb_runtime,
             )
 
-            # Step 9: Optionally save checkpoint / PLY outputs.
+            # Save configured artifacts (checkpoint / PLY).
             maybe_save_outputs(
                 io_cfg=cfg.io,
                 pose_cfg=cfg.pose,
@@ -227,7 +231,7 @@ class Trainer:
                 ppisp=ppisp,
             )
 
-            # Finalize viewer step (update counters and release lock).
+            # Update viewer statistics and release the step lock.
             viewer_runtime.after_step(
                 step=int(step),
                 tic=tic,
@@ -237,6 +241,7 @@ class Trainer:
                 meta=meta,
             )
 
+            # Run periodic evaluation and report summary in the progress bar.
             eval_summary = maybe_run_evaluation_for_step(
                 step=int(step),
                 train_cfg=cfg,

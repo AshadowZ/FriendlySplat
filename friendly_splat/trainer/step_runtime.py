@@ -22,6 +22,35 @@ from friendly_splat.trainer.step_schedule import StepSchedule, compute_step_sche
 from gsplat.strategy.natural_selection import NaturalSelectionPolicy
 
 
+def postprocess_enabled(postprocess_cfg: PostprocessConfig) -> bool:
+    return bool(postprocess_cfg.use_bilateral_grid) or bool(postprocess_cfg.use_ppisp)
+
+
+def apply_postprocess(
+    *,
+    pred_rgb: torch.Tensor,
+    image_ids: Optional[torch.Tensor],
+    postprocess_cfg: PostprocessConfig,
+    bilagrid: Optional[BilateralGridPostProcessor] = None,
+    ppisp: Optional[PPISPPostProcessor] = None,
+) -> torch.Tensor:
+    if image_ids is None:
+        raise KeyError("Postprocess requires `image_id` in the batch.")
+
+    out_rgb = pred_rgb
+    if postprocess_cfg.use_bilateral_grid:
+        if bilagrid is None:
+            raise RuntimeError(
+                "use_bilateral_grid=True but bilagrid is not initialized."
+            )
+        out_rgb = bilagrid.apply(rgb=out_rgb, image_ids=image_ids)
+    elif postprocess_cfg.use_ppisp:
+        if ppisp is None:
+            raise RuntimeError("use_ppisp=True but ppisp is not initialized.")
+        out_rgb = ppisp.apply(rgb=out_rgb, image_ids=image_ids)
+    return out_rgb
+
+
 def build_step_schedule_from_prepared_batch(
     *,
     step: int,
@@ -52,7 +81,7 @@ def prepare_training_batch(
     pose_opt: bool,
     pose_adjust: Optional[CameraOptModule],
 ) -> PreparedBatch:
-    camtoworlds, camtoworlds_gt = apply_pose_adjust(
+    camtoworlds, camtoworlds_input = apply_pose_adjust(
         camtoworlds=prepared_batch.camtoworlds,
         image_ids=prepared_batch.image_ids,
         pose_opt=bool(pose_opt),
@@ -61,7 +90,7 @@ def prepare_training_batch(
     return PreparedBatch(
         pixels=prepared_batch.pixels,
         camtoworlds=camtoworlds,
-        camtoworlds_gt=camtoworlds_gt,
+        camtoworlds_input=camtoworlds_input,
         Ks=prepared_batch.Ks,
         height=prepared_batch.height,
         width=prepared_batch.width,
@@ -101,20 +130,14 @@ def render_from_prepared_batch(
     alphas = out.alphas
     image_ids = prepared_batch.image_ids
 
-    if postprocess_cfg.use_bilateral_grid:
-        if bilagrid is None:
-            raise RuntimeError(
-                "use_bilateral_grid=True but bilagrid is not initialized."
-            )
-        if image_ids is None:
-            raise KeyError("Bilateral grid requires `image_id` in the batch.")
-        pred_rgb = bilagrid.apply(rgb=pred_rgb, image_ids=image_ids)
-    elif postprocess_cfg.use_ppisp:
-        if ppisp is None:
-            raise RuntimeError("use_ppisp=True but ppisp is not initialized.")
-        if image_ids is None:
-            raise KeyError("PPISP requires `image_id` in the batch.")
-        pred_rgb = ppisp.apply(rgb=pred_rgb, image_ids=image_ids)
+    if postprocess_enabled(postprocess_cfg):
+        pred_rgb = apply_postprocess(
+            pred_rgb=pred_rgb,
+            image_ids=image_ids,
+            postprocess_cfg=postprocess_cfg,
+            bilagrid=bilagrid,
+            ppisp=ppisp,
+        )
 
     if optim_cfg.random_bkgd:
         bkgd = torch.rand((pred_rgb.shape[0], 3), device=pred_rgb.device)
@@ -220,7 +243,7 @@ def maybe_run_evaluation_for_step(
     splats: torch.nn.ParameterDict,
     bilagrid: Optional[BilateralGridPostProcessor] = None,
     ppisp: Optional[PPISPPostProcessor] = None,
-    on_eval_complete: Optional[Callable[[int, Dict[str, float]], None]] = None,
+    on_eval_complete: Optional[Callable[[int, Dict[str, float | int]], None]] = None,
 ) -> Optional[str]:
     """Run evaluation for the current step when configured and due.
 

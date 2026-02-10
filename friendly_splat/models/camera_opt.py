@@ -27,12 +27,12 @@ def apply_pose_adjust(
     image_ids: Optional[torch.Tensor],
     pose_opt: bool,
     pose_adjust: Optional["CameraOptModule"],
-) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Apply pose optimization transforms."""
     if pose_opt and image_ids is None:
         raise RuntimeError("pose_opt requires image_ids in the dataloader batch.")
 
-    camtoworlds_gt = camtoworlds
+    camtoworlds_input = camtoworlds
     ids = image_ids
 
     if pose_opt:
@@ -42,7 +42,7 @@ def apply_pose_adjust(
             raise RuntimeError("pose_opt requires image_ids in the dataloader batch.")
         camtoworlds = pose_adjust(camtoworlds, ids)
 
-    return camtoworlds, camtoworlds_gt
+    return camtoworlds, camtoworlds_input
 
 
 class CameraOptModule(torch.nn.Module):
