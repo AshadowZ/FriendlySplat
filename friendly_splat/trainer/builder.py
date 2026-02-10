@@ -8,17 +8,15 @@ import torch
 
 from friendly_splat.data import DataLoader, InputDataset
 from friendly_splat.data.colmap_dataparser import ColmapDataParser
-from friendly_splat.models.bilateral_grid import BilateralGridPostProcessor
 from friendly_splat.models.camera_opt import CameraOptModule
 from friendly_splat.models.gaussian import GaussianModel
-from friendly_splat.models.ppisp import PPISPPostProcessor
+from friendly_splat.models.postprocess import PostProcessor, create_postprocessor
 from friendly_splat.trainer.configs import (
     DataConfig,
     InitConfig,
     IOConfig,
     OptimConfig,
     PoseConfig,
-    PostprocessConfig,
     TrainConfig,
 )
 from friendly_splat.trainer.optimizer_coordinator import (
@@ -43,8 +41,7 @@ class TrainingContext:
     gaussian_model: GaussianModel
     splats: torch.nn.ParameterDict
     pose_adjust: Optional[CameraOptModule]
-    bilagrid: Optional[BilateralGridPostProcessor]
-    ppisp: Optional[PPISPPostProcessor]
+    postprocessor: Optional[PostProcessor]
     natural_selection_policy: Optional[NaturalSelectionPolicy]
     strategy: ImprovedStrategy
     strategy_state: Dict[str, Any]
@@ -132,14 +129,12 @@ def build_optimizer_bundle(
     optim_cfg: OptimConfig,
     data_cfg: DataConfig,
     pose_cfg: PoseConfig,
-    postprocess_cfg: PostprocessConfig,
     world_size: int,
     device: torch.device,
     scene_scale: float,
     splats: torch.nn.ParameterDict,
     pose_adjust: Optional[CameraOptModule],
-    bilagrid: Optional[BilateralGridPostProcessor],
-    ppisp: Optional[PPISPPostProcessor],
+    postprocessor: Optional[PostProcessor],
 ) -> OptimizerBundle:
     means_lr_final_ratio = 0.01
     # Scale learning rate based on batch size, reference:
@@ -203,31 +198,16 @@ def build_optimizer_bundle(
         pose_optimizers = [
             torch.optim.Adam(
                 pose_adjust.parameters(),
-                lr=float(pose_cfg.pose_opt_lr) * math.sqrt(float(data_cfg.batch_size)),
+                lr=float(pose_cfg.pose_opt_lr) * math.sqrt(float(BS)),
                 weight_decay=float(pose_cfg.pose_opt_reg),
             )
         ]
 
-    bilagrid_optimizers: list[torch.optim.Optimizer] = []
-    if postprocess_cfg.use_bilateral_grid:
-        if bilagrid is None:
-            raise RuntimeError(
-                "use_bilateral_grid=True but bilagrid module is not initialized."
-            )
-        bilagrid_optimizers = [
-            torch.optim.Adam(
-                bilagrid.parameters(),
-                lr=float(postprocess_cfg.bilateral_grid_lr)
-                * math.sqrt(float(data_cfg.batch_size)),
-                eps=1e-15,
-            )
-        ]
-
-    ppisp_optimizers: list[torch.optim.Optimizer] = []
-    if postprocess_cfg.use_ppisp:
-        if ppisp is None:
-            raise RuntimeError("use_ppisp=True but ppisp module is not initialized.")
-        ppisp_optimizers = list(ppisp.optimizers)
+    postprocess_optimizers: list[torch.optim.Optimizer] = []
+    if postprocessor is not None:
+        postprocess_optimizers = postprocessor.build_optimizers(
+            batch_size=int(BS),
+        )
 
     schedulers: list[torch.optim.lr_scheduler.LRScheduler] = []
     gamma = float(means_lr_final_ratio) ** (1.0 / float(optim_cfg.max_steps))
@@ -242,50 +222,18 @@ def build_optimizer_bundle(
         schedulers.append(
             torch.optim.lr_scheduler.ExponentialLR(pose_optimizers[0], gamma=gamma)
         )
-    if postprocess_cfg.use_bilateral_grid:
-        # Linear warmup (1000 iters) then exponential decay to 1% at max_steps.
-        if len(bilagrid_optimizers) == 0:
-            raise RuntimeError(
-                "use_bilateral_grid=True but bilagrid optimizer is not initialized."
-            )
-        gamma = 0.01 ** (1.0 / float(optim_cfg.max_steps))
-        schedulers.append(
-            torch.optim.lr_scheduler.ChainedScheduler(
-                [
-                    torch.optim.lr_scheduler.LinearLR(
-                        bilagrid_optimizers[0],
-                        start_factor=0.01,
-                        total_iters=1000,
-                    ),
-                    torch.optim.lr_scheduler.ExponentialLR(
-                        bilagrid_optimizers[0],
-                        gamma=gamma,
-                    ),
-                ]
+    if postprocessor is not None:
+        schedulers.extend(
+            postprocessor.build_schedulers(
+                optimizers=postprocess_optimizers,
+                max_steps=int(optim_cfg.max_steps),
             )
         )
-    if postprocess_cfg.use_ppisp:
-        # Let PPISP define its own schedulers.
-        if ppisp is None:
-            raise RuntimeError("use_ppisp=True but ppisp module is not initialized.")
-        if hasattr(ppisp.module, "create_schedulers"):
-            try:
-                ppisp_schedulers = ppisp.module.create_schedulers(  # type: ignore[attr-defined]
-                    ppisp.optimizers,
-                    max_optimization_iters=int(optim_cfg.max_steps),
-                )
-            except TypeError:
-                ppisp_schedulers = ppisp.module.create_schedulers(  # type: ignore[attr-defined]
-                    ppisp.optimizers,
-                    int(optim_cfg.max_steps),
-                )
-            schedulers.extend(list(ppisp_schedulers))
 
     return OptimizerBundle(
         splat_optimizers=splat_optimizers,
         pose_optimizers=pose_optimizers,
-        bilagrid_optimizers=bilagrid_optimizers,
-        ppisp_optimizers=ppisp_optimizers,
+        postprocess_optimizers=postprocess_optimizers,
         schedulers=schedulers,
     )
 
@@ -315,21 +263,18 @@ def build_training_context(cfg: TrainConfig) -> TrainingContext:
     parsed_scene = dataset.parsed_scene
     n_images = int(len(parsed_scene.image_names))
 
-    bilagrid: Optional[BilateralGridPostProcessor] = None
-    if cfg.postprocess.use_bilateral_grid:
-        grid_shape = tuple(int(x) for x in cfg.postprocess.bilateral_grid_shape)
-        bilagrid = BilateralGridPostProcessor.create(
-            num_frames=n_images,
-            grid_shape=grid_shape,  # type: ignore[arg-type]
-            device=device,
-        )
-
-    ppisp: Optional[PPISPPostProcessor] = None
-    if cfg.postprocess.use_ppisp:
-        ppisp = PPISPPostProcessor.create(
-            num_frames=n_images,
-            device=device,
-        )
+    postprocessor = create_postprocessor(
+        use_bilateral_grid=bool(cfg.postprocess.use_bilateral_grid),
+        use_ppisp=bool(cfg.postprocess.use_ppisp),
+        bilateral_grid_shape=tuple(
+            int(x) for x in cfg.postprocess.bilateral_grid_shape
+        ),
+        bilateral_grid_lr=float(cfg.postprocess.bilateral_grid_lr),
+        bilateral_grid_tv_weight=float(cfg.postprocess.bilateral_grid_tv_weight),
+        ppisp_reg_weight=float(cfg.postprocess.ppisp_reg_weight),
+        num_frames=int(n_images),
+        device=device,
+    )
 
     pose_adjust: Optional[CameraOptModule] = None
     if cfg.pose.pose_opt:
@@ -340,14 +285,12 @@ def build_training_context(cfg: TrainConfig) -> TrainingContext:
         optim_cfg=cfg.optim,
         data_cfg=cfg.data,
         pose_cfg=cfg.pose,
-        postprocess_cfg=cfg.postprocess,
         world_size=cfg.world_size,
         device=device,
         scene_scale=float(parsed_scene.scene_scale),
         splats=splats,
         pose_adjust=pose_adjust,
-        bilagrid=bilagrid,
-        ppisp=ppisp,
+        postprocessor=postprocessor,
     )
 
     natural_selection_policy: Optional[NaturalSelectionPolicy] = None
@@ -403,8 +346,7 @@ def build_training_context(cfg: TrainConfig) -> TrainingContext:
         gaussian_model=gaussian_model,
         splats=splats,
         pose_adjust=pose_adjust,
-        bilagrid=bilagrid,
-        ppisp=ppisp,
+        postprocessor=postprocessor,
         natural_selection_policy=natural_selection_policy,
         strategy=strategy,
         strategy_state=strategy_state,

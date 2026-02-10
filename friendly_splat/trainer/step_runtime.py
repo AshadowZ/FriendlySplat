@@ -5,13 +5,15 @@ from typing import Optional
 import torch
 
 from friendly_splat.data.dataloader import DataLoader, PreparedBatch
-from friendly_splat.models.bilateral_grid import BilateralGridPostProcessor
 from friendly_splat.models.camera_opt import CameraOptModule, apply_pose_adjust
-from friendly_splat.models.ppisp import PPISPPostProcessor
+from friendly_splat.models.postprocess import (
+    PostProcessor,
+    apply_postprocess,
+    get_postprocess_regularizer,
+)
 from friendly_splat.renderer.renderer import RenderOutput, render_splats
 from friendly_splat.trainer.configs import (
     OptimConfig,
-    PostprocessConfig,
     RegConfig,
     TrainConfig,
 )
@@ -25,35 +27,6 @@ from friendly_splat.trainer.io_utils import save_eval_stats
 from friendly_splat.trainer.losses import LossOutput, compute_losses
 from friendly_splat.trainer.step_schedule import StepSchedule, compute_step_schedule
 from gsplat.strategy.natural_selection import NaturalSelectionPolicy
-
-
-def postprocess_enabled(postprocess_cfg: PostprocessConfig) -> bool:
-    return bool(postprocess_cfg.use_bilateral_grid) or bool(postprocess_cfg.use_ppisp)
-
-
-def apply_postprocess(
-    *,
-    pred_rgb: torch.Tensor,
-    image_ids: Optional[torch.Tensor],
-    postprocess_cfg: PostprocessConfig,
-    bilagrid: Optional[BilateralGridPostProcessor] = None,
-    ppisp: Optional[PPISPPostProcessor] = None,
-) -> torch.Tensor:
-    if image_ids is None:
-        raise KeyError("Postprocess requires `image_id` in the batch.")
-
-    out_rgb = pred_rgb
-    if postprocess_cfg.use_bilateral_grid:
-        if bilagrid is None:
-            raise RuntimeError(
-                "use_bilateral_grid=True but bilagrid is not initialized."
-            )
-        out_rgb = bilagrid.apply(rgb=out_rgb, image_ids=image_ids)
-    elif postprocess_cfg.use_ppisp:
-        if ppisp is None:
-            raise RuntimeError("use_ppisp=True but ppisp is not initialized.")
-        out_rgb = ppisp.apply(rgb=out_rgb, image_ids=image_ids)
-    return out_rgb
 
 
 def build_step_schedule_from_prepared_batch(
@@ -112,11 +85,9 @@ def render_from_prepared_batch(
     prepared_batch: PreparedBatch,
     splats: torch.nn.ParameterDict,
     optim_cfg: OptimConfig,
-    postprocess_cfg: PostprocessConfig,
     schedule: StepSchedule,
     absgrad: bool = False,
-    bilagrid: Optional[BilateralGridPostProcessor] = None,
-    ppisp: Optional[PPISPPostProcessor] = None,
+    postprocessor: Optional[PostProcessor] = None,
 ) -> RenderOutput:
     out = render_splats(
         splats=splats,
@@ -135,14 +106,11 @@ def render_from_prepared_batch(
     alphas = out.alphas
     image_ids = prepared_batch.image_ids
 
-    if postprocess_enabled(postprocess_cfg):
-        pred_rgb = apply_postprocess(
-            pred_rgb=pred_rgb,
-            image_ids=image_ids,
-            postprocess_cfg=postprocess_cfg,
-            bilagrid=bilagrid,
-            ppisp=ppisp,
-        )
+    pred_rgb = apply_postprocess(
+        pred_rgb=pred_rgb,
+        image_ids=image_ids,
+        postprocessor=postprocessor,
+    )
 
     if optim_cfg.random_bkgd:
         bkgd = torch.rand((pred_rgb.shape[0], 3), device=pred_rgb.device)
@@ -161,14 +129,12 @@ def render_from_prepared_batch(
 def compute_losses_from_prepared_batch_and_render(
     *,
     reg_cfg: RegConfig,
-    postprocess_cfg: PostprocessConfig,
     schedule: StepSchedule,
     step: int,
     prepared_batch: PreparedBatch,
     render_out: RenderOutput,
     splats: torch.nn.ParameterDict,
-    bilagrid: Optional[BilateralGridPostProcessor] = None,
-    ppisp: Optional[PPISPPostProcessor] = None,
+    postprocessor: Optional[PostProcessor] = None,
     gns: Optional[NaturalSelectionPolicy] = None,
 ) -> LossOutput:
     do_depth_reg = bool(schedule.do_depth_reg)
@@ -203,24 +169,13 @@ def compute_losses_from_prepared_batch_and_render(
     items = dict(base.items)
 
     # Postprocess-specific regularizers.
-    if postprocess_cfg.use_bilateral_grid:
-        if bilagrid is None:
-            raise RuntimeError(
-                "use_bilateral_grid=True but bilagrid is not initialized."
-            )
-        image_ids = prepared_batch.image_ids
-        if image_ids is None:
-            raise KeyError("Bilateral grid loss requires `image_id` in the batch.")
-        bilagrid_tv = bilagrid.tv_loss(image_ids=image_ids)
-        total = total + float(postprocess_cfg.bilateral_grid_tv_weight) * bilagrid_tv
-        items["bilagrid_tv"] = bilagrid_tv.detach()
-
-    if postprocess_cfg.use_ppisp:
-        if ppisp is None:
-            raise RuntimeError("use_ppisp=True but ppisp is not initialized.")
-        ppisp_reg = ppisp.reg_loss()
-        total = total + float(postprocess_cfg.ppisp_reg_weight) * ppisp_reg
-        items["ppisp_reg"] = ppisp_reg.detach()
+    regularizer = get_postprocess_regularizer(
+        postprocessor=postprocessor,
+        image_ids=prepared_batch.image_ids,
+    )
+    if regularizer is not None:
+        total = total + regularizer.value
+        items[regularizer.name] = regularizer.value.detach()
 
     # Optional GNS regularizer.
     # Active only during the configured GNS pruning window.
@@ -241,8 +196,7 @@ def maybe_run_evaluation_for_step(
     train_cfg: TrainConfig,
     eval_loader: Optional[DataLoader],
     splats: torch.nn.ParameterDict,
-    bilagrid: Optional[BilateralGridPostProcessor] = None,
-    ppisp: Optional[PPISPPostProcessor] = None,
+    postprocessor: Optional[PostProcessor] = None,
 ) -> Optional[EvalOutput]:
     """Run evaluation for the current step when configured and due.
 
@@ -258,8 +212,7 @@ def maybe_run_evaluation_for_step(
         step=int(step),
         eval_loader=eval_loader,
         splats=splats,
-        bilagrid=bilagrid,
-        ppisp=ppisp,
+        postprocessor=postprocessor,
     )
     save_eval_stats(
         io_cfg=train_cfg.io,

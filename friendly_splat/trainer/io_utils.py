@@ -3,16 +3,16 @@ from __future__ import annotations
 import os
 import json
 from dataclasses import asdict
-from typing import Any, Dict, Optional, Set
+from typing import Dict, Optional, Set
 
 import torch
 import yaml
 
+from friendly_splat.models.postprocess import PostProcessor
 from friendly_splat.trainer.configs import (
     EvalConfig,
     IOConfig,
     PoseConfig,
-    PostprocessConfig,
     TrainConfig,
 )
 
@@ -85,13 +85,11 @@ def save_checkpoint(
     *,
     train_cfg: TrainConfig,
     pose_cfg: PoseConfig,
-    postprocess_cfg: PostprocessConfig,
     step: int,
     splats: torch.nn.ParameterDict,
     ckpt_dir: str,
     pose_adjust: Optional[torch.nn.Module] = None,
-    bilagrid: Optional[Any] = None,
-    ppisp: Optional[Any] = None,
+    postprocessor: Optional[PostProcessor] = None,
 ) -> str:
     train_step = int(step) + 1  # 1-based step number for user-facing I/O.
     ckpt_path = os.path.join(str(ckpt_dir), f"ckpt_step{train_step:06d}.pt")
@@ -103,10 +101,11 @@ def save_checkpoint(
     }
     if pose_cfg.pose_opt and pose_adjust is not None:
         data["pose_adjust"] = pose_adjust.state_dict()
-    if postprocess_cfg.use_bilateral_grid and bilagrid is not None:
-        data["bilagrid"] = bilagrid.bil_grids.state_dict()  # type: ignore[attr-defined]
-    if postprocess_cfg.use_ppisp and ppisp is not None:
-        data["ppisp"] = ppisp.module.state_dict()
+    if postprocessor is not None:
+        payload = postprocessor.checkpoint_payload()
+        if payload is not None:
+            key, value = payload
+            data[str(key)] = value
 
     torch.save(data, ckpt_path)
     print(f"Saved checkpoint: {ckpt_path}", flush=True)
@@ -159,15 +158,13 @@ def maybe_save_outputs(
     *,
     io_cfg: IOConfig,
     pose_cfg: PoseConfig,
-    postprocess_cfg: PostprocessConfig,
     train_cfg: TrainConfig,
     step: int,
     max_steps: int,
     splats: torch.nn.ParameterDict,
     active_sh_degree: int,
     pose_adjust: Optional[torch.nn.Module] = None,
-    bilagrid: Optional[Any] = None,
-    ppisp: Optional[Any] = None,
+    postprocessor: Optional[PostProcessor] = None,
 ) -> None:
     ckpt_dir = os.path.join(io_cfg.result_dir, "ckpts")
     ply_dir = os.path.join(io_cfg.result_dir, "ply")
@@ -192,13 +189,11 @@ def maybe_save_outputs(
         save_checkpoint(
             train_cfg=train_cfg,
             pose_cfg=pose_cfg,
-            postprocess_cfg=postprocess_cfg,
             step=int(step),
             splats=splats,
             ckpt_dir=ckpt_dir,
             pose_adjust=pose_adjust,
-            bilagrid=bilagrid,
-            ppisp=ppisp,
+            postprocessor=postprocessor,
         )
 
     if should_export_ply(
