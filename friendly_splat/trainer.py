@@ -18,8 +18,11 @@ from friendly_splat.viewer.viewer_runtime import ViewerRuntime
 from friendly_splat.trainer.builder import build_training_context
 
 from friendly_splat.trainer.step_runtime import (
+    build_viewer_train_scalars,
     build_step_schedule_from_prepared_batch,
     compute_losses_from_prepared_batch_and_render,
+    filter_train_loss_items_for_logging,
+    handle_eval_complete_logging,
     maybe_log_training_scalars_for_step,
     maybe_run_evaluation_for_step,
     prepare_training_batch,
@@ -105,14 +108,11 @@ class Trainer:
         )
 
         def _on_eval_complete(eval_step: int, stats: dict[str, float | int]) -> None:
-            tb_runtime.log_eval(
-                step=eval_step,
+            handle_eval_complete_logging(
+                eval_step=eval_step,
                 stats=stats,
-                stage="eval",
-            )
-            viewer_runtime.push_eval_metrics(
-                step=eval_step,
-                stats=stats,
+                tb_runtime=tb_runtime,
+                viewer_runtime=viewer_runtime,
             )
 
         for step in pbar:
@@ -219,6 +219,10 @@ class Trainer:
 
             # /*-------------------- Outputs / Viewer / Eval --------------------*/
             # Log training scalars if TensorBoard logging is enabled.
+            filtered_loss_items = filter_train_loss_items_for_logging(
+                train_cfg=cfg,
+                loss_items=loss_output.items,
+            )
             maybe_log_training_scalars_for_step(
                 step=int(step),
                 device=self.device,
@@ -226,6 +230,17 @@ class Trainer:
                 loss_output=loss_output,
                 optimizer_coordinator=optimizer_coordinator,
                 tb_runtime=tb_runtime,
+                loss_items_override=filtered_loss_items,
+            )
+            train_scalars = build_viewer_train_scalars(
+                device=self.device,
+                splats=splats,
+                filtered_loss_items=filtered_loss_items,
+                optimizer_coordinator=optimizer_coordinator,
+            )
+            viewer_runtime.log_scalars(
+                step=int(step) + 1,
+                scalars=train_scalars,
             )
 
             # Save configured artifacts (checkpoint / PLY).
