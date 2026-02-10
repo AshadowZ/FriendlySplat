@@ -17,7 +17,7 @@ from friendly_splat.trainer.configs import (
 )
 
 
-def init_output_paths(*, io_cfg: IOConfig) -> None:
+def init_output_paths(*, io_cfg: IOConfig, eval_cfg: Optional[EvalConfig] = None) -> None:
     os.makedirs(io_cfg.result_dir, exist_ok=True)
 
     if io_cfg.save_ckpt:
@@ -25,6 +25,9 @@ def init_output_paths(*, io_cfg: IOConfig) -> None:
 
     if io_cfg.export_ply:
         os.makedirs(os.path.join(io_cfg.result_dir, "ply"), exist_ok=True)
+
+    if eval_cfg is not None and bool(eval_cfg.enable):
+        os.makedirs(os.path.join(io_cfg.result_dir, "stats"), exist_ok=True)
 
 
 def save_train_config_snapshot(
@@ -44,18 +47,12 @@ def save_train_config_snapshot(
     return out_path
 
 
-def init_eval_output_paths(*, io_cfg: IOConfig, eval_cfg: EvalConfig) -> None:
-    if not bool(eval_cfg.enable):
-        return
-    os.makedirs(os.path.join(io_cfg.result_dir, "stats"), exist_ok=True)
-
-
 def save_eval_stats(
     *,
     io_cfg: IOConfig,
     eval_cfg: EvalConfig,
     step: int,
-    stats: Dict[str, float],
+    stats: Dict[str, float | int],
 ) -> str:
     split = str(eval_cfg.split)
     train_step = int(step) + 1

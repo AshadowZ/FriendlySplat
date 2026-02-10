@@ -14,7 +14,6 @@ from friendly_splat.models.gaussian import GaussianModel
 from friendly_splat.models.ppisp import PPISPPostProcessor
 from friendly_splat.trainer.configs import (
     DataConfig,
-    EvalConfig,
     InitConfig,
     IOConfig,
     OptimConfig,
@@ -56,7 +55,12 @@ def build_dataset_and_loader(
     *,
     io_cfg: IOConfig,
     data_cfg: DataConfig,
+    split: str = "train",
 ) -> tuple[InputDataset, DataLoader]:
+    """Build dataparser outputs, dataset, and loader for a given split.
+
+    Infinite sampling is enabled only for the training split.
+    """
     device = torch.device(io_cfg.device)
     dataparser = ColmapDataParser(
         data_dir=io_cfg.data_dir,
@@ -69,47 +73,15 @@ def build_dataset_and_loader(
         dynamic_mask_dir_name=data_cfg.dynamic_mask_dir_name,
         sky_mask_dir_name=data_cfg.sky_mask_dir_name,
     )
-    parsed_scene = dataparser.get_dataparser_outputs(split="train")
+    parsed_scene = dataparser.get_dataparser_outputs(split=str(split))
     dataset = InputDataset(parsed_scene)
+    is_train_split = str(split).strip().lower() == "train"
     loader = DataLoader(
         dataset,
         batch_size=data_cfg.batch_size,
         num_workers=data_cfg.num_workers,
         device=device,
-        infinite_sampler=data_cfg.infinite_sampler,
-        prefetch_to_gpu=data_cfg.prefetch_to_gpu,
-        preload=data_cfg.preload,  # type: ignore[arg-type]
-        seed=io_cfg.seed,
-    )
-    return dataset, loader
-
-
-def build_eval_dataset_and_loader(
-    *,
-    io_cfg: IOConfig,
-    data_cfg: DataConfig,
-    eval_cfg: EvalConfig,
-) -> tuple[InputDataset, DataLoader]:
-    device = torch.device(io_cfg.device)
-    dataparser = ColmapDataParser(
-        data_dir=io_cfg.data_dir,
-        factor=data_cfg.data_factor,
-        normalize_world_space=data_cfg.normalize_world_space,
-        test_every=data_cfg.test_every,
-        benchmark_train_split=data_cfg.benchmark_train_split,
-        depth_dir_name=data_cfg.depth_dir_name,
-        normal_dir_name=data_cfg.normal_dir_name,
-        dynamic_mask_dir_name=data_cfg.dynamic_mask_dir_name,
-        sky_mask_dir_name=data_cfg.sky_mask_dir_name,
-    )
-    parsed_scene = dataparser.get_dataparser_outputs(split=str(eval_cfg.split))
-    dataset = InputDataset(parsed_scene)
-    loader = DataLoader(
-        dataset,
-        batch_size=data_cfg.batch_size,
-        num_workers=data_cfg.num_workers,
-        device=device,
-        infinite_sampler=False,
+        infinite_sampler=bool(data_cfg.infinite_sampler) if is_train_split else False,
         prefetch_to_gpu=data_cfg.prefetch_to_gpu,
         preload=data_cfg.preload,  # type: ignore[arg-type]
         seed=io_cfg.seed,
@@ -320,14 +292,18 @@ def build_optimizer_bundle(
 
 def build_training_context(cfg: TrainConfig) -> TrainingContext:
     device = torch.device(cfg.io.device)
-    dataset, loader = build_dataset_and_loader(io_cfg=cfg.io, data_cfg=cfg.data)
+    dataset, loader = build_dataset_and_loader(
+        io_cfg=cfg.io,
+        data_cfg=cfg.data,
+        split="train",
+    )
     eval_dataset: Optional[InputDataset] = None
     eval_loader: Optional[DataLoader] = None
     if cfg.eval.enable:
-        eval_dataset, eval_loader = build_eval_dataset_and_loader(
+        eval_dataset, eval_loader = build_dataset_and_loader(
             io_cfg=cfg.io,
             data_cfg=cfg.data,
-            eval_cfg=cfg.eval,
+            split=str(cfg.eval.split),
         )
     gaussian_model = build_gaussian_model(
         dataset=dataset,

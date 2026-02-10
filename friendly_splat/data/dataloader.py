@@ -13,7 +13,7 @@ class PreparedBatch:
 
     pixels: torch.Tensor
     camtoworlds: torch.Tensor
-    camtoworlds_gt: torch.Tensor
+    camtoworlds_input: torch.Tensor
     Ks: torch.Tensor
     height: int
     width: int
@@ -70,7 +70,8 @@ def prepare_batch(
         image_ids = _move_if_needed(image_ids).long()
         if image_ids.dim() == 0:
             image_ids = image_ids.unsqueeze(0)
-    camtoworlds_gt = camtoworlds
+    # Keep the unadjusted input poses for diagnostics/compatibility.
+    camtoworlds_input = camtoworlds
 
     depth_prior = batch.get("depth_prior_f32")
     if isinstance(depth_prior, torch.Tensor):
@@ -105,7 +106,7 @@ def prepare_batch(
     return PreparedBatch(
         pixels=pixels,
         camtoworlds=camtoworlds,
-        camtoworlds_gt=camtoworlds_gt,
+        camtoworlds_input=camtoworlds_input,
         Ks=Ks,
         height=height,
         width=width,
@@ -271,20 +272,21 @@ class DataLoader:
 
         # Optional dataset-wide preloading to CUDA is owned by the loader, not the dataset.
         if self.preload == "cuda":
-            if device.type != "cuda":
-                raise ValueError(
-                    f"preload='cuda' requires a CUDA device, got {device}."
-                )
-            if self.prefetch_to_gpu:
-                raise ValueError(
-                    "prefetch_to_gpu=True is incompatible with preload='cuda'."
-                )
-            if self.num_workers not in (None, 0):
-                raise ValueError(
-                    "preload='cuda' requires num_workers=0 (DataLoader workers + CUDA tensors)."
-                )
-            if self.pin_memory:
-                raise ValueError("preload='cuda' is incompatible with pin_memory=True.")
+            # TrainConfig validation is the primary source of truth for these constraints.
+            # Keep lightweight defensive assertions here for direct DataLoader usage.
+            assert (
+                device.type == "cuda"
+            ), f"preload='cuda' requires a CUDA device, got {device}."
+            assert (
+                not self.prefetch_to_gpu
+            ), "preload='cuda' is incompatible with prefetch_to_gpu=True."
+            assert self.num_workers in (
+                None,
+                0,
+            ), "preload='cuda' requires num_workers=0 (workers + CUDA tensors)."
+            assert (
+                not bool(self.pin_memory)
+            ), "preload='cuda' is incompatible with pin_memory=True."
             dataset = _PreloadedDataset(dataset, device=device)
 
         self.dataset = dataset
