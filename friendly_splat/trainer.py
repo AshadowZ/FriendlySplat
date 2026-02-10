@@ -14,10 +14,9 @@ import tyro
 import tqdm
 
 from friendly_splat.viewer.viewer_runtime import ViewerRuntime
-from friendly_splat.trainer.tb_runtime import TensorBoardRuntime
 
 from friendly_splat.trainer.builder import build_training_context
-from friendly_splat.trainer.logger import handle_step_logging
+from friendly_splat.trainer.logger import TensorBoardWriter, handle_step_logging
 
 from friendly_splat.trainer.step_runtime import (
     build_step_schedule_from_prepared_batch,
@@ -88,7 +87,7 @@ class Trainer:
         gns = self.natural_selection_policy
         optimizer_coordinator = self.optimizer_coordinator
         loader_iter = iter(self.loader)
-        tb_runtime = TensorBoardRuntime(io_cfg=cfg.io, tb_cfg=cfg.tb)
+        tb_writer = TensorBoardWriter(io_cfg=cfg.io, tb_cfg=cfg.tb)
 
         viewer_runtime = ViewerRuntime(
             disable_viewer=bool(cfg.viewer.disable_viewer),
@@ -223,12 +222,11 @@ class Trainer:
             )
             log_payload = handle_step_logging(
                 step=int(step),
-                train_cfg=cfg,
                 device=self.device,
                 num_gs=int(splats["means"].shape[0]),
                 train_loss_items=loss_output.items,
                 eval_stats=eval_output.stats if eval_output is not None else None,
-                tb_runtime=tb_runtime,
+                tb_writer=tb_writer,
             )
             viewer_runtime.log_payload(payload=log_payload)
             # Keep tqdm refresh frequency low to reduce terminal overhead.
@@ -252,7 +250,7 @@ class Trainer:
                 ppisp=ppisp,
             )
 
-        tb_runtime.close()
+        tb_writer.close()
         viewer_runtime.complete()
         if (not bool(cfg.viewer.disable_viewer)) and bool(
             cfg.viewer.keep_alive_after_train

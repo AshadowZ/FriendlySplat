@@ -199,12 +199,10 @@ def compute_losses_from_prepared_batch_and_render(
         Ks=prepared_batch.Ks,
     )
 
-    device = base.total.device
     total = base.total
     items = dict(base.items)
 
     # Postprocess-specific regularizers.
-    bilagrid_tv = torch.tensor(0.0, device=device)
     if postprocess_cfg.use_bilateral_grid:
         if bilagrid is None:
             raise RuntimeError(
@@ -215,26 +213,23 @@ def compute_losses_from_prepared_batch_and_render(
             raise KeyError("Bilateral grid loss requires `image_id` in the batch.")
         bilagrid_tv = bilagrid.tv_loss(image_ids=image_ids)
         total = total + float(postprocess_cfg.bilateral_grid_tv_weight) * bilagrid_tv
-    items["bilagrid_tv"] = bilagrid_tv.detach()
+        items["bilagrid_tv"] = bilagrid_tv.detach()
 
-    ppisp_reg = torch.tensor(0.0, device=device)
     if postprocess_cfg.use_ppisp:
         if ppisp is None:
             raise RuntimeError("use_ppisp=True but ppisp is not initialized.")
         ppisp_reg = ppisp.reg_loss()
         total = total + float(postprocess_cfg.ppisp_reg_weight) * ppisp_reg
-    items["ppisp_reg"] = ppisp_reg.detach()
+        items["ppisp_reg"] = ppisp_reg.detach()
 
     # Optional GNS regularizer.
     # Active only during the configured GNS pruning window.
     # It pushes opacities down over time so low-contribution Gaussians can be pruned.
-    gns_reg = torch.tensor(0.0, device=device)
     if gns is not None:
         reg = gns.compute_regularizer(step=step, params=splats)
         if reg is not None:
-            gns_reg = reg
-            total = total + gns_reg
-    items["gns"] = gns_reg.detach()
+            total = total + reg
+            items["gns"] = reg.detach()
 
     items["total"] = total.detach()
     return LossOutput(total=total, items=items)

@@ -299,7 +299,7 @@ def compute_losses(
             acc = alphas[..., 0].clamp(min=1e-6, max=1.0 - 1e-6)  # [B,H,W]
             sky_loss = (-torch.log1p(-acc))[sky_pixels].mean()
             total = total + float(reg_cfg.sky_loss_weight) * sky_loss
-    items["sky"] = sky_loss.detach()
+        items["sky"] = sky_loss.detach()
 
     # Depth prior supervision.
     depth_loss = torch.tensor(0.0, device=device)
@@ -315,7 +315,7 @@ def compute_losses(
             valid_mask=valid_depth,
         )
         total = total + float(reg_cfg.depth_loss_weight) * depth_loss
-    items["depth"] = depth_loss.detach()
+        items["depth"] = depth_loss.detach()
 
     # Normal-related terms share the same visibility mask.
     valid_norm = valid_color & (alphas[..., 0] > 1e-6)
@@ -333,7 +333,7 @@ def compute_losses(
             valid_mask=valid_norm,
         )
         total = total + float(reg_cfg.normal_loss_weight) * render_normal_loss
-    items["render_normal"] = render_normal_loss.detach()
+        items["render_normal"] = render_normal_loss.detach()
 
     # Compute depth-implied normals only when needed by downstream terms.
     surf_normals = None
@@ -357,7 +357,7 @@ def compute_losses(
             valid_mask=valid_norm,
         )
         total = total + float(reg_cfg.surf_normal_loss_weight) * surf_normal_loss
-    items["surf_normal"] = surf_normal_loss.detach()
+        items["surf_normal"] = surf_normal_loss.detach()
 
     # Normal consistency: rendered normals should match depth-implied normals.
     consistency_normal_loss = torch.tensor(0.0, device=device)
@@ -375,7 +375,7 @@ def compute_losses(
             total
             + float(reg_cfg.consistency_normal_loss_weight) * consistency_normal_loss
         )
-    items["consistency_normal"] = consistency_normal_loss.detach()
+        items["consistency_normal"] = consistency_normal_loss.detach()
 
     # Scale regularizations.
     # `scale_reg` is used to prevent Gaussians from becoming overly elongated.
@@ -383,7 +383,7 @@ def compute_losses(
     if do_flat_reg:
         flat_reg = flatness_loss_from_log_scales(splats["scales"])
         total = total + float(reg_cfg.flat_reg_weight) * flat_reg
-    items["flat_reg"] = flat_reg.detach()
+        items["flat_reg"] = flat_reg.detach()
 
     scale_reg = torch.tensor(0.0, device=device)
     if do_scale_reg:
@@ -392,7 +392,7 @@ def compute_losses(
             max_gauss_ratio=float(reg_cfg.max_gauss_ratio),
         )
         total = total + float(reg_cfg.scale_reg_weight) * scale_reg
-    items["scale_reg"] = scale_reg.detach()
+        items["scale_reg"] = scale_reg.detach()
 
     items["total"] = total.detach()
     return LossOutput(total=total, items=items)
