@@ -14,16 +14,14 @@ import tyro
 import tqdm
 
 from friendly_splat.viewer.viewer_runtime import ViewerRuntime
+from friendly_splat.trainer.tb_runtime import TensorBoardRuntime
 
 from friendly_splat.trainer.builder import build_training_context
+from friendly_splat.trainer.logger import handle_step_logging
 
 from friendly_splat.trainer.step_runtime import (
-    build_viewer_train_scalars,
     build_step_schedule_from_prepared_batch,
     compute_losses_from_prepared_batch_and_render,
-    filter_train_loss_items_for_logging,
-    handle_eval_complete_logging,
-    maybe_log_training_scalars_for_step,
     maybe_run_evaluation_for_step,
     prepare_training_batch,
     render_from_prepared_batch,
@@ -36,7 +34,7 @@ from friendly_splat.trainer.io_utils import (
     save_train_config_snapshot,
     maybe_save_outputs,
 )
-from friendly_splat.trainer.tb_runtime import TensorBoardRuntime
+
 
 
 class Trainer:
@@ -106,14 +104,6 @@ class Trainer:
             range(cfg.optim.max_steps),
             miniters=int(tqdm_update_every),
         )
-
-        def _on_eval_complete(eval_step: int, stats: dict[str, float | int]) -> None:
-            handle_eval_complete_logging(
-                eval_step=eval_step,
-                stats=stats,
-                tb_runtime=tb_runtime,
-                viewer_runtime=viewer_runtime,
-            )
 
         for step in pbar:
             # /*-------------------- Viewer / Step Preamble --------------------*/
@@ -186,12 +176,6 @@ class Trainer:
             optimizer_coordinator.zero_grad()
             loss.backward()
 
-            # Limit tqdm refresh frequency to reduce terminal overhead.
-            if (int(step) % int(tqdm_update_every) == 0) or (
-                int(step) == int(cfg.optim.max_steps) - 1
-            ):
-                pbar.set_description(f"sh degree={active_sh_degree}| ")
-
             optimizer_coordinator.step_all(
                 step=int(step),
                 meta=meta,
@@ -217,31 +201,41 @@ class Trainer:
                     strategy_state=strategy_state,
                 )
 
-            # /*-------------------- Outputs / Viewer / Eval --------------------*/
-            # Log training scalars if TensorBoard logging is enabled.
-            filtered_loss_items = filter_train_loss_items_for_logging(
-                train_cfg=cfg,
-                loss_items=loss_output.items,
-            )
-            maybe_log_training_scalars_for_step(
+            # Update viewer statistics and release the step lock.
+            viewer_runtime.after_step(
                 step=int(step),
-                device=self.device,
+                tic=tic,
+                batch_size=int(prepared_batch.pixels.shape[0]),
+                height=int(prepared_batch.height),
+                width=int(prepared_batch.width),
+                meta=meta,
+            )
+
+            # /*-------------------- Eval / Logging / Outputs --------------------*/
+            # Run periodic evaluation and report summary in the progress bar.
+            eval_output = maybe_run_evaluation_for_step(
+                step=int(step),
+                train_cfg=cfg,
+                eval_loader=eval_loader,
                 splats=splats,
-                loss_output=loss_output,
-                optimizer_coordinator=optimizer_coordinator,
+                bilagrid=bilagrid,
+                ppisp=ppisp,
+            )
+            log_payload = handle_step_logging(
+                step=int(step),
+                train_cfg=cfg,
+                device=self.device,
+                num_gs=int(splats["means"].shape[0]),
+                train_loss_items=loss_output.items,
+                eval_stats=eval_output.stats if eval_output is not None else None,
                 tb_runtime=tb_runtime,
-                loss_items_override=filtered_loss_items,
             )
-            train_scalars = build_viewer_train_scalars(
-                device=self.device,
-                splats=splats,
-                filtered_loss_items=filtered_loss_items,
-                optimizer_coordinator=optimizer_coordinator,
-            )
-            viewer_runtime.log_scalars(
-                step=int(step) + 1,
-                scalars=train_scalars,
-            )
+            viewer_runtime.log_payload(payload=log_payload)
+            # Keep tqdm refresh frequency low to reduce terminal overhead.
+            if (int(step) % int(tqdm_update_every) == 0) or (
+                int(step) == int(cfg.optim.max_steps) - 1
+            ):
+                pbar.set_description(f"sh degree={active_sh_degree}| ")
 
             # Save configured artifacts (checkpoint / PLY).
             maybe_save_outputs(
@@ -257,29 +251,6 @@ class Trainer:
                 bilagrid=bilagrid,
                 ppisp=ppisp,
             )
-
-            # Update viewer statistics and release the step lock.
-            viewer_runtime.after_step(
-                step=int(step),
-                tic=tic,
-                batch_size=int(prepared_batch.pixels.shape[0]),
-                height=int(prepared_batch.height),
-                width=int(prepared_batch.width),
-                meta=meta,
-            )
-
-            # Run periodic evaluation and report summary in the progress bar.
-            eval_summary = maybe_run_evaluation_for_step(
-                step=int(step),
-                train_cfg=cfg,
-                eval_loader=eval_loader,
-                splats=splats,
-                bilagrid=bilagrid,
-                ppisp=ppisp,
-                on_eval_complete=_on_eval_complete,
-            )
-            if eval_summary is not None:
-                pbar.write(eval_summary)
 
         tb_runtime.close()
         viewer_runtime.complete()

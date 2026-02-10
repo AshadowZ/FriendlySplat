@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
+from typing import Dict, Mapping, Optional, Tuple
 
 import torch
 
@@ -49,6 +49,29 @@ def _get_eval_metrics(*, device: torch.device, lpips_net: str) -> EvalMetricBund
 @dataclass(frozen=True)
 class EvalOutput:
     stats: Dict[str, float | int]
+
+
+def build_eval_summary(*, eval_step: int, stats: Mapping[str, object]) -> str:
+    lpips_suffix = f" lpips={float(stats['lpips']):.4f}"
+    cc_suffix = ""
+    cc_psnr = stats.get("cc_psnr")
+    cc_ssim = stats.get("cc_ssim")
+    cc_lpips = stats.get("cc_lpips")
+    if cc_psnr is not None and cc_ssim is not None and cc_lpips is not None:
+        cc_suffix = (
+            f" cc_psnr={float(cc_psnr):.3f}"
+            f" cc_ssim={float(cc_ssim):.4f}"
+            f" cc_lpips={float(cc_lpips):.4f}"
+        )
+    return (
+        "eval "
+        f"step={int(eval_step) + 1} "
+        f"psnr={float(stats['psnr']):.3f} "
+        f"ssim={float(stats['ssim']):.4f}"
+        f"{lpips_suffix} "
+        f"{cc_suffix} "
+        f"sec/img={float(stats['seconds_per_image']):.4f}"
+    )
 
 
 def should_run_evaluation(*, eval_cfg: EvalConfig, step: int) -> bool:
