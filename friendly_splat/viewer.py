@@ -7,6 +7,8 @@ from typing import Any, Optional
 import torch
 import tyro
 
+from friendly_splat.data.colmap_dataparser import ColmapDataParser
+from friendly_splat.data.dataset import InputDataset
 from friendly_splat.viewer.viewer_runtime import ViewerRuntime
 
 
@@ -22,6 +24,57 @@ class ViewerScriptConfig:
     device: str = "cuda"
     # Viewer server port.
     port: int = 8080
+
+
+@dataclass(frozen=True)
+class ViewerDatasetConfig:
+    data_dir: str
+    data_factor: int = 1
+    normalize_world_space: bool = True
+    test_every: int = 8
+    benchmark_train_split: bool = False
+    depth_dir_name: Optional[str] = None
+    normal_dir_name: Optional[str] = None
+    dynamic_mask_dir_name: Optional[str] = None
+    sky_mask_dir_name: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class ViewerCkptSettings:
+    packed: bool = False
+    sparse_grad: bool = False
+    absgrad: bool = False
+    dataset_cfg: Optional[ViewerDatasetConfig] = None
+
+
+def _coerce_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _coerce_bool(value: Any, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "y", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "n", "off"}:
+            return False
+        return bool(default)
+    if value is None:
+        return bool(default)
+    return bool(value)
+
+
+def _coerce_optional_str(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    return None
 
 
 def _infer_result_dir_from_ckpt(ckpt_path: Path) -> Path:
@@ -83,25 +136,113 @@ def _build_splats_from_state_dict(
     return torch.nn.ParameterDict(params)
 
 
-def _extract_render_flags(ckpt_obj: dict[str, Any]) -> tuple[bool, bool, bool]:
-    packed = False
-    sparse_grad = False
-    absgrad = False
-
+def _parse_ckpt_settings(ckpt_obj: dict[str, Any]) -> ViewerCkptSettings:
     cfg = ckpt_obj.get("cfg")
     if not isinstance(cfg, dict):
-        return packed, sparse_grad, absgrad
+        return ViewerCkptSettings()
 
     optim = cfg.get("optim")
-    if isinstance(optim, dict):
-        packed = bool(optim.get("packed", False))
-        sparse_grad = bool(optim.get("sparse_grad", False))
-
+    packed = (
+        _coerce_bool(optim.get("packed", False), False) if isinstance(optim, dict) else False
+    )
+    sparse_grad = (
+        _coerce_bool(optim.get("sparse_grad", False), False)
+        if isinstance(optim, dict)
+        else False
+    )
     strategy = cfg.get("strategy")
-    if isinstance(strategy, dict):
-        absgrad = bool(strategy.get("absgrad", False))
+    absgrad = (
+        _coerce_bool(strategy.get("absgrad", False), False)
+        if isinstance(strategy, dict)
+        else False
+    )
 
-    return packed, sparse_grad, absgrad
+    io_raw = cfg.get("io")
+    if not isinstance(io_raw, dict):
+        return ViewerCkptSettings(
+            packed=packed,
+            sparse_grad=sparse_grad,
+            absgrad=absgrad,
+            dataset_cfg=None,
+        )
+    data_dir = io_raw.get("data_dir")
+    if not isinstance(data_dir, str) or len(data_dir.strip()) == 0:
+        return ViewerCkptSettings(
+            packed=packed,
+            sparse_grad=sparse_grad,
+            absgrad=absgrad,
+            dataset_cfg=None,
+        )
+
+    data_raw = cfg.get("data")
+    if not isinstance(data_raw, dict):
+        data_raw = {}
+
+    dataset_cfg = ViewerDatasetConfig(
+        data_dir=data_dir,
+        data_factor=_coerce_int(data_raw.get("data_factor", 1), 1),
+        normalize_world_space=_coerce_bool(
+            data_raw.get("normalize_world_space", True),
+            True,
+        ),
+        test_every=_coerce_int(data_raw.get("test_every", 8), 8),
+        benchmark_train_split=_coerce_bool(
+            data_raw.get("benchmark_train_split", False),
+            False,
+        ),
+        depth_dir_name=_coerce_optional_str(data_raw.get("depth_dir_name")),
+        normal_dir_name=_coerce_optional_str(data_raw.get("normal_dir_name")),
+        dynamic_mask_dir_name=_coerce_optional_str(data_raw.get("dynamic_mask_dir_name")),
+        sky_mask_dir_name=_coerce_optional_str(data_raw.get("sky_mask_dir_name")),
+    )
+    return ViewerCkptSettings(
+        packed=packed,
+        sparse_grad=sparse_grad,
+        absgrad=absgrad,
+        dataset_cfg=dataset_cfg,
+    )
+
+
+def _load_checkpoint_safely(ckpt_path: Path) -> dict[str, Any]:
+    # Prefer `weights_only=True` to avoid the FutureWarning and reduce pickle risk.
+    try:
+        ckpt_obj = torch.load(ckpt_path, map_location="cpu", weights_only=True)
+    except TypeError:
+        # Backward compatibility for older torch versions without `weights_only`.
+        ckpt_obj = torch.load(ckpt_path, map_location="cpu")
+
+    if not isinstance(ckpt_obj, dict):
+        raise TypeError(f"Checkpoint content must be a dict, got {type(ckpt_obj)!r}")
+    return ckpt_obj
+
+
+def _build_train_dataset_from_ckpt_settings(
+    settings: ViewerCkptSettings,
+) -> Optional[InputDataset]:
+    dataset_cfg = settings.dataset_cfg
+    if dataset_cfg is None:
+        return None
+
+    try:
+        dataparser = ColmapDataParser(
+            data_dir=dataset_cfg.data_dir,
+            factor=int(dataset_cfg.data_factor),
+            normalize_world_space=bool(dataset_cfg.normalize_world_space),
+            test_every=int(dataset_cfg.test_every),
+            benchmark_train_split=bool(dataset_cfg.benchmark_train_split),
+            depth_dir_name=dataset_cfg.depth_dir_name,
+            normal_dir_name=dataset_cfg.normal_dir_name,
+            dynamic_mask_dir_name=dataset_cfg.dynamic_mask_dir_name,
+            sky_mask_dir_name=dataset_cfg.sky_mask_dir_name,
+        )
+        parsed_scene = dataparser.get_dataparser_outputs(split="train")
+        return InputDataset(parsed_scene)
+    except Exception as e:
+        print(
+            f"Skip train camera frustums: failed to build dataset from checkpoint cfg ({e}).",
+            flush=True,
+        )
+        return None
 
 
 def main(cfg: ViewerScriptConfig) -> None:
@@ -110,22 +251,28 @@ def main(cfg: ViewerScriptConfig) -> None:
         raise RuntimeError("CUDA requested but torch.cuda.is_available() is False.")
 
     ckpt_path, result_dir = _resolve_checkpoint(cfg)
-    ckpt_obj = torch.load(ckpt_path, map_location="cpu")
-    if not isinstance(ckpt_obj, dict):
-        raise TypeError(f"Checkpoint content must be a dict, got {type(ckpt_obj)!r}")
+    ckpt_obj = _load_checkpoint_safely(ckpt_path)
     splat_state = ckpt_obj.get("splats")
     if not isinstance(splat_state, dict):
         raise KeyError("Checkpoint does not contain `splats` state dict.")
 
     splats = _build_splats_from_state_dict(splat_state, device)
-    packed, sparse_grad, absgrad = _extract_render_flags(ckpt_obj)
+    settings = _parse_ckpt_settings(ckpt_obj)
+    train_dataset = _build_train_dataset_from_ckpt_settings(settings)
 
     print(f"Loaded checkpoint: {ckpt_path}", flush=True)
     print(f"Loaded gaussians: {int(splats['means'].shape[0])}", flush=True)
     print(
-        f"Render flags: packed={packed}, sparse_grad={sparse_grad}, absgrad={absgrad}",
+        "Render flags: "
+        f"packed={settings.packed}, "
+        f"sparse_grad={settings.sparse_grad}, "
+        f"absgrad={settings.absgrad}",
         flush=True,
     )
+    if train_dataset is None:
+        print("Train camera frustums: disabled (dataset unavailable).", flush=True)
+    else:
+        print(f"Train camera frustums: enabled ({len(train_dataset)} train images).", flush=True)
 
     viewer_runtime = ViewerRuntime(
         disable_viewer=False,
@@ -133,9 +280,10 @@ def main(cfg: ViewerScriptConfig) -> None:
         device=device,
         splats=splats,
         output_dir=result_dir,
-        packed=packed,
-        sparse_grad=sparse_grad,
-        absgrad=absgrad,
+        packed=settings.packed,
+        sparse_grad=settings.sparse_grad,
+        absgrad=settings.absgrad,
+        train_dataset=train_dataset,
     )
     viewer_runtime.keep_alive()
 

@@ -95,6 +95,7 @@ class Trainer:
             device=self.device,
             splats=splats,
             output_dir=cfg.io.result_dir,
+            train_dataset=self.dataset,
         )
         self.viewer_runtime = viewer_runtime
         tqdm_update_every = 10

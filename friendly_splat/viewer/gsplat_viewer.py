@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Callable, Literal, Tuple
+from typing import Any, Callable, Literal, Optional, Tuple
 
 import viser
 from nerfview import RenderTabState, Viewer
+from nerfview.render_panel import populate_general_render_tab
 
 
 class GsplatRenderTabState(RenderTabState):
@@ -39,6 +40,9 @@ class GsplatRenderTabState(RenderTabState):
 
 class GsplatViewer(Viewer):
     """Viewer for gsplat-style trainers (viser GUI + nerfview tabs)."""
+    HANDLE_TOTAL_GS_COUNT = "total_gs_count_number"
+    HANDLE_RENDERED_GS_COUNT = "rendered_gs_count_number"
+    HANDLE_VIEWER_RES_SLIDER = "viewer_res_slider"
 
     def __init__(
         self,
@@ -47,8 +51,12 @@ class GsplatViewer(Viewer):
         output_dir: Path,
         mode: Literal["rendering", "training"] = "rendering",
         enable_instance_mode: bool = False,
+        after_render_hook: Optional[Callable[[], None]] = None,
+        after_render_tab_populated_hook: Optional[Callable[[Any], None]] = None,
     ) -> None:
         self._enable_instance_mode = enable_instance_mode
+        self._after_render_hook = after_render_hook
+        self._after_render_tab_populated_hook = after_render_tab_populated_hook
         super().__init__(server, render_fn, output_dir, mode)
         server.gui.set_panel_label("gsplat viewer")
 
@@ -56,6 +64,29 @@ class GsplatViewer(Viewer):
         self.render_tab_state = GsplatRenderTabState()
         self._rendering_tab_handles = {}
         self._rendering_folder = self.server.gui.add_folder("Rendering")
+
+    def _bind_render_state_attr(
+        self,
+        handle: Any,
+        *,
+        attr_name: str,
+        cast: Optional[Callable[[Any], Any]] = None,
+        rerender: bool = True,
+    ) -> None:
+        @handle.on_update
+        def _(_event: Any) -> None:
+            value = handle.value
+            if cast is not None:
+                value = cast(value)
+            setattr(self.render_tab_state, attr_name, value)
+            if rerender:
+                self.rerender(_event)
+
+    def _bind_callback(self, handle: Any, callback: Callable[[], None]) -> None:
+        @handle.on_update
+        def _(_event: Any) -> None:
+            callback()
+            self.rerender(_event)
 
     def _populate_rendering_tab(self) -> None:
         server = self.server
@@ -82,11 +113,11 @@ class GsplatViewer(Viewer):
                     step=1,
                     hint="Spherical harmonics degree used for shading.",
                 )
-
-                @sh_degree_number.on_update
-                def _(_) -> None:
-                    self.render_tab_state.sh_degree = int(sh_degree_number.value)
-                    self.rerender(_)
+                self._bind_render_state_attr(
+                    sh_degree_number,
+                    attr_name="sh_degree",
+                    cast=int,
+                )
 
                 near_far_plane_vec2 = server.gui.add_vector2(
                     "Near/Far",
@@ -99,12 +130,21 @@ class GsplatViewer(Viewer):
                     step=1e-3,
                     hint="Near and far plane for rendering.",
                 )
-
-                @near_far_plane_vec2.on_update
-                def _(_) -> None:
-                    self.render_tab_state.near_plane = near_far_plane_vec2.value[0]
-                    self.render_tab_state.far_plane = near_far_plane_vec2.value[1]
-                    self.rerender(_)
+                self._bind_callback(
+                    near_far_plane_vec2,
+                    callback=lambda: (
+                        setattr(
+                            self.render_tab_state,
+                            "near_plane",
+                            near_far_plane_vec2.value[0],
+                        ),
+                        setattr(
+                            self.render_tab_state,
+                            "far_plane",
+                            near_far_plane_vec2.value[1],
+                        ),
+                    ),
+                )
 
                 radius_clip_slider = server.gui.add_number(
                     "Radius Clip",
@@ -114,11 +154,11 @@ class GsplatViewer(Viewer):
                     step=1.0,
                     hint="2D radius clip (pixels). Gaussians <= clip are skipped.",
                 )
-
-                @radius_clip_slider.on_update
-                def _(_) -> None:
-                    self.render_tab_state.radius_clip = radius_clip_slider.value
-                    self.rerender(_)
+                self._bind_render_state_attr(
+                    radius_clip_slider,
+                    attr_name="radius_clip",
+                    cast=float,
+                )
 
                 eps2d_slider = server.gui.add_number(
                     "2D Epsilon",
@@ -128,22 +168,21 @@ class GsplatViewer(Viewer):
                     step=0.01,
                     hint="Epsilon added to projected 2D covariances (anti-aliasing).",
                 )
-
-                @eps2d_slider.on_update
-                def _(_) -> None:
-                    self.render_tab_state.eps2d = eps2d_slider.value
-                    self.rerender(_)
+                self._bind_render_state_attr(
+                    eps2d_slider,
+                    attr_name="eps2d",
+                    cast=float,
+                )
 
                 backgrounds_slider = server.gui.add_rgb(
                     "Background",
                     initial_value=self.render_tab_state.backgrounds,
                     hint="Background color for rendering.",
                 )
-
-                @backgrounds_slider.on_update
-                def _(_) -> None:
-                    self.render_tab_state.backgrounds = backgrounds_slider.value
-                    self.rerender(_)
+                self._bind_render_state_attr(
+                    backgrounds_slider,
+                    attr_name="backgrounds",
+                )
 
                 render_mode_dropdown = server.gui.add_dropdown(
                     "Render Mode",
@@ -176,7 +215,7 @@ class GsplatViewer(Viewer):
                 )
 
                 @render_mode_dropdown.on_update
-                def _(_) -> None:
+                def _(_event: Any) -> None:
                     if render_mode_dropdown.value in ("expected_depth", "median_depth"):
                         normalize_nearfar_checkbox.disabled = False
                         inverse_checkbox.disabled = False
@@ -184,19 +223,18 @@ class GsplatViewer(Viewer):
                         normalize_nearfar_checkbox.disabled = True
                         inverse_checkbox.disabled = True
                     self.render_tab_state.render_mode = render_mode_dropdown.value
-                    self.rerender(_)
+                    self.rerender(_event)
 
-                @normalize_nearfar_checkbox.on_update
-                def _(_) -> None:
-                    self.render_tab_state.normalize_nearfar = (
-                        normalize_nearfar_checkbox.value
-                    )
-                    self.rerender(_)
-
-                @inverse_checkbox.on_update
-                def _(_) -> None:
-                    self.render_tab_state.inverse = inverse_checkbox.value
-                    self.rerender(_)
+                self._bind_render_state_attr(
+                    normalize_nearfar_checkbox,
+                    attr_name="normalize_nearfar",
+                    cast=bool,
+                )
+                self._bind_render_state_attr(
+                    inverse_checkbox,
+                    attr_name="inverse",
+                    cast=bool,
+                )
 
                 colormap_dropdown = server.gui.add_dropdown(
                     "Colormap",
@@ -204,11 +242,10 @@ class GsplatViewer(Viewer):
                     initial_value=self.render_tab_state.colormap,
                     hint="Colormap used for depth/alpha.",
                 )
-
-                @colormap_dropdown.on_update
-                def _(_) -> None:
-                    self.render_tab_state.colormap = colormap_dropdown.value
-                    self.rerender(_)
+                self._bind_render_state_attr(
+                    colormap_dropdown,
+                    attr_name="colormap",
+                )
 
                 rasterize_mode_dropdown = server.gui.add_dropdown(
                     "Anti-Aliasing",
@@ -216,11 +253,10 @@ class GsplatViewer(Viewer):
                     initial_value=self.render_tab_state.rasterize_mode,
                     hint="Rasterization mode.",
                 )
-
-                @rasterize_mode_dropdown.on_update
-                def _(_) -> None:
-                    self.render_tab_state.rasterize_mode = rasterize_mode_dropdown.value
-                    self.rerender(_)
+                self._bind_render_state_attr(
+                    rasterize_mode_dropdown,
+                    attr_name="rasterize_mode",
+                )
 
                 camera_model_dropdown = server.gui.add_dropdown(
                     "Camera",
@@ -228,16 +264,15 @@ class GsplatViewer(Viewer):
                     initial_value=self.render_tab_state.camera_model,
                     hint="Camera model used for rendering.",
                 )
-
-                @camera_model_dropdown.on_update
-                def _(_) -> None:
-                    self.render_tab_state.camera_model = camera_model_dropdown.value
-                    self.rerender(_)
+                self._bind_render_state_attr(
+                    camera_model_dropdown,
+                    attr_name="camera_model",
+                )
 
         self._rendering_tab_handles.update(
             {
-                "total_gs_count_number": total_gs_count_number,
-                "rendered_gs_count_number": rendered_gs_count_number,
+                self.HANDLE_TOTAL_GS_COUNT: total_gs_count_number,
+                self.HANDLE_RENDERED_GS_COUNT: rendered_gs_count_number,
                 "near_far_plane_vec2": near_far_plane_vec2,
                 "radius_clip_slider": radius_clip_slider,
                 "eps2d_slider": eps2d_slider,
@@ -250,13 +285,48 @@ class GsplatViewer(Viewer):
                 "camera_model_dropdown": camera_model_dropdown,
             }
         )
-        super()._populate_rendering_tab()
+
+        # Populate the common rendering controls (Render Res / video export / path tools).
+        with self._rendering_folder:
+            viewer_res_slider = self.server.gui.add_slider(
+                "Viewer Res",
+                min=64,
+                max=2048,
+                step=1,
+                initial_value=2048,
+                hint="Maximum resolution of the viewer rendered image.",
+            )
+            self._bind_render_state_attr(
+                viewer_res_slider,
+                attr_name="viewer_res",
+                cast=int,
+            )
+
+            self._rendering_tab_handles[
+                self.HANDLE_VIEWER_RES_SLIDER
+            ] = viewer_res_slider
+
+        extra_handles = self._rendering_tab_handles.copy()
+        if self.mode == "training":
+            extra_handles.update(self._training_tab_handles)
+        handles = populate_general_render_tab(
+            self.server,
+            output_dir=self.output_dir,
+            folder=self._rendering_folder,
+            render_tab_state=self.render_tab_state,
+            extra_handles=extra_handles,
+        )
+        self._rendering_tab_handles.update(handles)
+        if self._after_render_tab_populated_hook is not None:
+            self._after_render_tab_populated_hook(self)
 
     def _after_render(self) -> None:
         # Sync GUI read-only values from state.
-        self._rendering_tab_handles[
-            "total_gs_count_number"
-        ].value = self.render_tab_state.total_gs_count
-        self._rendering_tab_handles[
-            "rendered_gs_count_number"
-        ].value = self.render_tab_state.rendered_gs_count
+        self._rendering_tab_handles[self.HANDLE_TOTAL_GS_COUNT].value = (
+            self.render_tab_state.total_gs_count
+        )
+        self._rendering_tab_handles[self.HANDLE_RENDERED_GS_COUNT].value = (
+            self.render_tab_state.rendered_gs_count
+        )
+        if self._after_render_hook is not None:
+            self._after_render_hook()
