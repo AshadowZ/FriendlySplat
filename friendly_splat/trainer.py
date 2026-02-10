@@ -104,6 +104,17 @@ class Trainer:
             miniters=int(tqdm_update_every),
         )
 
+        def _on_eval_complete(eval_step: int, stats: dict[str, float | int]) -> None:
+            tb_runtime.log_eval(
+                step=eval_step,
+                stats=stats,
+                stage="eval",
+            )
+            viewer_runtime.push_eval_metrics(
+                step=eval_step,
+                stats=stats,
+            )
+
         for step in pbar:
             # /*-------------------- Viewer / Step Preamble --------------------*/
             # Respect viewer pause state and take the step lock.
@@ -250,11 +261,7 @@ class Trainer:
                 splats=splats,
                 bilagrid=bilagrid,
                 ppisp=ppisp,
-                on_eval_complete=lambda eval_step, stats: tb_runtime.log_eval(
-                    step=eval_step,
-                    stats=stats,
-                    stage="eval",
-                ),
+                on_eval_complete=_on_eval_complete,
             )
             if eval_summary is not None:
                 pbar.write(eval_summary)
