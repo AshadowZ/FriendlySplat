@@ -39,7 +39,6 @@ class TrainingContext:
     eval_dataset: Optional[InputDataset]
     eval_loader: Optional[DataLoader]
     gaussian_model: GaussianModel
-    splats: torch.nn.ParameterDict
     pose_adjust: Optional[CameraOptModule]
     postprocessor: Optional[PostProcessor]
     natural_selection_policy: Optional[NaturalSelectionPolicy]
@@ -127,21 +126,20 @@ def build_gaussian_model(
 def build_optimizer_bundle(
     *,
     optim_cfg: OptimConfig,
-    data_cfg: DataConfig,
+    batch_size: int,
     pose_cfg: PoseConfig,
     world_size: int,
     device: torch.device,
     scene_scale: float,
-    splats: torch.nn.ParameterDict,
+    gaussian_model: GaussianModel,
     pose_adjust: Optional[CameraOptModule],
     postprocessor: Optional[PostProcessor],
 ) -> OptimizerBundle:
-    means_lr_final_ratio = 0.01
     # Scale learning rate based on batch size, reference:
     # https://www.cs.princeton.edu/~smalladi/blog/2024/01/22/SDEs-ScalingRules/
     # Note that this would not make the training exactly equivalent, see
     # https://arxiv.org/pdf/2402.18824v1
-    BS = int(data_cfg.batch_size) * int(world_size)
+    BS = int(batch_size) * int(world_size)
     if BS <= 0:
         raise ValueError(f"batch_size*world_size must be > 0, got {BS}")
     lr_scale = math.sqrt(float(BS))
@@ -179,17 +177,18 @@ def build_optimizer_bundle(
         )
 
     scene_scale = float(scene_scale)
+    splat_params = gaussian_model.splat_parameters()
     splat_optimizers: Dict[str, torch.optim.Optimizer] = {
         name: _make_optimizer(param, lr)
         for name, param, lr in [
-            ("means", splats["means"], optim_cfg.means_lr * scene_scale),
-            ("scales", splats["scales"], optim_cfg.scales_lr),
-            ("quats", splats["quats"], optim_cfg.quats_lr),
-            ("opacities", splats["opacities"], optim_cfg.opacities_lr),
+            ("means", splat_params["means"], optim_cfg.means_lr * scene_scale),
+            ("scales", splat_params["scales"], optim_cfg.scales_lr),
+            ("quats", splat_params["quats"], optim_cfg.quats_lr),
+            ("opacities", splat_params["opacities"], optim_cfg.opacities_lr),
         ]
     }
-    splat_optimizers["sh0"] = _make_optimizer(splats["sh0"], optim_cfg.sh0_lr)
-    splat_optimizers["shN"] = _make_optimizer(splats["shN"], optim_cfg.shN_lr)
+    splat_optimizers["sh0"] = _make_optimizer(splat_params["sh0"], optim_cfg.sh0_lr)
+    splat_optimizers["shN"] = _make_optimizer(splat_params["shN"], optim_cfg.shN_lr)
 
     pose_optimizers: list[torch.optim.Optimizer] = []
     if pose_cfg.pose_opt:
@@ -210,7 +209,7 @@ def build_optimizer_bundle(
         )
 
     schedulers: list[torch.optim.lr_scheduler.LRScheduler] = []
-    gamma = float(means_lr_final_ratio) ** (1.0 / float(optim_cfg.max_steps))
+    gamma = 0.01 ** (1.0 / float(optim_cfg.max_steps))
     schedulers.append(
         torch.optim.lr_scheduler.ExponentialLR(splat_optimizers["means"], gamma=gamma)
     )
@@ -259,7 +258,6 @@ def build_training_context(cfg: TrainConfig) -> TrainingContext:
         optim_cfg=cfg.optim,
         device=device,
     )
-    splats = gaussian_model.as_parameter_dict()
     parsed_scene = dataset.parsed_scene
     n_images = int(len(parsed_scene.image_names))
 
@@ -283,12 +281,12 @@ def build_training_context(cfg: TrainConfig) -> TrainingContext:
 
     optimizer_bundle = build_optimizer_bundle(
         optim_cfg=cfg.optim,
-        data_cfg=cfg.data,
+        batch_size=int(cfg.data.batch_size),
         pose_cfg=cfg.pose,
         world_size=cfg.world_size,
         device=device,
         scene_scale=float(parsed_scene.scene_scale),
-        splats=splats,
+        gaussian_model=gaussian_model,
         pose_adjust=pose_adjust,
         postprocessor=postprocessor,
     )
@@ -323,7 +321,7 @@ def build_training_context(cfg: TrainConfig) -> TrainingContext:
         key_for_gradient=str(cfg.strategy.key_for_gradient),
         budget=int(cfg.strategy.densification_budget),
     )
-    strategy.check_sanity(splats, optimizer_bundle.splat_optimizers)
+    strategy.check_sanity(gaussian_model.splats, optimizer_bundle.splat_optimizers)
     strategy_state = strategy.initialize_state(
         scene_scale=float(parsed_scene.scene_scale)
     )
@@ -331,7 +329,7 @@ def build_training_context(cfg: TrainConfig) -> TrainingContext:
     optimizer_coordinator = OptimizerCoordinator(
         optim_cfg=cfg.optim,
         device=device,
-        splats=splats,
+        gaussian_model=gaussian_model,
         optimizers=optimizer_bundle,
         gns=natural_selection_policy,
     )
@@ -344,7 +342,6 @@ def build_training_context(cfg: TrainConfig) -> TrainingContext:
         eval_dataset=eval_dataset,
         eval_loader=eval_loader,
         gaussian_model=gaussian_model,
-        splats=splats,
         pose_adjust=pose_adjust,
         postprocessor=postprocessor,
         natural_selection_policy=natural_selection_policy,

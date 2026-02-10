@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict
+from typing import Dict, Iterable
 
 import torch
 
@@ -17,6 +17,58 @@ class GaussianModel(torch.nn.Module):
     @property
     def splats(self) -> torch.nn.ParameterDict:
         return self.params
+
+    @property
+    def means(self) -> torch.nn.Parameter:
+        return self.params["means"]
+
+    @property
+    def log_scales(self) -> torch.nn.Parameter:
+        # Convention: store log-scales in `scales`.
+        return self.params["scales"]
+
+    @property
+    def quats(self) -> torch.nn.Parameter:
+        return self.params["quats"]
+
+    @property
+    def opacity_logits(self) -> torch.nn.Parameter:
+        # Convention: store opacity logits in `opacities`.
+        return self.params["opacities"]
+
+    @property
+    def sh0(self) -> torch.nn.Parameter:
+        return self.params["sh0"]
+
+    @property
+    def shN(self) -> torch.nn.Parameter:
+        return self.params["shN"]
+
+    @property
+    def device(self) -> torch.device:
+        return self.means.device
+
+    @property
+    def num_gaussians(self) -> int:
+        return int(self.means.shape[0])
+
+    def splats_state_dict(self) -> dict[str, torch.Tensor]:
+        """Return a checkpoint-friendly state dict with canonical splat keys."""
+        return {str(k): v for k, v in self.params.state_dict().items()}
+
+    def splat_parameters(self) -> dict[str, torch.nn.Parameter]:
+        """Return the canonical set of trainable splat parameters."""
+        return {
+            "means": self.means,
+            "scales": self.log_scales,
+            "quats": self.quats,
+            "opacities": self.opacity_logits,
+            "sh0": self.sh0,
+            "shN": self.shN,
+        }
+
+    def iter_splat_parameters(self) -> Iterable[torch.nn.Parameter]:
+        return self.splat_parameters().values()
 
     def as_parameter_dict(self) -> torch.nn.ParameterDict:
         return self.params

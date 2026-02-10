@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Mapping, Optional
 
 import torch
 
+from friendly_splat.models.gaussian import GaussianModel
 from friendly_splat.viewer import viewer_panels
 from friendly_splat.viewer.viewer_renderer import ViewerRenderer
 
@@ -48,7 +49,7 @@ class ViewerRuntime:
         disable_viewer: bool,
         port: int,
         device: torch.device,
-        splats: torch.nn.ParameterDict,
+        gaussian_model: GaussianModel,
         output_dir: Path | str,
         packed: bool = False,
         sparse_grad: bool = False,
@@ -66,7 +67,7 @@ class ViewerRuntime:
         self.disable_viewer = disable_viewer
         self.port = port
         self.device = device
-        self.splats = splats
+        self.gaussian_model = gaussian_model
         self.output_dir = Path(output_dir)
         self.packed = packed
         self.sparse_grad = sparse_grad
@@ -118,7 +119,7 @@ class ViewerRuntime:
         self.server = viser.ViserServer(port=self.port, verbose=False)
         self.renderer = ViewerRenderer(
             device=self.device,
-            splats=self.splats,
+            gaussian_model=self.gaussian_model,
             packed=self.packed,
             sparse_grad=self.sparse_grad,
             absgrad=self.absgrad,
@@ -692,7 +693,7 @@ class ViewerRuntime:
     def _update_counts(self, meta: Optional[dict[str, torch.Tensor]]) -> None:
         if self.viewer is None:
             return
-        self.viewer.render_tab_state.total_gs_count = int(self.splats["means"].shape[0])
+        self.viewer.render_tab_state.total_gs_count = int(self.gaussian_model.num_gaussians)
         if meta is None:
             return
         radii = meta.get("radii")

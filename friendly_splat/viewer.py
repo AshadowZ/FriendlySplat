@@ -9,6 +9,7 @@ import tyro
 
 from friendly_splat.data.colmap_dataparser import ColmapDataParser
 from friendly_splat.data.dataset import InputDataset
+from friendly_splat.models.gaussian import GaussianModel
 from friendly_splat.viewer.viewer_runtime import ViewerRuntime
 
 
@@ -116,9 +117,9 @@ def _resolve_checkpoint(cfg: ViewerScriptConfig) -> tuple[Path, Path]:
     return ckpt_path, result_dir
 
 
-def _build_splats_from_state_dict(
+def _build_gaussian_model_from_state_dict(
     splat_state: dict[str, Any], device: torch.device
-) -> torch.nn.ParameterDict:
+) -> GaussianModel:
     required = {"means", "scales", "quats", "opacities", "sh0", "shN"}
     missing = required - set(splat_state.keys())
     if len(missing) > 0:
@@ -133,7 +134,7 @@ def _build_splats_from_state_dict(
             value.to(device=device),
             requires_grad=False,
         )
-    return torch.nn.ParameterDict(params)
+    return GaussianModel(params=params).to(device)
 
 
 def _parse_ckpt_settings(ckpt_obj: dict[str, Any]) -> ViewerCkptSettings:
@@ -256,12 +257,12 @@ def main(cfg: ViewerScriptConfig) -> None:
     if not isinstance(splat_state, dict):
         raise KeyError("Checkpoint does not contain `splats` state dict.")
 
-    splats = _build_splats_from_state_dict(splat_state, device)
+    gaussian_model = _build_gaussian_model_from_state_dict(splat_state, device)
     settings = _parse_ckpt_settings(ckpt_obj)
     train_dataset = _build_train_dataset_from_ckpt_settings(settings)
 
     print(f"Loaded checkpoint: {ckpt_path}", flush=True)
-    print(f"Loaded gaussians: {int(splats['means'].shape[0])}", flush=True)
+    print(f"Loaded gaussians: {int(gaussian_model.num_gaussians)}", flush=True)
     print(
         "Render flags: "
         f"packed={settings.packed}, "
@@ -278,7 +279,7 @@ def main(cfg: ViewerScriptConfig) -> None:
         disable_viewer=False,
         port=cfg.port,
         device=device,
-        splats=splats,
+        gaussian_model=gaussian_model,
         output_dir=result_dir,
         packed=settings.packed,
         sparse_grad=settings.sparse_grad,

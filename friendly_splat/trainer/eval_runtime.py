@@ -7,6 +7,7 @@ from typing import Dict, Mapping, Optional, Tuple
 import torch
 
 from friendly_splat.data.dataloader import DataLoader, PreparedBatch
+from friendly_splat.models.gaussian import GaussianModel
 from friendly_splat.models.postprocess import PostProcessor, apply_postprocess
 from friendly_splat.renderer.renderer import render_splats
 from friendly_splat.trainer.configs import (
@@ -119,13 +120,13 @@ def run_evaluation(
     cfg: TrainConfig,
     step: int,
     eval_loader: DataLoader,
-    splats: torch.nn.ParameterDict,
+    gaussian_model: GaussianModel,
     postprocessor: Optional[PostProcessor] = None,
 ) -> EvalOutput:
     max_images = cfg.eval.max_images
     active_sh_degree = _active_sh_degree_for_step(step=int(step), optim_cfg=cfg.optim)
     eval_metrics = _get_eval_metrics(
-        device=splats["means"].device,
+        device=gaussian_model.device,
         lpips_net=str(cfg.eval.lpips_net),
     )
 
@@ -156,7 +157,7 @@ def run_evaluation(
                 batch_size = remaining
 
         out = render_splats(
-            splats=splats,
+            splats=gaussian_model.splats,
             camtoworlds=prepared_batch.camtoworlds,
             Ks=prepared_batch.Ks,
             width=int(prepared_batch.width),
@@ -214,7 +215,7 @@ def run_evaluation(
         "lpips": float(total_lpips / float(total_images)),
         "seconds_per_image": float(elapsed / float(total_images)),
         "num_eval_images": int(total_images),
-        "num_gaussians": int(splats["means"].shape[0]),
+        "num_gaussians": int(gaussian_model.num_gaussians),
         "active_sh_degree": int(active_sh_degree),
     }
     if compute_cc_metrics:

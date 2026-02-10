@@ -4,6 +4,8 @@ from typing import Any, Callable, Optional
 
 import torch
 
+from friendly_splat.models.gaussian import GaussianModel
+
 try:
     import numpy as np  # type: ignore
 except ImportError:  # pragma: no cover
@@ -37,14 +39,14 @@ class ViewerRenderer:
         self,
         *,
         device: torch.device,
-        splats: torch.nn.ParameterDict,
+        gaussian_model: GaussianModel,
         packed: bool = False,
         sparse_grad: bool = False,
         absgrad: bool = False,
         update_counts_fn: Optional[Callable[[Optional[dict[str, torch.Tensor]]], None]] = None,
     ) -> None:
         self.device = device
-        self.splats = splats
+        self.gaussian_model = gaussian_model
         self.packed = bool(packed)
         self.sparse_grad = bool(sparse_grad)
         self.absgrad = bool(absgrad)
@@ -72,8 +74,8 @@ class ViewerRenderer:
             )
 
     def _max_sh_degree_supported(self) -> int:
-        sh0 = self.splats.get("sh0")
-        shN = self.splats.get("shN")
+        sh0 = self.gaussian_model.sh0
+        shN = self.gaussian_model.shN
         if not isinstance(sh0, torch.Tensor) or not isinstance(shN, torch.Tensor):
             return 0
         total_k = int(sh0.shape[1]) + int(shN.shape[1])
@@ -193,7 +195,7 @@ class ViewerRenderer:
             / 255.0
         )
         render_kwargs = dict(
-            splats=self.splats,
+            splats=self.gaussian_model.splats,
             camtoworlds=c2w[None],
             Ks=K[None],
             width=width,

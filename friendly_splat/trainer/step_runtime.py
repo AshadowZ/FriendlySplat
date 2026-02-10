@@ -6,6 +6,7 @@ import torch
 
 from friendly_splat.data.dataloader import DataLoader, PreparedBatch
 from friendly_splat.models.camera_opt import CameraOptModule, apply_pose_adjust
+from friendly_splat.models.gaussian import GaussianModel
 from friendly_splat.models.postprocess import (
     PostProcessor,
     apply_postprocess,
@@ -83,14 +84,14 @@ def prepare_training_batch(
 def render_from_prepared_batch(
     *,
     prepared_batch: PreparedBatch,
-    splats: torch.nn.ParameterDict,
+    gaussian_model: GaussianModel,
     optim_cfg: OptimConfig,
     schedule: StepSchedule,
     absgrad: bool = False,
     postprocessor: Optional[PostProcessor] = None,
 ) -> RenderOutput:
     out = render_splats(
-        splats=splats,
+        splats=gaussian_model.splats,
         camtoworlds=prepared_batch.camtoworlds,
         Ks=prepared_batch.Ks,
         width=int(prepared_batch.width),
@@ -133,7 +134,7 @@ def compute_losses_from_prepared_batch_and_render(
     step: int,
     prepared_batch: PreparedBatch,
     render_out: RenderOutput,
-    splats: torch.nn.ParameterDict,
+    gaussian_model: GaussianModel,
     postprocessor: Optional[PostProcessor] = None,
     gns: Optional[NaturalSelectionPolicy] = None,
 ) -> LossOutput:
@@ -161,7 +162,7 @@ def compute_losses_from_prepared_batch_and_render(
         normal_prior=prepared_batch.normal_prior,
         dynamic_mask=prepared_batch.dynamic_mask,
         sky_mask=prepared_batch.sky_mask,
-        splats=splats,
+        gaussian_model=gaussian_model,
         Ks=prepared_batch.Ks,
     )
 
@@ -181,7 +182,7 @@ def compute_losses_from_prepared_batch_and_render(
     # Active only during the configured GNS pruning window.
     # It pushes opacities down over time so low-contribution Gaussians can be pruned.
     if gns is not None:
-        reg = gns.compute_regularizer(step=step, params=splats)
+        reg = gns.compute_regularizer(step=step, params=gaussian_model.splats)
         if reg is not None:
             total = total + reg
             items["gns"] = reg.detach()
@@ -195,7 +196,7 @@ def maybe_run_evaluation_for_step(
     step: int,
     train_cfg: TrainConfig,
     eval_loader: Optional[DataLoader],
-    splats: torch.nn.ParameterDict,
+    gaussian_model: GaussianModel,
     postprocessor: Optional[PostProcessor] = None,
 ) -> Optional[EvalOutput]:
     """Run evaluation for the current step when configured and due.
@@ -211,7 +212,7 @@ def maybe_run_evaluation_for_step(
         cfg=train_cfg,
         step=int(step),
         eval_loader=eval_loader,
-        splats=splats,
+        gaussian_model=gaussian_model,
         postprocessor=postprocessor,
     )
     save_eval_stats(

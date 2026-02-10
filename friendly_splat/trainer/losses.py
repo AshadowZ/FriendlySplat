@@ -18,6 +18,7 @@ import torch
 
 from fused_ssim import fused_ssim
 
+from friendly_splat.models.gaussian import GaussianModel
 from friendly_splat.trainer.configs import RegConfig
 from friendly_splat.utils.common_utils import get_implied_normal_from_depth
 
@@ -241,7 +242,7 @@ def compute_losses(
     normal_prior: Optional[torch.Tensor],
     dynamic_mask: Optional[torch.Tensor],
     sky_mask: Optional[torch.Tensor],
-    splats: torch.nn.ParameterDict,
+    gaussian_model: GaussianModel,
     Ks: torch.Tensor,
 ) -> LossOutput:
     """Compute total loss and per-term metrics for one training step.
@@ -381,14 +382,14 @@ def compute_losses(
     # `scale_reg` is used to prevent Gaussians from becoming overly elongated.
     flat_reg = torch.tensor(0.0, device=device)
     if do_flat_reg:
-        flat_reg = flatness_loss_from_log_scales(splats["scales"])
+        flat_reg = flatness_loss_from_log_scales(gaussian_model.log_scales)
         total = total + float(reg_cfg.flat_reg_weight) * flat_reg
         items["flat_reg"] = flat_reg.detach()
 
     scale_reg = torch.tensor(0.0, device=device)
     if do_scale_reg:
         scale_reg = scale_ratio_regularization_from_log_scales(
-            splats["scales"],
+            gaussian_model.log_scales,
             max_gauss_ratio=float(reg_cfg.max_gauss_ratio),
         )
         total = total + float(reg_cfg.scale_reg_weight) * scale_reg
