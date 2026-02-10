@@ -90,8 +90,8 @@ class Trainer:
         tb_writer = TensorBoardWriter(io_cfg=cfg.io, tb_cfg=cfg.tb)
 
         viewer_runtime = ViewerRuntime(
-            disable_viewer=bool(cfg.viewer.disable_viewer),
-            port=int(cfg.viewer.port),
+            disable_viewer=cfg.viewer.disable_viewer,
+            port=cfg.viewer.port,
             device=self.device,
             splats=splats,
             output_dir=cfg.io.result_dir,
@@ -252,9 +252,7 @@ class Trainer:
 
         tb_writer.close()
         viewer_runtime.complete()
-        if (not bool(cfg.viewer.disable_viewer)) and bool(
-            cfg.viewer.keep_alive_after_train
-        ):
+        if (not cfg.viewer.disable_viewer) and cfg.viewer.keep_alive_after_train:
             viewer_runtime.keep_alive()
 
 

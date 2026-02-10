@@ -276,7 +276,7 @@ def main(cfg: ViewerScriptConfig) -> None:
 
     viewer_runtime = ViewerRuntime(
         disable_viewer=False,
-        port=int(cfg.port),
+        port=cfg.port,
         device=device,
         splats=splats,
         output_dir=result_dir,
