@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
@@ -16,7 +15,6 @@ from friendly_splat.trainer.configs import (
     InitConfig,
     IOConfig,
     OptimConfig,
-    PoseConfig,
     TrainConfig,
 )
 from friendly_splat.trainer.optimizer_coordinator import (
@@ -123,137 +121,6 @@ def build_gaussian_model(
     )
 
 
-def build_optimizer_bundle(
-    *,
-    optim_cfg: OptimConfig,
-    batch_size: int,
-    pose_cfg: PoseConfig,
-    world_size: int,
-    device: torch.device,
-    scene_scale: float,
-    gaussian_model: GaussianModel,
-    pose_adjust: Optional[PoseOptModule],
-    bilateral_grid: Optional[BilateralGridPostProcessor],
-    bilateral_grid_lr: float,
-) -> OptimizerBundle:
-    # Scale learning rate based on batch size, reference:
-    # https://www.cs.princeton.edu/~smalladi/blog/2024/01/22/SDEs-ScalingRules/
-    # Note that this would not make the training exactly equivalent, see
-    # https://arxiv.org/pdf/2402.18824v1
-    BS = int(batch_size) * int(world_size)
-    if BS <= 0:
-        raise ValueError(f"batch_size*world_size must be > 0, got {BS}")
-    lr_scale = math.sqrt(float(BS))
-    eps = 1e-15 / lr_scale
-    beta1 = max(0.0, 1.0 - float(BS) * (1.0 - 0.9))
-    beta2 = max(0.0, 1.0 - float(BS) * (1.0 - 0.999))
-    betas = (beta1, beta2)
-
-    def _make_optimizer(param: torch.nn.Parameter, lr: float) -> torch.optim.Optimizer:
-        lr_scaled = float(lr) * lr_scale
-        if optim_cfg.sparse_grad:
-            return torch.optim.SparseAdam(
-                [{"params": param, "lr": lr_scaled}], betas=betas, eps=eps
-            )
-        if optim_cfg.visible_adam:
-            from gsplat.optimizers import SelectiveAdam  # noqa: WPS433
-
-            return SelectiveAdam(
-                [{"params": param, "lr": lr_scaled}], eps=eps, betas=betas
-            )
-
-        # Default: Adam with fused implementation when available.
-        if device.type == "cuda":
-            try:
-                return torch.optim.Adam(
-                    [{"params": param, "lr": lr_scaled}],
-                    eps=eps,
-                    betas=betas,
-                    fused=True,
-                )
-            except TypeError:
-                pass
-        return torch.optim.Adam(
-            [{"params": param, "lr": lr_scaled}], eps=eps, betas=betas
-        )
-
-    scene_scale = float(scene_scale)
-    splat_params = gaussian_model.splat_parameters()
-    splat_optimizers: Dict[str, torch.optim.Optimizer] = {
-        name: _make_optimizer(param, lr)
-        for name, param, lr in [
-            ("means", splat_params["means"], optim_cfg.means_lr * scene_scale),
-            ("scales", splat_params["scales"], optim_cfg.scales_lr),
-            ("quats", splat_params["quats"], optim_cfg.quats_lr),
-            ("opacities", splat_params["opacities"], optim_cfg.opacities_lr),
-        ]
-    }
-    splat_optimizers["sh0"] = _make_optimizer(splat_params["sh0"], optim_cfg.sh0_lr)
-    splat_optimizers["shN"] = _make_optimizer(splat_params["shN"], optim_cfg.shN_lr)
-
-    pose_optimizers: list[torch.optim.Optimizer] = []
-    if pose_cfg.pose_opt:
-        if pose_adjust is None:
-            raise RuntimeError("pose_opt=True but pose_adjust is not initialized.")
-        pose_optimizers = [
-            torch.optim.Adam(
-                pose_adjust.parameters(),
-                lr=float(pose_cfg.pose_opt_lr) * math.sqrt(float(BS)),
-                weight_decay=float(pose_cfg.pose_opt_reg),
-            )
-        ]
-
-    bilateral_grid_optimizers: list[torch.optim.Optimizer] = []
-    if bilateral_grid is not None:
-        bilateral_grid_optimizers = [
-            torch.optim.Adam(
-                bilateral_grid.parameters(),
-                lr=float(bilateral_grid_lr) * float(BS) ** 0.5,
-                eps=1e-15,
-            )
-        ]
-
-    schedulers: list[torch.optim.lr_scheduler.LRScheduler] = []
-    gamma = 0.01 ** (1.0 / float(optim_cfg.max_steps))
-    schedulers.append(
-        torch.optim.lr_scheduler.ExponentialLR(splat_optimizers["means"], gamma=gamma)
-    )
-    if pose_cfg.pose_opt:
-        # Pose optimization ends at 1% of the initial value.
-        if len(pose_optimizers) == 0:
-            raise RuntimeError("pose_opt=True but pose optimizer is not initialized.")
-        gamma = 0.01 ** (1.0 / float(optim_cfg.max_steps))
-        schedulers.append(
-            torch.optim.lr_scheduler.ExponentialLR(pose_optimizers[0], gamma=gamma)
-        )
-    if bilateral_grid is not None:
-        if len(bilateral_grid_optimizers) == 0:
-            raise RuntimeError("bilateral_grid=True but bilateral grid optimizer is not initialized.")
-        gamma = 0.01 ** (1.0 / float(optim_cfg.max_steps))
-        schedulers.append(
-            torch.optim.lr_scheduler.ChainedScheduler(
-                [
-                    torch.optim.lr_scheduler.LinearLR(
-                        bilateral_grid_optimizers[0],
-                        start_factor=0.01,
-                        total_iters=1000,
-                    ),
-                    torch.optim.lr_scheduler.ExponentialLR(
-                        bilateral_grid_optimizers[0],
-                        gamma=gamma,
-                    ),
-                ]
-            )
-        )
-
-    return OptimizerBundle(
-        splat_optimizers=splat_optimizers,
-        pose_optimizers=pose_optimizers,
-        postprocess_optimizers=bilateral_grid_optimizers,
-        schedulers=schedulers,
-    )
-
-
 def build_training_context(cfg: TrainConfig) -> TrainingContext:
     device = torch.device(cfg.io.device)
     dataset, loader = build_dataset_and_loader(
@@ -291,17 +158,21 @@ def build_training_context(cfg: TrainConfig) -> TrainingContext:
         pose_adjust = PoseOptModule(n_images).to(device)
         pose_adjust.zero_init()
 
-    optimizer_bundle = build_optimizer_bundle(
+    param_groups: Dict[str, list[torch.nn.Parameter]] = {}
+    param_groups.update(gaussian_model.get_param_groups())
+    if pose_adjust is not None:
+        param_groups.update(pose_adjust.get_param_groups())
+    if bilateral_grid is not None:
+        param_groups.update(bilateral_grid.get_param_groups())
+
+    optimizer_bundle = OptimizerBundle.build_from_param_groups(
         optim_cfg=cfg.optim,
         batch_size=int(cfg.data.batch_size),
-        pose_cfg=cfg.pose,
         world_size=cfg.world_size,
         device=device,
         scene_scale=float(parsed_scene.scene_scale),
-        gaussian_model=gaussian_model,
-        pose_adjust=pose_adjust,
-        bilateral_grid=bilateral_grid,
-        bilateral_grid_lr=float(cfg.postprocess.bilateral_grid_lr),
+        param_groups=param_groups,
+        splat_group_names=set(gaussian_model.get_param_groups().keys()),
     )
 
     natural_selection_policy: Optional[NaturalSelectionPolicy] = None

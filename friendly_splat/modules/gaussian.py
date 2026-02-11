@@ -122,10 +122,6 @@ class GaussianModel(torch.nn.Module):
         """
         return {name: [param] for name, param in self.splat_parameters().items()}
 
-    def splats_state_dict(self) -> dict[str, torch.Tensor]:
-        """Return a checkpoint-friendly state dict with canonical splat keys."""
-        return {str(k): v for k, v in self.params.state_dict().items()}
-
     def splat_parameters(self) -> dict[str, torch.nn.Parameter]:
         """Return the canonical set of trainable splat parameters."""
         return {

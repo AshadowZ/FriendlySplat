@@ -98,7 +98,9 @@ def save_checkpoint(
         "step": int(step),
         "train_step": int(train_step),
         "cfg": asdict(train_cfg),
-        "splats": gaussian_model.splats_state_dict(),
+        # Store splat tensors under canonical keys (means/scales/quats/opacities/sh0/shN).
+        # Use a plain dict to keep `viewer.py` checkpoint loading strict and predictable.
+        "splats": dict(gaussian_model.splats.state_dict().items()),
     }
     if pose_cfg.pose_opt and pose_adjust is not None:
         data["pose_adjust"] = pose_adjust.state_dict()
