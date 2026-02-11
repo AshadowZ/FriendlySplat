@@ -9,7 +9,7 @@ import torch
 import yaml
 
 from friendly_splat.models.gaussian import GaussianModel
-from friendly_splat.models.postprocess import PostProcessor
+from friendly_splat.models.bilateral_grid import BilateralGridPostProcessor
 from friendly_splat.trainer.configs import (
     EvalConfig,
     IOConfig,
@@ -90,7 +90,7 @@ def save_checkpoint(
     gaussian_model: GaussianModel,
     ckpt_dir: str,
     pose_adjust: Optional[torch.nn.Module] = None,
-    postprocessor: Optional[PostProcessor] = None,
+    bilateral_grid: Optional[BilateralGridPostProcessor] = None,
 ) -> str:
     train_step = int(step) + 1  # 1-based step number for user-facing I/O.
     ckpt_path = os.path.join(str(ckpt_dir), f"ckpt_step{train_step:06d}.pt")
@@ -102,11 +102,8 @@ def save_checkpoint(
     }
     if pose_cfg.pose_opt and pose_adjust is not None:
         data["pose_adjust"] = pose_adjust.state_dict()
-    if postprocessor is not None:
-        payload = postprocessor.checkpoint_payload()
-        if payload is not None:
-            key, value = payload
-            data[str(key)] = value
+    if bilateral_grid is not None:
+        data["bilagrid"] = bilateral_grid.bil_grids.state_dict()
 
     torch.save(data, ckpt_path)
     print(f"Saved checkpoint: {ckpt_path}", flush=True)
@@ -165,7 +162,7 @@ def maybe_save_outputs(
     gaussian_model: GaussianModel,
     active_sh_degree: int,
     pose_adjust: Optional[torch.nn.Module] = None,
-    postprocessor: Optional[PostProcessor] = None,
+    bilateral_grid: Optional[BilateralGridPostProcessor] = None,
 ) -> None:
     ckpt_dir = os.path.join(io_cfg.result_dir, "ckpts")
     ply_dir = os.path.join(io_cfg.result_dir, "ply")
@@ -194,7 +191,7 @@ def maybe_save_outputs(
             gaussian_model=gaussian_model,
             ckpt_dir=ckpt_dir,
             pose_adjust=pose_adjust,
-            postprocessor=postprocessor,
+            bilateral_grid=bilateral_grid,
         )
 
     if should_export_ply(
