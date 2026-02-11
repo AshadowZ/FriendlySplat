@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
+from typing import Dict, Mapping, Optional, Tuple
 
 import torch
 
 from friendly_splat.data.dataloader import DataLoader, PreparedBatch
-from friendly_splat.models.bilateral_grid import BilateralGridPostProcessor
-from friendly_splat.models.ppisp import PPISPPostProcessor
+from friendly_splat.models.gaussian import GaussianModel
+from friendly_splat.models.postprocess import PostProcessor, apply_postprocess
 from friendly_splat.renderer.renderer import render_splats
 from friendly_splat.trainer.configs import (
     EvalConfig,
@@ -49,6 +49,29 @@ def _get_eval_metrics(*, device: torch.device, lpips_net: str) -> EvalMetricBund
 @dataclass(frozen=True)
 class EvalOutput:
     stats: Dict[str, float | int]
+
+
+def build_eval_summary(*, eval_step: int, stats: Mapping[str, object]) -> str:
+    lpips_suffix = f" lpips={float(stats['lpips']):.4f}"
+    cc_suffix = ""
+    cc_psnr = stats.get("cc_psnr")
+    cc_ssim = stats.get("cc_ssim")
+    cc_lpips = stats.get("cc_lpips")
+    if cc_psnr is not None and cc_ssim is not None and cc_lpips is not None:
+        cc_suffix = (
+            f" cc_psnr={float(cc_psnr):.3f}"
+            f" cc_ssim={float(cc_ssim):.4f}"
+            f" cc_lpips={float(cc_lpips):.4f}"
+        )
+    return (
+        "eval "
+        f"step={int(eval_step) + 1} "
+        f"psnr={float(stats['psnr']):.3f} "
+        f"ssim={float(stats['ssim']):.4f}"
+        f"{lpips_suffix} "
+        f"{cc_suffix} "
+        f"sec/img={float(stats['seconds_per_image']):.4f}"
+    )
 
 
 def should_run_evaluation(*, eval_cfg: EvalConfig, step: int) -> bool:
@@ -97,18 +120,13 @@ def run_evaluation(
     cfg: TrainConfig,
     step: int,
     eval_loader: DataLoader,
-    splats: torch.nn.ParameterDict,
-    bilagrid: Optional[BilateralGridPostProcessor] = None,
-    ppisp: Optional[PPISPPostProcessor] = None,
+    gaussian_model: GaussianModel,
+    postprocessor: Optional[PostProcessor] = None,
 ) -> EvalOutput:
-    # Import inside function to avoid circular import:
-    # step_runtime imports eval_runtime for scheduling/dispatch.
-    from friendly_splat.trainer.step_runtime import apply_postprocess, postprocess_enabled
-
     max_images = cfg.eval.max_images
     active_sh_degree = _active_sh_degree_for_step(step=int(step), optim_cfg=cfg.optim)
     eval_metrics = _get_eval_metrics(
-        device=splats["means"].device,
+        device=gaussian_model.device,
         lpips_net=str(cfg.eval.lpips_net),
     )
 
@@ -120,7 +138,7 @@ def run_evaluation(
     total_cc_lpips = 0.0
     total_images = 0
     compute_cc_metrics = bool(cfg.eval.compute_cc_metrics) and (
-        bool(cfg.postprocess.use_bilateral_grid) or bool(cfg.postprocess.use_ppisp)
+        postprocessor is not None
     )
 
     tic = time.time()
@@ -139,7 +157,7 @@ def run_evaluation(
                 batch_size = remaining
 
         out = render_splats(
-            splats=splats,
+            splats=gaussian_model.splats,
             camtoworlds=prepared_batch.camtoworlds,
             Ks=prepared_batch.Ks,
             width=int(prepared_batch.width),
@@ -153,14 +171,11 @@ def run_evaluation(
         )
         pred_rgb = out.pred_rgb
 
-        if postprocess_enabled(cfg.postprocess):
-            pred_rgb = apply_postprocess(
-                pred_rgb=pred_rgb,
-                image_ids=prepared_batch.image_ids,
-                postprocess_cfg=cfg.postprocess,
-                bilagrid=bilagrid,
-                ppisp=ppisp,
-            )
+        pred_rgb = apply_postprocess(
+            pred_rgb=pred_rgb,
+            image_ids=prepared_batch.image_ids,
+            postprocessor=postprocessor,
+        )
 
         pred_rgb = pred_rgb.clamp(0.0, 1.0)
         target_rgb = prepared_batch.pixels
@@ -200,7 +215,7 @@ def run_evaluation(
         "lpips": float(total_lpips / float(total_images)),
         "seconds_per_image": float(elapsed / float(total_images)),
         "num_eval_images": int(total_images),
-        "num_gaussians": int(splats["means"].shape[0]),
+        "num_gaussians": int(gaussian_model.num_gaussians),
         "active_sh_degree": int(active_sh_degree),
     }
     if compute_cc_metrics:

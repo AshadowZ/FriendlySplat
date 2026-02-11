@@ -1,54 +1,33 @@
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Optional
+from typing import Optional
 
 import torch
 
 from friendly_splat.data.dataloader import DataLoader, PreparedBatch
-from friendly_splat.models.bilateral_grid import BilateralGridPostProcessor
 from friendly_splat.models.camera_opt import CameraOptModule, apply_pose_adjust
-from friendly_splat.models.ppisp import PPISPPostProcessor
+from friendly_splat.models.gaussian import GaussianModel
+from friendly_splat.models.postprocess import (
+    PostProcessor,
+    apply_postprocess,
+    get_postprocess_regularizer,
+)
 from friendly_splat.renderer.renderer import RenderOutput, render_splats
 from friendly_splat.trainer.configs import (
     OptimConfig,
-    PostprocessConfig,
     RegConfig,
     TrainConfig,
 )
-from friendly_splat.trainer.eval_runtime import run_evaluation, should_run_evaluation
+from friendly_splat.trainer.eval_runtime import (
+    EvalOutput,
+    build_eval_summary,
+    run_evaluation,
+    should_run_evaluation,
+)
 from friendly_splat.trainer.io_utils import save_eval_stats
 from friendly_splat.trainer.losses import LossOutput, compute_losses
 from friendly_splat.trainer.step_schedule import StepSchedule, compute_step_schedule
 from gsplat.strategy.natural_selection import NaturalSelectionPolicy
-
-
-def postprocess_enabled(postprocess_cfg: PostprocessConfig) -> bool:
-    return bool(postprocess_cfg.use_bilateral_grid) or bool(postprocess_cfg.use_ppisp)
-
-
-def apply_postprocess(
-    *,
-    pred_rgb: torch.Tensor,
-    image_ids: Optional[torch.Tensor],
-    postprocess_cfg: PostprocessConfig,
-    bilagrid: Optional[BilateralGridPostProcessor] = None,
-    ppisp: Optional[PPISPPostProcessor] = None,
-) -> torch.Tensor:
-    if image_ids is None:
-        raise KeyError("Postprocess requires `image_id` in the batch.")
-
-    out_rgb = pred_rgb
-    if postprocess_cfg.use_bilateral_grid:
-        if bilagrid is None:
-            raise RuntimeError(
-                "use_bilateral_grid=True but bilagrid is not initialized."
-            )
-        out_rgb = bilagrid.apply(rgb=out_rgb, image_ids=image_ids)
-    elif postprocess_cfg.use_ppisp:
-        if ppisp is None:
-            raise RuntimeError("use_ppisp=True but ppisp is not initialized.")
-        out_rgb = ppisp.apply(rgb=out_rgb, image_ids=image_ids)
-    return out_rgb
 
 
 def build_step_schedule_from_prepared_batch(
@@ -105,16 +84,14 @@ def prepare_training_batch(
 def render_from_prepared_batch(
     *,
     prepared_batch: PreparedBatch,
-    splats: torch.nn.ParameterDict,
+    gaussian_model: GaussianModel,
     optim_cfg: OptimConfig,
-    postprocess_cfg: PostprocessConfig,
     schedule: StepSchedule,
     absgrad: bool = False,
-    bilagrid: Optional[BilateralGridPostProcessor] = None,
-    ppisp: Optional[PPISPPostProcessor] = None,
+    postprocessor: Optional[PostProcessor] = None,
 ) -> RenderOutput:
     out = render_splats(
-        splats=splats,
+        splats=gaussian_model.splats,
         camtoworlds=prepared_batch.camtoworlds,
         Ks=prepared_batch.Ks,
         width=int(prepared_batch.width),
@@ -130,14 +107,11 @@ def render_from_prepared_batch(
     alphas = out.alphas
     image_ids = prepared_batch.image_ids
 
-    if postprocess_enabled(postprocess_cfg):
-        pred_rgb = apply_postprocess(
-            pred_rgb=pred_rgb,
-            image_ids=image_ids,
-            postprocess_cfg=postprocess_cfg,
-            bilagrid=bilagrid,
-            ppisp=ppisp,
-        )
+    pred_rgb = apply_postprocess(
+        pred_rgb=pred_rgb,
+        image_ids=image_ids,
+        postprocessor=postprocessor,
+    )
 
     if optim_cfg.random_bkgd:
         bkgd = torch.rand((pred_rgb.shape[0], 3), device=pred_rgb.device)
@@ -156,14 +130,12 @@ def render_from_prepared_batch(
 def compute_losses_from_prepared_batch_and_render(
     *,
     reg_cfg: RegConfig,
-    postprocess_cfg: PostprocessConfig,
     schedule: StepSchedule,
     step: int,
     prepared_batch: PreparedBatch,
     render_out: RenderOutput,
-    splats: torch.nn.ParameterDict,
-    bilagrid: Optional[BilateralGridPostProcessor] = None,
-    ppisp: Optional[PPISPPostProcessor] = None,
+    gaussian_model: GaussianModel,
+    postprocessor: Optional[PostProcessor] = None,
     gns: Optional[NaturalSelectionPolicy] = None,
 ) -> LossOutput:
     do_depth_reg = bool(schedule.do_depth_reg)
@@ -190,46 +162,30 @@ def compute_losses_from_prepared_batch_and_render(
         normal_prior=prepared_batch.normal_prior,
         dynamic_mask=prepared_batch.dynamic_mask,
         sky_mask=prepared_batch.sky_mask,
-        splats=splats,
+        gaussian_model=gaussian_model,
         Ks=prepared_batch.Ks,
     )
 
-    device = base.total.device
     total = base.total
     items = dict(base.items)
 
     # Postprocess-specific regularizers.
-    bilagrid_tv = torch.tensor(0.0, device=device)
-    if postprocess_cfg.use_bilateral_grid:
-        if bilagrid is None:
-            raise RuntimeError(
-                "use_bilateral_grid=True but bilagrid is not initialized."
-            )
-        image_ids = prepared_batch.image_ids
-        if image_ids is None:
-            raise KeyError("Bilateral grid loss requires `image_id` in the batch.")
-        bilagrid_tv = bilagrid.tv_loss(image_ids=image_ids)
-        total = total + float(postprocess_cfg.bilateral_grid_tv_weight) * bilagrid_tv
-    items["bilagrid_tv"] = bilagrid_tv.detach()
-
-    ppisp_reg = torch.tensor(0.0, device=device)
-    if postprocess_cfg.use_ppisp:
-        if ppisp is None:
-            raise RuntimeError("use_ppisp=True but ppisp is not initialized.")
-        ppisp_reg = ppisp.reg_loss()
-        total = total + float(postprocess_cfg.ppisp_reg_weight) * ppisp_reg
-    items["ppisp_reg"] = ppisp_reg.detach()
+    regularizer = get_postprocess_regularizer(
+        postprocessor=postprocessor,
+        image_ids=prepared_batch.image_ids,
+    )
+    if regularizer is not None:
+        total = total + regularizer.value
+        items[regularizer.name] = regularizer.value.detach()
 
     # Optional GNS regularizer.
     # Active only during the configured GNS pruning window.
     # It pushes opacities down over time so low-contribution Gaussians can be pruned.
-    gns_reg = torch.tensor(0.0, device=device)
     if gns is not None:
-        reg = gns.compute_regularizer(step=step, params=splats)
+        reg = gns.compute_regularizer(step=step, params=gaussian_model.splats)
         if reg is not None:
-            gns_reg = reg
-            total = total + gns_reg
-    items["gns"] = gns_reg.detach()
+            total = total + reg
+            items["gns"] = reg.detach()
 
     items["total"] = total.detach()
     return LossOutput(total=total, items=items)
@@ -240,14 +196,12 @@ def maybe_run_evaluation_for_step(
     step: int,
     train_cfg: TrainConfig,
     eval_loader: Optional[DataLoader],
-    splats: torch.nn.ParameterDict,
-    bilagrid: Optional[BilateralGridPostProcessor] = None,
-    ppisp: Optional[PPISPPostProcessor] = None,
-    on_eval_complete: Optional[Callable[[int, Dict[str, float | int]], None]] = None,
-) -> Optional[str]:
+    gaussian_model: GaussianModel,
+    postprocessor: Optional[PostProcessor] = None,
+) -> Optional[EvalOutput]:
     """Run evaluation for the current step when configured and due.
 
-    Returns a short human-readable summary string when evaluation runs, else None.
+    Returns eval output when evaluation runs, else None.
     """
     if not should_run_evaluation(eval_cfg=train_cfg.eval, step=int(step)):
         return None
@@ -258,9 +212,8 @@ def maybe_run_evaluation_for_step(
         cfg=train_cfg,
         step=int(step),
         eval_loader=eval_loader,
-        splats=splats,
-        bilagrid=bilagrid,
-        ppisp=ppisp,
+        gaussian_model=gaussian_model,
+        postprocessor=postprocessor,
     )
     save_eval_stats(
         io_cfg=train_cfg.io,
@@ -268,58 +221,12 @@ def maybe_run_evaluation_for_step(
         step=int(step),
         stats=eval_output.stats,
     )
-    if on_eval_complete is not None:
-        on_eval_complete(int(step), eval_output.stats)
-    lpips_suffix = ""
-    lpips_value = eval_output.stats.get("lpips")
-    if lpips_value is not None:
-        lpips_suffix = f" lpips={float(lpips_value):.4f}"
-    cc_suffix = ""
-    cc_psnr = eval_output.stats.get("cc_psnr")
-    cc_ssim = eval_output.stats.get("cc_ssim")
-    cc_lpips = eval_output.stats.get("cc_lpips")
-    if cc_psnr is not None and cc_ssim is not None and cc_lpips is not None:
-        cc_suffix = (
-            f" cc_psnr={float(cc_psnr):.3f}"
-            f" cc_ssim={float(cc_ssim):.4f}"
-            f" cc_lpips={float(cc_lpips):.4f}"
-        )
-    return (
-        "eval "
-        f"step={int(step) + 1} "
-        f"psnr={eval_output.stats['psnr']:.3f} "
-        f"ssim={eval_output.stats['ssim']:.4f}"
-        f"{lpips_suffix} "
-        f"{cc_suffix} "
-        f"sec/img={eval_output.stats['seconds_per_image']:.4f}"
+    eval_step = int(eval_output.stats.get("step", int(step)))
+    print(
+        build_eval_summary(
+            eval_step=eval_step,
+            stats=eval_output.stats,
+        ),
+        flush=True,
     )
-
-
-def maybe_log_training_scalars_for_step(
-    *,
-    step: int,
-    device: torch.device,
-    splats: torch.nn.ParameterDict,
-    loss_output: LossOutput,
-    optimizer_coordinator: Any,
-    tb_runtime: Any,
-) -> None:
-    """Collect and write training scalars to TensorBoard (if enabled)."""
-    means_opt = optimizer_coordinator.splat_optimizers.get("means")
-    lr_means = None
-    if means_opt is not None and len(means_opt.param_groups) > 0:
-        lr_value = means_opt.param_groups[0].get("lr")
-        if isinstance(lr_value, (int, float)):
-            lr_means = float(lr_value)
-
-    mem_gb = None
-    if bool(tb_runtime.enabled) and bool(tb_runtime.log_memory) and device.type == "cuda":
-        mem_gb = float(torch.cuda.max_memory_allocated(device=device) / (1024**3))
-
-    tb_runtime.log_train(
-        step=int(step),
-        loss_items=loss_output.items,
-        num_gs=int(splats["means"].shape[0]),
-        lr_means=lr_means,
-        mem_gb=mem_gb,
-    )
+    return eval_output

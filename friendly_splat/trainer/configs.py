@@ -130,8 +130,6 @@ class TensorBoardConfig:
     every_n: int = 100
     # Flush TensorBoard event file every N logged training steps.
     flush_every_n: int = 500
-    # Log CUDA memory usage (GB) under train/mem_gb when CUDA is used.
-    log_memory: bool = True
 
 
 @dataclass(frozen=True)
@@ -395,7 +393,7 @@ def validate_train_config(cfg: TrainConfig) -> None:
         )
 
     if not cfg.viewer.disable_viewer:
-        if not (1 <= int(cfg.viewer.port) <= 65535):
+        if not (1 <= cfg.viewer.port <= 65535):
             raise ValueError(
                 f"viewer.port must be in [1, 65535], got {cfg.viewer.port}"
             )

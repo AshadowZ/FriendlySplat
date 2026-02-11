@@ -16,11 +16,11 @@ import tqdm
 from friendly_splat.viewer.viewer_runtime import ViewerRuntime
 
 from friendly_splat.trainer.builder import build_training_context
+from friendly_splat.trainer.logger import TensorBoardWriter, handle_step_logging
 
 from friendly_splat.trainer.step_runtime import (
     build_step_schedule_from_prepared_batch,
     compute_losses_from_prepared_batch_and_render,
-    maybe_log_training_scalars_for_step,
     maybe_run_evaluation_for_step,
     prepare_training_batch,
     render_from_prepared_batch,
@@ -33,7 +33,7 @@ from friendly_splat.trainer.io_utils import (
     save_train_config_snapshot,
     maybe_save_outputs,
 )
-from friendly_splat.trainer.tb_runtime import TensorBoardRuntime
+
 
 
 class Trainer:
@@ -59,15 +59,13 @@ class Trainer:
         self.eval_dataset = context.eval_dataset
         self.eval_loader = context.eval_loader
         self.gaussian_model = context.gaussian_model
-        self.splats = context.splats
-        self.bilagrid = context.bilagrid
-        self.ppisp = context.ppisp
+        self.postprocessor = context.postprocessor
         self.pose_adjust = context.pose_adjust
         self.natural_selection_policy = context.natural_selection_policy
         self.strategy = context.strategy
         self.strategy_state = context.strategy_state
         self.optimizer_coordinator = context.optimizer_coordinator
-        print(f"Initialized {self.splats['means'].shape[0]} gaussians.")
+        print(f"Initialized {self.gaussian_model.num_gaussians} gaussians.")
 
         torch.backends.cudnn.benchmark = True
 
@@ -77,24 +75,24 @@ class Trainer:
 
     def train(self) -> None:
         cfg = self.cfg
-        splats = self.splats
+        gaussian_model = self.gaussian_model
         eval_loader = self.eval_loader
-        bilagrid = self.bilagrid
-        ppisp = self.ppisp
+        postprocessor = self.postprocessor
         pose_adjust = self.pose_adjust
         strategy = self.strategy
         strategy_state = self.strategy_state
         gns = self.natural_selection_policy
         optimizer_coordinator = self.optimizer_coordinator
         loader_iter = iter(self.loader)
-        tb_runtime = TensorBoardRuntime(io_cfg=cfg.io, tb_cfg=cfg.tb)
+        tb_writer = TensorBoardWriter(io_cfg=cfg.io, tb_cfg=cfg.tb)
 
         viewer_runtime = ViewerRuntime(
-            disable_viewer=bool(cfg.viewer.disable_viewer),
-            port=int(cfg.viewer.port),
+            disable_viewer=cfg.viewer.disable_viewer,
+            port=cfg.viewer.port,
             device=self.device,
-            splats=splats,
+            gaussian_model=gaussian_model,
             output_dir=cfg.io.result_dir,
+            train_dataset=self.dataset,
         )
         self.viewer_runtime = viewer_runtime
         tqdm_update_every = 10
@@ -134,13 +132,11 @@ class Trainer:
             # Render with optional postprocessing.
             render_out = render_from_prepared_batch(
                 prepared_batch=prepared_batch,
-                splats=splats,
+                gaussian_model=gaussian_model,
                 optim_cfg=cfg.optim,
-                postprocess_cfg=cfg.postprocess,
                 schedule=schedule,
                 absgrad=bool(cfg.strategy.absgrad),
-                bilagrid=bilagrid,
-                ppisp=ppisp,
+                postprocessor=postprocessor,
             )
             meta = render_out.meta
             active_sh_degree = render_out.active_sh_degree
@@ -148,14 +144,12 @@ class Trainer:
             # Assemble total loss and per-term loss items.
             loss_output = compute_losses_from_prepared_batch_and_render(
                 reg_cfg=cfg.reg,
-                postprocess_cfg=cfg.postprocess,
                 schedule=schedule,
                 step=step,
                 prepared_batch=prepared_batch,
                 render_out=render_out,
-                splats=splats,
-                bilagrid=bilagrid,
-                ppisp=ppisp,
+                gaussian_model=gaussian_model,
+                postprocessor=postprocessor,
                 gns=gns,
             )
             loss = loss_output.total
@@ -163,7 +157,7 @@ class Trainer:
             # /*-------------------- Backward + Optimizer Step --------------------*/
             # Run pre-backward strategy hooks.
             strategy.step_pre_backward(
-                splats,
+                gaussian_model.splats,
                 optimizer_coordinator.splat_optimizers,
                 strategy_state,
                 step,
@@ -174,12 +168,6 @@ class Trainer:
             optimizer_coordinator.zero_grad()
             loss.backward()
 
-            # Limit tqdm refresh frequency to reduce terminal overhead.
-            if (int(step) % int(tqdm_update_every) == 0) or (
-                int(step) == int(cfg.optim.max_steps) - 1
-            ):
-                pbar.set_description(f"sh degree={active_sh_degree}| ")
-
             optimizer_coordinator.step_all(
                 step=int(step),
                 meta=meta,
@@ -189,7 +177,7 @@ class Trainer:
             # /*-------------------- Strategy Post Update --------------------*/
             # Run post-update densification/pruning hooks.
             strategy.step_post_backward(
-                params=splats,
+                params=gaussian_model.splats,
                 optimizers=optimizer_coordinator.splat_optimizers,
                 state=strategy_state,
                 step=step,
@@ -200,36 +188,10 @@ class Trainer:
             if gns is not None:
                 gns.step_post_update(
                     step=step,
-                    params=splats,
+                    params=gaussian_model.splats,
                     optimizers=optimizer_coordinator.splat_optimizers,
                     strategy_state=strategy_state,
                 )
-
-            # /*-------------------- Outputs / Viewer / Eval --------------------*/
-            # Log training scalars if TensorBoard logging is enabled.
-            maybe_log_training_scalars_for_step(
-                step=int(step),
-                device=self.device,
-                splats=splats,
-                loss_output=loss_output,
-                optimizer_coordinator=optimizer_coordinator,
-                tb_runtime=tb_runtime,
-            )
-
-            # Save configured artifacts (checkpoint / PLY).
-            maybe_save_outputs(
-                io_cfg=cfg.io,
-                pose_cfg=cfg.pose,
-                postprocess_cfg=cfg.postprocess,
-                train_cfg=cfg,
-                step=int(step),
-                max_steps=int(cfg.optim.max_steps),
-                splats=splats,
-                active_sh_degree=int(active_sh_degree),
-                pose_adjust=pose_adjust,
-                bilagrid=bilagrid,
-                ppisp=ppisp,
-            )
 
             # Update viewer statistics and release the step lock.
             viewer_runtime.after_step(
@@ -241,28 +203,46 @@ class Trainer:
                 meta=meta,
             )
 
+            # /*-------------------- Eval / Logging / Outputs --------------------*/
             # Run periodic evaluation and report summary in the progress bar.
-            eval_summary = maybe_run_evaluation_for_step(
+            eval_output = maybe_run_evaluation_for_step(
                 step=int(step),
                 train_cfg=cfg,
                 eval_loader=eval_loader,
-                splats=splats,
-                bilagrid=bilagrid,
-                ppisp=ppisp,
-                on_eval_complete=lambda eval_step, stats: tb_runtime.log_eval(
-                    step=eval_step,
-                    stats=stats,
-                    stage="eval",
-                ),
+                gaussian_model=gaussian_model,
+                postprocessor=postprocessor,
             )
-            if eval_summary is not None:
-                pbar.write(eval_summary)
+            log_payload = handle_step_logging(
+                step=int(step),
+                device=self.device,
+                num_gs=int(gaussian_model.num_gaussians),
+                train_loss_items=loss_output.items,
+                eval_stats=eval_output.stats if eval_output is not None else None,
+                tb_writer=tb_writer,
+            )
+            viewer_runtime.log_payload(payload=log_payload)
+            # Keep tqdm refresh frequency low to reduce terminal overhead.
+            if (int(step) % int(tqdm_update_every) == 0) or (
+                int(step) == int(cfg.optim.max_steps) - 1
+            ):
+                pbar.set_description(f"sh degree={active_sh_degree}| ")
 
-        tb_runtime.close()
+            # Save configured artifacts (checkpoint / PLY).
+            maybe_save_outputs(
+                io_cfg=cfg.io,
+                pose_cfg=cfg.pose,
+                train_cfg=cfg,
+                step=int(step),
+                max_steps=int(cfg.optim.max_steps),
+                gaussian_model=gaussian_model,
+                active_sh_degree=int(active_sh_degree),
+                pose_adjust=pose_adjust,
+                postprocessor=postprocessor,
+            )
+
+        tb_writer.close()
         viewer_runtime.complete()
-        if (not bool(cfg.viewer.disable_viewer)) and bool(
-            cfg.viewer.keep_alive_after_train
-        ):
+        if (not cfg.viewer.disable_viewer) and cfg.viewer.keep_alive_after_train:
             viewer_runtime.keep_alive()
 
 

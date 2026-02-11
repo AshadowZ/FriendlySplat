@@ -6,6 +6,9 @@ git+https://github.com/rahul-goel/fused-ssim@328dc9836f513d00c4b5bc38fe30478b443
 # KNN-based scale initialization used by `friendly_splat/trainer.py`.
 scikit-learn
 
+# Core array dependency used across data/model/viewer runtime paths.
+numpy
+
 # CLI for `friendly_splat/trainer.py` (dataclass-based args).
 tyro>=0.8.8
 
@@ -26,5 +29,6 @@ imageio
 opencv-python
 
 # (Optional) Online viewer used when `--viewer.disable_viewer False`.
+# Note: Eval metric curves use `viser` built-in `uplot` (no extra `plotly` dependency).
 viser
 git+https://github.com/nerfstudio-project/nerfview@4538024fe0d15fd1a0e4d760f3695fc44ca72787

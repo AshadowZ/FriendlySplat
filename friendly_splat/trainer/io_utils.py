@@ -3,16 +3,17 @@ from __future__ import annotations
 import os
 import json
 from dataclasses import asdict
-from typing import Any, Dict, Optional, Set
+from typing import Dict, Optional, Set
 
 import torch
 import yaml
 
+from friendly_splat.models.gaussian import GaussianModel
+from friendly_splat.models.postprocess import PostProcessor
 from friendly_splat.trainer.configs import (
     EvalConfig,
     IOConfig,
     PoseConfig,
-    PostprocessConfig,
     TrainConfig,
 )
 
@@ -85,13 +86,11 @@ def save_checkpoint(
     *,
     train_cfg: TrainConfig,
     pose_cfg: PoseConfig,
-    postprocess_cfg: PostprocessConfig,
     step: int,
-    splats: torch.nn.ParameterDict,
+    gaussian_model: GaussianModel,
     ckpt_dir: str,
     pose_adjust: Optional[torch.nn.Module] = None,
-    bilagrid: Optional[Any] = None,
-    ppisp: Optional[Any] = None,
+    postprocessor: Optional[PostProcessor] = None,
 ) -> str:
     train_step = int(step) + 1  # 1-based step number for user-facing I/O.
     ckpt_path = os.path.join(str(ckpt_dir), f"ckpt_step{train_step:06d}.pt")
@@ -99,14 +98,15 @@ def save_checkpoint(
         "step": int(step),
         "train_step": int(train_step),
         "cfg": asdict(train_cfg),
-        "splats": splats.state_dict(),
+        "splats": gaussian_model.splats_state_dict(),
     }
     if pose_cfg.pose_opt and pose_adjust is not None:
         data["pose_adjust"] = pose_adjust.state_dict()
-    if postprocess_cfg.use_bilateral_grid and bilagrid is not None:
-        data["bilagrid"] = bilagrid.bil_grids.state_dict()  # type: ignore[attr-defined]
-    if postprocess_cfg.use_ppisp and ppisp is not None:
-        data["ppisp"] = ppisp.module.state_dict()
+    if postprocessor is not None:
+        payload = postprocessor.checkpoint_payload()
+        if payload is not None:
+            key, value = payload
+            data[str(key)] = value
 
     torch.save(data, ckpt_path)
     print(f"Saved checkpoint: {ckpt_path}", flush=True)
@@ -130,7 +130,7 @@ def export_ply(
     step: int,
     ply_dir: str,
     ply_format: str,
-    splats: torch.nn.ParameterDict,
+    gaussian_model: GaussianModel,
     active_sh_degree: int,
 ) -> str:
     train_step = int(step) + 1
@@ -139,13 +139,13 @@ def export_ply(
 
     out_path = os.path.join(str(ply_dir), f"splats_step{int(train_step):06d}.ply")
     with torch.no_grad():
-        sh0 = splats["sh0"].detach()
-        shN = splats["shN"].detach()
+        sh0 = gaussian_model.sh0.detach()
+        shN = gaussian_model.shN.detach()
         export_splats(
-            means=splats["means"].detach(),
-            scales=splats["scales"].detach(),  # log-scales (3DGS convention)
-            quats=splats["quats"].detach(),
-            opacities=splats["opacities"].detach(),  # logits (3DGS convention)
+            means=gaussian_model.means.detach(),
+            scales=gaussian_model.log_scales.detach(),  # log-scales (3DGS convention)
+            quats=gaussian_model.quats.detach(),
+            opacities=gaussian_model.opacity_logits.detach(),  # logits (3DGS convention)
             sh0=sh0,
             shN=shN,
             format=str(ply_format),
@@ -159,15 +159,13 @@ def maybe_save_outputs(
     *,
     io_cfg: IOConfig,
     pose_cfg: PoseConfig,
-    postprocess_cfg: PostprocessConfig,
     train_cfg: TrainConfig,
     step: int,
     max_steps: int,
-    splats: torch.nn.ParameterDict,
+    gaussian_model: GaussianModel,
     active_sh_degree: int,
     pose_adjust: Optional[torch.nn.Module] = None,
-    bilagrid: Optional[Any] = None,
-    ppisp: Optional[Any] = None,
+    postprocessor: Optional[PostProcessor] = None,
 ) -> None:
     ckpt_dir = os.path.join(io_cfg.result_dir, "ckpts")
     ply_dir = os.path.join(io_cfg.result_dir, "ply")
@@ -192,13 +190,11 @@ def maybe_save_outputs(
         save_checkpoint(
             train_cfg=train_cfg,
             pose_cfg=pose_cfg,
-            postprocess_cfg=postprocess_cfg,
             step=int(step),
-            splats=splats,
+            gaussian_model=gaussian_model,
             ckpt_dir=ckpt_dir,
             pose_adjust=pose_adjust,
-            bilagrid=bilagrid,
-            ppisp=ppisp,
+            postprocessor=postprocessor,
         )
 
     if should_export_ply(
@@ -210,6 +206,6 @@ def maybe_save_outputs(
             step=int(step),
             ply_dir=ply_dir,
             ply_format=ply_format,
-            splats=splats,
+            gaussian_model=gaussian_model,
             active_sh_degree=int(active_sh_degree),
         )

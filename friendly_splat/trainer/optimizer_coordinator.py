@@ -5,6 +5,7 @@ from typing import Dict, Optional
 
 import torch
 
+from friendly_splat.models.gaussian import GaussianModel
 from friendly_splat.trainer.configs import OptimConfig
 
 from gsplat.strategy.natural_selection import NaturalSelectionPolicy
@@ -14,8 +15,7 @@ from gsplat.strategy.natural_selection import NaturalSelectionPolicy
 class OptimizerBundle:
     splat_optimizers: Dict[str, torch.optim.Optimizer]
     pose_optimizers: list[torch.optim.Optimizer]
-    bilagrid_optimizers: list[torch.optim.Optimizer]
-    ppisp_optimizers: list[torch.optim.Optimizer]
+    postprocess_optimizers: list[torch.optim.Optimizer]
     schedulers: list[object]
 
 
@@ -27,13 +27,13 @@ class OptimizerCoordinator:
         *,
         optim_cfg: OptimConfig,
         device: torch.device,
-        splats: torch.nn.ParameterDict,
+        gaussian_model: GaussianModel,
         optimizers: OptimizerBundle,
         gns: Optional[NaturalSelectionPolicy],
     ) -> None:
         self.optim_cfg = optim_cfg
         self.device = device
-        self.splats = splats
+        self.gaussian_model = gaussian_model
         self.optimizers = optimizers
         self.gns = gns
         self._gns_opacity_visibility: Optional[torch.Tensor] = None
@@ -61,9 +61,7 @@ class OptimizerCoordinator:
             opt.zero_grad(set_to_none=True)
         for opt in self.optimizers.pose_optimizers:
             opt.zero_grad(set_to_none=True)
-        for opt in self.optimizers.bilagrid_optimizers:
-            opt.zero_grad(set_to_none=True)
-        for opt in self.optimizers.ppisp_optimizers:
+        for opt in self.optimizers.postprocess_optimizers:
             opt.zero_grad(set_to_none=True)
 
     def step_all(
@@ -82,7 +80,8 @@ class OptimizerCoordinator:
         - stepping all auxiliary optimizers and schedulers.
         """
         optim_cfg = self.optim_cfg
-        splats = self.splats
+        gaussian_model = self.gaussian_model
+        splat_params = gaussian_model.splat_parameters()
         splat_optimizers = self.optimizers.splat_optimizers
         gns = self.gns
 
@@ -96,7 +95,7 @@ class OptimizerCoordinator:
                 )
             ids = gaussian_ids.to(dtype=torch.int64)
             is_coalesced = int(batch_size) == 1
-            for param in splats.values():
+            for param in splat_params.values():
                 grad = param.grad
                 if grad is None or grad.is_sparse:
                     continue
@@ -110,13 +109,14 @@ class OptimizerCoordinator:
         # Build visibility mask for SelectiveAdam (visible-only updates).
         visibility = None
         if optim_cfg.visible_adam:
+            opacity_logits = gaussian_model.opacity_logits
             if optim_cfg.packed:
                 gaussian_ids = meta.get("gaussian_ids")
                 if not isinstance(gaussian_ids, torch.Tensor):
                     raise KeyError(
                         "meta['gaussian_ids'] missing; required for visible_adam in packed mode."
                     )
-                visibility = torch.zeros_like(splats["opacities"], dtype=torch.bool)
+                visibility = torch.zeros_like(opacity_logits, dtype=torch.bool)
                 visibility.scatter_(0, gaussian_ids.to(dtype=torch.int64), True)
             else:
                 radii = meta.get("radii")
@@ -127,7 +127,7 @@ class OptimizerCoordinator:
                 vis = radii > 0
                 # Handle common shapes: [..., C, N, 2] -> [..., C, N]
                 if vis.dim() >= 2 and int(vis.shape[-1]) != int(
-                    splats["opacities"].shape[0]
+                    opacity_logits.shape[0]
                 ):
                     vis = vis.all(dim=-1)
                 reduce_dims = tuple(range(vis.dim() - 1))
@@ -149,15 +149,16 @@ class OptimizerCoordinator:
                 # During GNS, update *all* opacities regardless of visibility so the global
                 # opacity regularizer can actually push Gaussians below the pruning threshold.
                 if gns_window_active and name == "opacities":
+                    opacity_logits = gaussian_model.opacity_logits
                     if (
                         self._gns_opacity_visibility is None
                         or int(self._gns_opacity_visibility.numel())
-                        != int(splats["opacities"].numel())
+                        != int(opacity_logits.numel())
                         or self._gns_opacity_visibility.device
-                        != splats["opacities"].device
+                        != opacity_logits.device
                     ):
                         self._gns_opacity_visibility = torch.ones_like(
-                            splats["opacities"], dtype=torch.bool
+                            opacity_logits, dtype=torch.bool
                         )
                     opt.step(self._gns_opacity_visibility)
                 else:
@@ -168,9 +169,7 @@ class OptimizerCoordinator:
         # Step non-splat optimizers and then schedulers.
         for opt in self.optimizers.pose_optimizers:
             opt.step()
-        for opt in self.optimizers.bilagrid_optimizers:
-            opt.step()
-        for opt in self.optimizers.ppisp_optimizers:
+        for opt in self.optimizers.postprocess_optimizers:
             opt.step()
         for sch in self.optimizers.schedulers:
             sch.step()
