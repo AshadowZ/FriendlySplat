@@ -8,8 +8,8 @@ from typing import Dict, Optional, Set
 import torch
 import yaml
 
-from friendly_splat.models.gaussian import GaussianModel
-from friendly_splat.models.bilateral_grid import BilateralGridPostProcessor
+from friendly_splat.modules.gaussian import GaussianModel
+from friendly_splat.modules.bilateral_grid import BilateralGridPostProcessor
 from friendly_splat.trainer.configs import (
     EvalConfig,
     IOConfig,

@@ -5,7 +5,7 @@ from typing import Dict, Optional
 
 import torch
 
-from friendly_splat.models.gaussian import GaussianModel
+from friendly_splat.modules.gaussian import GaussianModel
 from friendly_splat.trainer.configs import OptimConfig
 
 from gsplat.strategy.natural_selection import NaturalSelectionPolicy

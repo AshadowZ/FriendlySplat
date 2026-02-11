@@ -18,7 +18,7 @@ import torch
 
 from fused_ssim import fused_ssim
 
-from friendly_splat.models.gaussian import GaussianModel
+from friendly_splat.modules.gaussian import GaussianModel
 from friendly_splat.trainer.configs import RegConfig
 from friendly_splat.utils.common_utils import get_implied_normal_from_depth
 

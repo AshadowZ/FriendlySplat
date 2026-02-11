@@ -8,9 +8,9 @@ import torch
 
 from friendly_splat.data import DataLoader, InputDataset
 from friendly_splat.data.colmap_dataparser import ColmapDataParser
-from friendly_splat.models.bilateral_grid import BilateralGridPostProcessor
-from friendly_splat.models.camera_opt import CameraOptModule
-from friendly_splat.models.gaussian import GaussianModel
+from friendly_splat.modules.bilateral_grid import BilateralGridPostProcessor
+from friendly_splat.modules.gaussian import GaussianModel
+from friendly_splat.modules.pose_opt import PoseOptModule
 from friendly_splat.trainer.configs import (
     DataConfig,
     InitConfig,
@@ -39,7 +39,7 @@ class TrainingContext:
     eval_dataset: Optional[InputDataset]
     eval_loader: Optional[DataLoader]
     gaussian_model: GaussianModel
-    pose_adjust: Optional[CameraOptModule]
+    pose_adjust: Optional[PoseOptModule]
     bilateral_grid: Optional[BilateralGridPostProcessor]
     natural_selection_policy: Optional[NaturalSelectionPolicy]
     strategy: ImprovedStrategy
@@ -132,7 +132,7 @@ def build_optimizer_bundle(
     device: torch.device,
     scene_scale: float,
     gaussian_model: GaussianModel,
-    pose_adjust: Optional[CameraOptModule],
+    pose_adjust: Optional[PoseOptModule],
     bilateral_grid: Optional[BilateralGridPostProcessor],
     bilateral_grid_lr: float,
 ) -> OptimizerBundle:
@@ -286,9 +286,9 @@ def build_training_context(cfg: TrainConfig) -> TrainingContext:
             device=device,
         )
 
-    pose_adjust: Optional[CameraOptModule] = None
+    pose_adjust: Optional[PoseOptModule] = None
     if cfg.pose.pose_opt:
-        pose_adjust = CameraOptModule(n_images).to(device)
+        pose_adjust = PoseOptModule(n_images).to(device)
         pose_adjust.zero_init()
 
     optimizer_bundle = build_optimizer_bundle(

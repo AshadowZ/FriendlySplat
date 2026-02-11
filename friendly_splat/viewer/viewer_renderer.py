@@ -4,7 +4,7 @@ from typing import Any, Callable, Optional
 
 import torch
 
-from friendly_splat.models.gaussian import GaussianModel
+from friendly_splat.modules.gaussian import GaussianModel
 
 try:
     import numpy as np  # type: ignore
@@ -195,7 +195,7 @@ class ViewerRenderer:
             / 255.0
         )
         render_kwargs = dict(
-            splats=self.gaussian_model.splats,
+            gaussian_model=self.gaussian_model,
             camtoworlds=c2w[None],
             Ks=K[None],
             width=width,

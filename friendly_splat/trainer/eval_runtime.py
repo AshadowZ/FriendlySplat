@@ -7,8 +7,8 @@ from typing import Dict, Mapping, Optional, Tuple
 import torch
 
 from friendly_splat.data.dataloader import DataLoader, PreparedBatch
-from friendly_splat.models.bilateral_grid import BilateralGridPostProcessor
-from friendly_splat.models.gaussian import GaussianModel
+from friendly_splat.modules.bilateral_grid import BilateralGridPostProcessor
+from friendly_splat.modules.gaussian import GaussianModel
 from friendly_splat.renderer.renderer import render_splats
 from friendly_splat.trainer.configs import (
     EvalConfig,
@@ -157,7 +157,7 @@ def run_evaluation(
                 batch_size = remaining
 
         out = render_splats(
-            splats=gaussian_model.splats,
+            gaussian_model=gaussian_model,
             camtoworlds=prepared_batch.camtoworlds,
             Ks=prepared_batch.Ks,
             width=int(prepared_batch.width),
