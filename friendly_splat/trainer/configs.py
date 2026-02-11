@@ -326,9 +326,18 @@ class GNSConfig:
 
 @dataclass(frozen=True)
 class StrategyConfig:
-    """Densification strategy config (this repo currently supports improved only)."""
+    """Densification strategy config.
 
-    # ImprovedStrategy parameters (see `gsplat/strategy/improved.py`).
+    The implementation lives in `gsplat.strategy.*`. FriendlySplat selects the
+    concrete strategy via `impl`.
+    """
+
+    # Strategy implementation.
+    impl: Literal["improved", "default"] = "improved"
+
+    # ---------------------------
+    # Shared across strategies
+    # ---------------------------
 
     # Opacity threshold for pruning.
     prune_opa: float = 0.005
@@ -354,6 +363,24 @@ class StrategyConfig:
     verbose: bool = True
     # Which meta key to use for gradients ("means2d" for 3DGS; "gradient_2dgs" for 2DGS).
     key_for_gradient: str = "means2d"
+
+    # ---------------------------
+    # DefaultStrategy-only knobs
+    # ---------------------------
+
+    # 3D scale threshold for grow mode (duplicate vs split decision).
+    grow_scale3d: float = 0.01
+    # 2D projected scale threshold for grow mode.
+    grow_scale2d: float = 0.05
+    # Pause refine for N steps after each opacity reset.
+    pause_refine_after_reset: int = 0
+    # Experimental revised opacity heuristic.
+    revised_opacity: bool = False
+
+    # ---------------------------
+    # ImprovedStrategy-only knobs
+    # ---------------------------
+
     # Maximum number of Gaussians allowed during densification.
     densification_budget: int = 2_500_000
 

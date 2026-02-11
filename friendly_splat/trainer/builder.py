@@ -21,7 +21,7 @@ from friendly_splat.trainer.optimizer_coordinator import (
     OptimizerBundle,
     OptimizerCoordinator,
 )
-from gsplat.strategy import ImprovedStrategy
+from gsplat.strategy import DefaultStrategy, ImprovedStrategy, Strategy
 from gsplat.strategy.natural_selection import (
     NaturalSelectionPolicy,
     auto_gns_reg_interval,
@@ -40,7 +40,7 @@ class TrainingContext:
     pose_adjust: Optional[PoseOptModule]
     bilateral_grid: Optional[BilateralGridPostProcessor]
     natural_selection_policy: Optional[NaturalSelectionPolicy]
-    strategy: ImprovedStrategy
+    strategy: Strategy
     strategy_state: Dict[str, Any]
     optimizer_coordinator: OptimizerCoordinator
 
@@ -197,22 +197,47 @@ def build_training_context(cfg: TrainConfig) -> TrainingContext:
             verbose=bool(cfg.strategy.verbose),
         )
 
-    strategy = ImprovedStrategy(
-        prune_opa=float(cfg.strategy.prune_opa),
-        grow_grad2d=float(cfg.strategy.grow_grad2d),
-        prune_scale3d=float(cfg.strategy.prune_scale3d),
-        prune_scale2d=float(cfg.strategy.prune_scale2d),
-        refine_scale2d_stop_iter=int(cfg.strategy.refine_scale2d_stop_iter),
-        refine_start_iter=int(cfg.strategy.refine_start_iter),
-        refine_stop_iter=int(cfg.strategy.refine_stop_iter),
-        reset_every=int(cfg.strategy.reset_every),
-        refine_every=int(cfg.strategy.refine_every),
-        max_steps=int(cfg.optim.max_steps),
-        absgrad=bool(cfg.strategy.absgrad),
-        verbose=bool(cfg.strategy.verbose),
-        key_for_gradient=str(cfg.strategy.key_for_gradient),
-        budget=int(cfg.strategy.densification_budget),
-    )
+    impl = str(cfg.strategy.impl).strip().lower()
+    if impl == "improved":
+        strategy = ImprovedStrategy(
+            prune_opa=float(cfg.strategy.prune_opa),
+            grow_grad2d=float(cfg.strategy.grow_grad2d),
+            prune_scale3d=float(cfg.strategy.prune_scale3d),
+            prune_scale2d=float(cfg.strategy.prune_scale2d),
+            refine_scale2d_stop_iter=int(cfg.strategy.refine_scale2d_stop_iter),
+            refine_start_iter=int(cfg.strategy.refine_start_iter),
+            refine_stop_iter=int(cfg.strategy.refine_stop_iter),
+            reset_every=int(cfg.strategy.reset_every),
+            refine_every=int(cfg.strategy.refine_every),
+            max_steps=int(cfg.optim.max_steps),
+            absgrad=bool(cfg.strategy.absgrad),
+            verbose=bool(cfg.strategy.verbose),
+            key_for_gradient=str(cfg.strategy.key_for_gradient),
+            budget=int(cfg.strategy.densification_budget),
+        )
+    elif impl == "default":
+        strategy = DefaultStrategy(
+            prune_opa=float(cfg.strategy.prune_opa),
+            grow_grad2d=float(cfg.strategy.grow_grad2d),
+            grow_scale3d=float(cfg.strategy.grow_scale3d),
+            grow_scale2d=float(cfg.strategy.grow_scale2d),
+            prune_scale3d=float(cfg.strategy.prune_scale3d),
+            prune_scale2d=float(cfg.strategy.prune_scale2d),
+            refine_scale2d_stop_iter=int(cfg.strategy.refine_scale2d_stop_iter),
+            refine_start_iter=int(cfg.strategy.refine_start_iter),
+            refine_stop_iter=int(cfg.strategy.refine_stop_iter),
+            reset_every=int(cfg.strategy.reset_every),
+            refine_every=int(cfg.strategy.refine_every),
+            pause_refine_after_reset=int(cfg.strategy.pause_refine_after_reset),
+            absgrad=bool(cfg.strategy.absgrad),
+            revised_opacity=bool(cfg.strategy.revised_opacity),
+            verbose=bool(cfg.strategy.verbose),
+            key_for_gradient=str(cfg.strategy.key_for_gradient),  # type: ignore[arg-type]
+        )
+    else:
+        raise ValueError(
+            f"Unknown strategy.impl={cfg.strategy.impl!r} (expected 'improved' or 'default')."
+        )
     # Strategy sanity requires access to raw splat tensors + the per-splat optimizers.
     strategy.check_sanity(gaussian_model.splats, optimizer_bundle.splat_optimizers)
     strategy_state = strategy.initialize_state(
