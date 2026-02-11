@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import math
 from dataclasses import asdict
 from typing import Dict, Optional, Set
 
@@ -105,19 +106,86 @@ def export_ply(
     ply_format: str,
     gaussian_model: GaussianModel,
     active_sh_degree: int,
+    scene_transform: Optional[torch.Tensor] = None,
 ) -> str:
     train_step = int(step) + 1
 
     from gsplat import export_splats  # noqa: WPS433
 
+    def _rotmat_to_quat_wxyz(rot: torch.Tensor) -> torch.Tensor:
+        """Convert a single 3x3 rotation matrix to a wxyz quaternion."""
+        r = rot.detach().cpu().double()
+        t = float(r[0, 0] + r[1, 1] + r[2, 2])
+        if t > 0.0:
+            s = math.sqrt(t + 1.0) * 2.0
+            w = 0.25 * s
+            x = float(r[2, 1] - r[1, 2]) / s
+            y = float(r[0, 2] - r[2, 0]) / s
+            z = float(r[1, 0] - r[0, 1]) / s
+        elif float(r[0, 0]) > float(r[1, 1]) and float(r[0, 0]) > float(r[2, 2]):
+            s = math.sqrt(1.0 + float(r[0, 0]) - float(r[1, 1]) - float(r[2, 2])) * 2.0
+            w = float(r[2, 1] - r[1, 2]) / s
+            x = 0.25 * s
+            y = float(r[0, 1] + r[1, 0]) / s
+            z = float(r[0, 2] + r[2, 0]) / s
+        elif float(r[1, 1]) > float(r[2, 2]):
+            s = math.sqrt(1.0 + float(r[1, 1]) - float(r[0, 0]) - float(r[2, 2])) * 2.0
+            w = float(r[0, 2] - r[2, 0]) / s
+            x = float(r[0, 1] + r[1, 0]) / s
+            y = 0.25 * s
+            z = float(r[1, 2] + r[2, 1]) / s
+        else:
+            s = math.sqrt(1.0 + float(r[2, 2]) - float(r[0, 0]) - float(r[1, 1])) * 2.0
+            w = float(r[1, 0] - r[0, 1]) / s
+            x = float(r[0, 2] + r[2, 0]) / s
+            y = float(r[1, 2] + r[2, 1]) / s
+            z = 0.25 * s
+        q = torch.tensor([w, x, y, z], dtype=rot.dtype, device=rot.device)
+        return q / torch.linalg.norm(q).clamp(min=1e-12)
+
+    def _quat_mul_wxyz(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+        """Quaternion multiplication in wxyz convention: a ⊗ b."""
+        aw, ax, ay, az = a.unbind(dim=-1)
+        bw, bx, by, bz = b.unbind(dim=-1)
+        w = aw * bw - ax * bx - ay * by - az * bz
+        x = aw * bx + ax * bw + ay * bz - az * by
+        y = aw * by - ax * bz + ay * bw + az * bx
+        z = aw * bz + ax * by - ay * bx + az * bw
+        return torch.stack([w, x, y, z], dim=-1)
+
     out_path = os.path.join(str(ply_dir), f"splats_step{int(train_step):06d}.ply")
     with torch.no_grad():
         sh0 = gaussian_model.sh0.detach()
         shN = gaussian_model.shN.detach()
+
+        means = gaussian_model.means.detach()
+        log_scales = gaussian_model.log_scales.detach()
+        quats = gaussian_model.quats.detach()
+
+        # Default behavior: export PLY in the original (COLMAP) coordinate system.
+        # Training may use `normalize_world_space=True`, which applies a similarity
+        # transform to cameras/points. Checkpoints stay in that normalized space,
+        # but PLY is usually consumed by external tools that expect COLMAP coords.
+        if scene_transform is not None:
+            T = scene_transform.detach().cpu().to(dtype=torch.float64)
+            inv_T = torch.linalg.inv(T).to(device=means.device, dtype=means.dtype)
+            inv_A = inv_T[:3, :3]
+            inv_t = inv_T[:3, 3]
+
+            means = means @ inv_A.T + inv_t
+
+            col_norms = torch.linalg.norm(inv_A, dim=0)
+            length_scale = float(col_norms.mean().item())
+            log_scales = log_scales + float(math.log(max(length_scale, 1e-12)))
+
+            rot = inv_A / float(max(length_scale, 1e-12))
+            q_rot = _rotmat_to_quat_wxyz(rot)
+            quats = _quat_mul_wxyz(q_rot, quats)
+
         export_splats(
-            means=gaussian_model.means.detach(),
-            scales=gaussian_model.log_scales.detach(),  # log-scales (3DGS convention)
-            quats=gaussian_model.quats.detach(),
+            means=means,
+            scales=log_scales,  # log-scales (3DGS convention)
+            quats=quats,
             opacities=gaussian_model.opacity_logits.detach(),  # logits (3DGS convention)
             sh0=sh0,
             shN=shN,
@@ -139,6 +207,7 @@ def maybe_save_outputs(
     active_sh_degree: int,
     pose_adjust: Optional[torch.nn.Module] = None,
     bilateral_grid: Optional[BilateralGridPostProcessor] = None,
+    scene_transform: Optional[torch.Tensor] = None,
 ) -> None:
     ckpt_dir = os.path.join(io_cfg.result_dir, "ckpts")
     ply_dir = os.path.join(io_cfg.result_dir, "ply")
@@ -181,4 +250,5 @@ def maybe_save_outputs(
             ply_format=ply_format,
             gaussian_model=gaussian_model,
             active_sh_degree=int(active_sh_degree),
+            scene_transform=scene_transform,
         )
