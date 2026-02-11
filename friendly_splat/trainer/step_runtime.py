@@ -5,13 +5,9 @@ from typing import Optional
 import torch
 
 from friendly_splat.data.dataloader import DataLoader, PreparedBatch
-from friendly_splat.models.camera_opt import CameraOptModule, apply_pose_adjust
-from friendly_splat.models.gaussian import GaussianModel
-from friendly_splat.models.postprocess import (
-    PostProcessor,
-    apply_postprocess,
-    get_postprocess_regularizer,
-)
+from friendly_splat.modules.bilateral_grid import BilateralGridPostProcessor
+from friendly_splat.modules.gaussian import GaussianModel
+from friendly_splat.modules.pose_opt import PoseOptModule, apply_pose_adjust
 from friendly_splat.renderer.renderer import RenderOutput, render_splats
 from friendly_splat.trainer.configs import (
     OptimConfig,
@@ -24,7 +20,6 @@ from friendly_splat.trainer.eval_runtime import (
     run_evaluation,
     should_run_evaluation,
 )
-from friendly_splat.trainer.io_utils import save_eval_stats
 from friendly_splat.trainer.losses import LossOutput, compute_losses
 from friendly_splat.trainer.step_schedule import StepSchedule, compute_step_schedule
 from gsplat.strategy.natural_selection import NaturalSelectionPolicy
@@ -58,7 +53,7 @@ def prepare_training_batch(
     *,
     prepared_batch: PreparedBatch,
     pose_opt: bool,
-    pose_adjust: Optional[CameraOptModule],
+    pose_adjust: Optional[PoseOptModule],
 ) -> PreparedBatch:
     camtoworlds, camtoworlds_input = apply_pose_adjust(
         camtoworlds=prepared_batch.camtoworlds,
@@ -88,10 +83,10 @@ def render_from_prepared_batch(
     optim_cfg: OptimConfig,
     schedule: StepSchedule,
     absgrad: bool = False,
-    postprocessor: Optional[PostProcessor] = None,
+    bilateral_grid: Optional[BilateralGridPostProcessor] = None,
 ) -> RenderOutput:
     out = render_splats(
-        splats=gaussian_model.splats,
+        gaussian_model=gaussian_model,
         camtoworlds=prepared_batch.camtoworlds,
         Ks=prepared_batch.Ks,
         width=int(prepared_batch.width),
@@ -107,11 +102,10 @@ def render_from_prepared_batch(
     alphas = out.alphas
     image_ids = prepared_batch.image_ids
 
-    pred_rgb = apply_postprocess(
-        pred_rgb=pred_rgb,
-        image_ids=image_ids,
-        postprocessor=postprocessor,
-    )
+    if bilateral_grid is not None:
+        if image_ids is None:
+            raise KeyError("Bilateral grid requires `image_id` in the batch.")
+        pred_rgb = bilateral_grid.apply(rgb=pred_rgb, image_ids=image_ids)
 
     if optim_cfg.random_bkgd:
         bkgd = torch.rand((pred_rgb.shape[0], 3), device=pred_rgb.device)
@@ -135,7 +129,8 @@ def compute_losses_from_prepared_batch_and_render(
     prepared_batch: PreparedBatch,
     render_out: RenderOutput,
     gaussian_model: GaussianModel,
-    postprocessor: Optional[PostProcessor] = None,
+    bilateral_grid: Optional[BilateralGridPostProcessor] = None,
+    bilateral_grid_tv_weight: float = 0.0,
     gns: Optional[NaturalSelectionPolicy] = None,
 ) -> LossOutput:
     do_depth_reg = bool(schedule.do_depth_reg)
@@ -169,14 +164,15 @@ def compute_losses_from_prepared_batch_and_render(
     total = base.total
     items = dict(base.items)
 
-    # Postprocess-specific regularizers.
-    regularizer = get_postprocess_regularizer(
-        postprocessor=postprocessor,
-        image_ids=prepared_batch.image_ids,
-    )
-    if regularizer is not None:
-        total = total + regularizer.value
-        items[regularizer.name] = regularizer.value.detach()
+    # Bilateral-grid TV regularizer (optional).
+    if bilateral_grid is not None:
+        image_ids = prepared_batch.image_ids
+        if image_ids is None:
+            raise KeyError("Bilateral grid loss requires `image_id` in the batch.")
+        reg = bilateral_grid.tv_loss(image_ids=image_ids)
+        weighted = float(bilateral_grid_tv_weight) * reg
+        total = total + weighted
+        items["bilagrid_tv"] = weighted.detach()
 
     # Optional GNS regularizer.
     # Active only during the configured GNS pruning window.
@@ -197,7 +193,7 @@ def maybe_run_evaluation_for_step(
     train_cfg: TrainConfig,
     eval_loader: Optional[DataLoader],
     gaussian_model: GaussianModel,
-    postprocessor: Optional[PostProcessor] = None,
+    bilateral_grid: Optional[BilateralGridPostProcessor] = None,
 ) -> Optional[EvalOutput]:
     """Run evaluation for the current step when configured and due.
 
@@ -213,13 +209,7 @@ def maybe_run_evaluation_for_step(
         step=int(step),
         eval_loader=eval_loader,
         gaussian_model=gaussian_model,
-        postprocessor=postprocessor,
-    )
-    save_eval_stats(
-        io_cfg=train_cfg.io,
-        eval_cfg=train_cfg.eval,
-        step=int(step),
-        stats=eval_output.stats,
+        bilateral_grid=bilateral_grid,
     )
     eval_step = int(eval_output.stats.get("step", int(step)))
     print(

@@ -284,8 +284,8 @@ class DataLoader:
                 None,
                 0,
             ), "preload='cuda' requires num_workers=0 (workers + CUDA tensors)."
-            assert (
-                not bool(self.pin_memory)
+            assert not bool(
+                self.pin_memory
             ), "preload='cuda' is incompatible with pin_memory=True."
             dataset = _PreloadedDataset(dataset, device=device)
 

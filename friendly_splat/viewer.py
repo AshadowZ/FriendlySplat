@@ -9,7 +9,7 @@ import tyro
 
 from friendly_splat.data.colmap_dataparser import ColmapDataParser
 from friendly_splat.data.dataset import InputDataset
-from friendly_splat.models.gaussian import GaussianModel
+from friendly_splat.modules.gaussian import GaussianModel
 from friendly_splat.viewer.viewer_runtime import ViewerRuntime
 
 
@@ -144,7 +144,9 @@ def _parse_ckpt_settings(ckpt_obj: dict[str, Any]) -> ViewerCkptSettings:
 
     optim = cfg.get("optim")
     packed = (
-        _coerce_bool(optim.get("packed", False), False) if isinstance(optim, dict) else False
+        _coerce_bool(optim.get("packed", False), False)
+        if isinstance(optim, dict)
+        else False
     )
     sparse_grad = (
         _coerce_bool(optim.get("sparse_grad", False), False)
@@ -193,7 +195,9 @@ def _parse_ckpt_settings(ckpt_obj: dict[str, Any]) -> ViewerCkptSettings:
         ),
         depth_dir_name=_coerce_optional_str(data_raw.get("depth_dir_name")),
         normal_dir_name=_coerce_optional_str(data_raw.get("normal_dir_name")),
-        dynamic_mask_dir_name=_coerce_optional_str(data_raw.get("dynamic_mask_dir_name")),
+        dynamic_mask_dir_name=_coerce_optional_str(
+            data_raw.get("dynamic_mask_dir_name")
+        ),
         sky_mask_dir_name=_coerce_optional_str(data_raw.get("sky_mask_dir_name")),
     )
     return ViewerCkptSettings(
@@ -273,7 +277,10 @@ def main(cfg: ViewerScriptConfig) -> None:
     if train_dataset is None:
         print("Train camera frustums: disabled (dataset unavailable).", flush=True)
     else:
-        print(f"Train camera frustums: enabled ({len(train_dataset)} train images).", flush=True)
+        print(
+            f"Train camera frustums: enabled ({len(train_dataset)} train images).",
+            flush=True,
+        )
 
     viewer_runtime = ViewerRuntime(
         disable_viewer=False,

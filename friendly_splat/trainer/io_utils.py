@@ -1,24 +1,22 @@
 from __future__ import annotations
 
 import os
-import json
 from dataclasses import asdict
 from typing import Dict, Optional, Set
 
 import torch
 import yaml
 
-from friendly_splat.models.gaussian import GaussianModel
-from friendly_splat.models.postprocess import PostProcessor
+from friendly_splat.modules.gaussian import GaussianModel
+from friendly_splat.modules.bilateral_grid import BilateralGridPostProcessor
 from friendly_splat.trainer.configs import (
-    EvalConfig,
     IOConfig,
     PoseConfig,
     TrainConfig,
 )
 
 
-def init_output_paths(*, io_cfg: IOConfig, eval_cfg: Optional[EvalConfig] = None) -> None:
+def init_output_paths(*, io_cfg: IOConfig) -> None:
     os.makedirs(io_cfg.result_dir, exist_ok=True)
 
     if io_cfg.save_ckpt:
@@ -26,9 +24,6 @@ def init_output_paths(*, io_cfg: IOConfig, eval_cfg: Optional[EvalConfig] = None
 
     if io_cfg.export_ply:
         os.makedirs(os.path.join(io_cfg.result_dir, "ply"), exist_ok=True)
-
-    if eval_cfg is not None and bool(eval_cfg.enable):
-        os.makedirs(os.path.join(io_cfg.result_dir, "stats"), exist_ok=True)
 
 
 def save_train_config_snapshot(
@@ -45,27 +40,6 @@ def save_train_config_snapshot(
             allow_unicode=True,
         )
     print(f"Saved config snapshot: {out_path}", flush=True)
-    return out_path
-
-
-def save_eval_stats(
-    *,
-    io_cfg: IOConfig,
-    eval_cfg: EvalConfig,
-    step: int,
-    stats: Dict[str, float | int],
-) -> str:
-    split = str(eval_cfg.split)
-    train_step = int(step) + 1
-    stats_dir = os.path.join(io_cfg.result_dir, "stats")
-    os.makedirs(stats_dir, exist_ok=True)
-    out_path = os.path.join(stats_dir, f"{split}_step{train_step:06d}.json")
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(stats, f, indent=2, sort_keys=True)
-    history_path = os.path.join(stats_dir, f"{split}_history.jsonl")
-    with open(history_path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(stats, sort_keys=True) + "\n")
-    print(f"Saved eval stats: {out_path}", flush=True)
     return out_path
 
 
@@ -90,7 +64,7 @@ def save_checkpoint(
     gaussian_model: GaussianModel,
     ckpt_dir: str,
     pose_adjust: Optional[torch.nn.Module] = None,
-    postprocessor: Optional[PostProcessor] = None,
+    bilateral_grid: Optional[BilateralGridPostProcessor] = None,
 ) -> str:
     train_step = int(step) + 1  # 1-based step number for user-facing I/O.
     ckpt_path = os.path.join(str(ckpt_dir), f"ckpt_step{train_step:06d}.pt")
@@ -98,15 +72,14 @@ def save_checkpoint(
         "step": int(step),
         "train_step": int(train_step),
         "cfg": asdict(train_cfg),
-        "splats": gaussian_model.splats_state_dict(),
+        # Store splat tensors under canonical keys (means/scales/quats/opacities/sh0/shN).
+        # Use a plain dict to keep `viewer.py` checkpoint loading strict and predictable.
+        "splats": dict(gaussian_model.splats.state_dict().items()),
     }
     if pose_cfg.pose_opt and pose_adjust is not None:
         data["pose_adjust"] = pose_adjust.state_dict()
-    if postprocessor is not None:
-        payload = postprocessor.checkpoint_payload()
-        if payload is not None:
-            key, value = payload
-            data[str(key)] = value
+    if bilateral_grid is not None:
+        data["bilagrid"] = bilateral_grid.bil_grids.state_dict()
 
     torch.save(data, ckpt_path)
     print(f"Saved checkpoint: {ckpt_path}", flush=True)
@@ -165,7 +138,7 @@ def maybe_save_outputs(
     gaussian_model: GaussianModel,
     active_sh_degree: int,
     pose_adjust: Optional[torch.nn.Module] = None,
-    postprocessor: Optional[PostProcessor] = None,
+    bilateral_grid: Optional[BilateralGridPostProcessor] = None,
 ) -> None:
     ckpt_dir = os.path.join(io_cfg.result_dir, "ckpts")
     ply_dir = os.path.join(io_cfg.result_dir, "ply")
@@ -194,7 +167,7 @@ def maybe_save_outputs(
             gaussian_model=gaussian_model,
             ckpt_dir=ckpt_dir,
             pose_adjust=pose_adjust,
-            postprocessor=postprocessor,
+            bilateral_grid=bilateral_grid,
         )
 
     if should_export_ply(

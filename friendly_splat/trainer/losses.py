@@ -18,9 +18,9 @@ import torch
 
 from fused_ssim import fused_ssim
 
-from friendly_splat.models.gaussian import GaussianModel
+from friendly_splat.modules.gaussian import GaussianModel
 from friendly_splat.trainer.configs import RegConfig
-from friendly_splat.utils.common_utils import get_implied_normal_from_depth
+from gsplat.utils import get_implied_normal_from_depth
 
 
 def ssim(img1: torch.Tensor, img2: torch.Tensor) -> torch.Tensor:
@@ -106,6 +106,98 @@ def expected_depth_l1_loss(
     err = torch.where(valid, (ed - gt).abs(), 0.0)
     per_image = err.sum(dim=(1, 2, 3)) / valid.sum(dim=(1, 2, 3)).clamp(min=1)
     return per_image.mean()
+
+
+def photometric_loss(
+    *,
+    pred_rgb: torch.Tensor,
+    gt_rgb: torch.Tensor,
+    valid_mask: torch.Tensor,
+    ssim_lambda: float,
+) -> tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+    """Photometric RGB loss: masked L1 + optional SSIM.
+
+    Args:
+        pred_rgb: Predicted image in [0, 1], shape [B, H, W, 3].
+        gt_rgb: Target image in [0, 1], shape [B, H, W, 3].
+        valid_mask: Boolean mask of valid pixels, shape [B, H, W] (or broadcastable).
+            Pixels where mask=False are ignored for L1, and are replaced with GT for SSIM.
+        ssim_lambda: SSIM weight in [0, 1]. The final loss is:
+            (1 - ssim_lambda) * L1 + ssim_lambda * (1 - SSIM).
+
+    Returns:
+        (rgb_loss, items) where:
+          - rgb_loss is a scalar tensor.
+          - items contains detached scalars: rgb_l1, rgb_ssim, rgb.
+
+    Notes:
+        This implementation averages over **all valid pixels across the batch**
+        (pixel-weighted). Images with more valid pixels contribute proportionally more.
+    """
+    device = gt_rgb.device
+    valid = valid_mask.bool()
+
+    if valid.any():
+        diff = (pred_rgb - gt_rgb).abs()
+        l1 = diff[valid].mean()
+        rgb_for_ssim = torch.where(valid.unsqueeze(-1), pred_rgb, gt_rgb)
+    else:
+        l1 = torch.tensor(0.0, device=device)
+        rgb_for_ssim = gt_rgb
+
+    ssim_lambda = float(ssim_lambda)
+    ssim_term = (
+        ssim_loss(rgb_for_ssim, gt_rgb)
+        if ssim_lambda > 0.0
+        else torch.tensor(0.0, device=device)
+    )
+    rgb_loss = (1.0 - ssim_lambda) * l1 + ssim_lambda * ssim_term
+
+    items: Dict[str, torch.Tensor] = {
+        "rgb_l1": l1.detach(),
+        "rgb_ssim": ssim_term.detach(),
+        "rgb": rgb_loss.detach(),
+    }
+    return rgb_loss, items
+
+
+def sky_transparency_loss(
+    *,
+    alphas: torch.Tensor,
+    sky_mask: torch.Tensor,
+    eps: float = 1e-6,
+) -> torch.Tensor:
+    """Encourage transparency on sky pixels.
+
+    This is the negative log transmittance loss: `-log(1 - alpha)`.
+
+    Args:
+        alphas: Accumulated alpha from rasterization, shape [B, H, W, 1] or [B, H, W].
+        sky_mask: Boolean mask where True indicates sky pixels, shape [B, H, W] or [H, W].
+        eps: Clamp epsilon to avoid log(0).
+
+    Returns:
+        Scalar loss (0 when there are no valid sky pixels).
+    """
+    device = alphas.device
+    mask = sky_mask.bool()
+    if mask.dim() == 2:
+        mask = mask.unsqueeze(0)
+
+    if not bool(mask.any()):
+        return torch.tensor(0.0, device=device)
+
+    if alphas.dim() == 4 and int(alphas.shape[-1]) == 1:
+        acc = alphas[..., 0]
+    elif alphas.dim() == 3:
+        acc = alphas
+    else:
+        raise ValueError(
+            f"alphas must have shape [B,H,W,1] or [B,H,W], got {alphas.shape}"
+        )
+
+    acc = acc.clamp(min=float(eps), max=1.0 - float(eps))
+    return (-torch.log1p(-acc))[mask].mean()
 
 
 def flatness_loss_from_log_scales(log_scales: torch.Tensor) -> torch.Tensor:
@@ -268,47 +360,28 @@ def compute_losses(
         valid_color = valid_color & (~dynamic_mask.bool())
 
     # Photometric RGB loss: masked L1 + optional SSIM.
-    if valid_color.any():
-        diff = (pred_rgb - pixels).abs()
-        l1 = diff[valid_color].mean()
-        rgb_for_ssim = torch.where(valid_color.unsqueeze(-1), pred_rgb, pixels)
-    else:
-        l1 = torch.tensor(0.0, device=device)
-        rgb_for_ssim = pixels
-
-    ssim_term = (
-        ssim_loss(rgb_for_ssim, pixels)
-        if float(reg_cfg.ssim_lambda) > 0.0
-        else torch.tensor(0.0, device=device)
+    rgb_loss, photometric_items = photometric_loss(
+        pred_rgb=pred_rgb,
+        gt_rgb=pixels,
+        valid_mask=valid_color,
+        ssim_lambda=float(reg_cfg.ssim_lambda),
     )
-    rgb_loss = (1.0 - float(reg_cfg.ssim_lambda)) * l1 + float(
-        reg_cfg.ssim_lambda
-    ) * ssim_term
-
     total = rgb_loss
-    items["rgb_l1"] = l1.detach()
-    items["rgb_ssim"] = ssim_term.detach()
-    items["rgb"] = rgb_loss.detach()
+    items.update(photometric_items)
 
     # Sky supervision: encourage transparency on sky pixels.
     sky_loss = torch.tensor(0.0, device=device)
     if float(reg_cfg.sky_loss_weight) > 0.0 and isinstance(sky_mask, torch.Tensor):
-        sky_pixels = sky_mask.bool()
-        if isinstance(dynamic_mask, torch.Tensor):
-            sky_pixels = sky_pixels & (~dynamic_mask.bool())
-        if sky_pixels.any():
-            acc = alphas[..., 0].clamp(min=1e-6, max=1.0 - 1e-6)  # [B,H,W]
-            sky_loss = (-torch.log1p(-acc))[sky_pixels].mean()
-            total = total + float(reg_cfg.sky_loss_weight) * sky_loss
+        sky_loss = sky_transparency_loss(
+            alphas=alphas,
+            sky_mask=sky_mask,
+        )
+        total = total + float(reg_cfg.sky_loss_weight) * sky_loss
         items["sky"] = sky_loss.detach()
 
     # Depth prior supervision.
     depth_loss = torch.tensor(0.0, device=device)
     if do_depth_reg:
-        if not isinstance(depth_prior, torch.Tensor) or expected_depth is None:
-            raise RuntimeError(
-                "do_depth_reg=True requires both depth_prior and expected_depth."
-            )
         valid_depth = valid_color & (alphas[..., 0] > 1e-6)
         depth_loss = expected_depth_l1_loss(
             expected_depth=expected_depth,
@@ -324,10 +397,6 @@ def compute_losses(
     # Rendered normal supervision.
     render_normal_loss = torch.tensor(0.0, device=device)
     if do_render_normal_reg:
-        if not isinstance(normal_prior, torch.Tensor) or render_normals is None:
-            raise RuntimeError(
-                "do_render_normal_reg=True requires both normal_prior and render_normals."
-            )
         render_normal_loss = cosine_normal_loss(
             pred_normals=render_normals,
             gt_normals=normal_prior,
@@ -339,19 +408,11 @@ def compute_losses(
     # Compute depth-implied normals only when needed by downstream terms.
     surf_normals = None
     if do_surf_normal_reg or do_consistency_normal_reg:
-        if expected_depth is None:
-            raise RuntimeError(
-                "do_surf_normal_reg/do_consistency_normal_reg=True requires expected_depth."
-            )
         surf_normals = get_implied_normal_from_depth(expected_depth, Ks)
 
     # Depth-implied normal supervision.
     surf_normal_loss = torch.tensor(0.0, device=device)
     if do_surf_normal_reg:
-        if not isinstance(normal_prior, torch.Tensor):
-            raise RuntimeError("do_surf_normal_reg=True requires normal_prior.")
-        if surf_normals is None:
-            raise RuntimeError("do_surf_normal_reg=True requires surf_normals.")
         surf_normal_loss = cosine_normal_loss(
             pred_normals=surf_normals,
             gt_normals=normal_prior,
@@ -363,10 +424,6 @@ def compute_losses(
     # Normal consistency: rendered normals should match depth-implied normals.
     consistency_normal_loss = torch.tensor(0.0, device=device)
     if do_consistency_normal_reg:
-        if render_normals is None or surf_normals is None:
-            raise RuntimeError(
-                "do_consistency_normal_reg=True requires both render_normals and surf_normals."
-            )
         consistency_normal_loss = cosine_normal_loss(
             pred_normals=render_normals,
             gt_normals=surf_normals,

@@ -4,7 +4,7 @@ from typing import Any, Callable, Optional
 
 import torch
 
-from friendly_splat.models.gaussian import GaussianModel
+from friendly_splat.modules.gaussian import GaussianModel
 
 try:
     import numpy as np  # type: ignore
@@ -22,7 +22,7 @@ except ImportError:  # pragma: no cover
     GsplatRenderTabState = None  # type: ignore[assignment]
 
 try:
-    from friendly_splat.utils.common_utils import get_implied_normal_from_depth
+    from gsplat.utils import get_implied_normal_from_depth
 except ImportError:  # pragma: no cover
     get_implied_normal_from_depth = None  # type: ignore[assignment]
 
@@ -43,7 +43,9 @@ class ViewerRenderer:
         packed: bool = False,
         sparse_grad: bool = False,
         absgrad: bool = False,
-        update_counts_fn: Optional[Callable[[Optional[dict[str, torch.Tensor]]], None]] = None,
+        update_counts_fn: Optional[
+            Callable[[Optional[dict[str, torch.Tensor]]], None]
+        ] = None,
     ) -> None:
         self.device = device
         self.gaussian_model = gaussian_model
@@ -64,13 +66,12 @@ class ViewerRenderer:
         if GsplatRenderTabState is None:
             missing.append("friendly_splat.viewer.gsplat_viewer")
         if get_implied_normal_from_depth is None:
-            missing.append("friendly_splat.utils.common_utils")
+            missing.append("gsplat.utils")
         if render_splats is None:
             missing.append("friendly_splat.renderer.renderer")
         if len(missing) > 0:
             raise ImportError(
-                "Viewer renderer dependencies are missing: "
-                + ", ".join(missing)
+                "Viewer renderer dependencies are missing: " + ", ".join(missing)
             )
 
     def _max_sh_degree_supported(self) -> int:
@@ -96,7 +97,11 @@ class ViewerRenderer:
         np_module: Any,
     ) -> Any:
         if mode == "expected_depth":
-            depth = out.expected_depth[0, ..., 0:1] if out.expected_depth is not None else None
+            depth = (
+                out.expected_depth[0, ..., 0:1]
+                if out.expected_depth is not None
+                else None
+            )
         else:
             median = out.meta.get("render_median")
             depth = median[0] if isinstance(median, torch.Tensor) else None
@@ -195,7 +200,7 @@ class ViewerRenderer:
             / 255.0
         )
         render_kwargs = dict(
-            splats=self.gaussian_model.splats,
+            gaussian_model=self.gaussian_model,
             camtoworlds=c2w[None],
             Ks=K[None],
             width=width,

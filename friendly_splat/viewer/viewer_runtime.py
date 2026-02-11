@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, Mapping, Optional
 
 import torch
 
-from friendly_splat.models.gaussian import GaussianModel
+from friendly_splat.modules.gaussian import GaussianModel
 from friendly_splat.viewer import viewer_panels
 from friendly_splat.viewer.viewer_renderer import ViewerRenderer
 
@@ -41,6 +41,7 @@ if TYPE_CHECKING:
 
 class ViewerRuntime:
     """Runtime controller for viewer lifecycle and camera-frustum interactions."""
+
     _UNIVERSAL_EMPTY_OPTION = "(no data yet)"
 
     def __init__(
@@ -194,9 +195,7 @@ class ViewerRuntime:
         except KeyboardInterrupt:
             return
 
-    def push_eval_metrics(
-        self, *, step: int, stats: dict[str, float | int]
-    ) -> None:
+    def push_eval_metrics(self, *, step: int, stats: dict[str, float | int]) -> None:
         """Record one eval point and refresh viewer plots."""
         if self.viewer is None or self.server is None:
             return
@@ -209,13 +208,16 @@ class ViewerRuntime:
         )
         updated = False
         for metric_name in ("psnr", "ssim", "lpips"):
-            updated = self._log_value_to_history(
-                container=self._metrics_history,
-                key=metric_name,
-                value=stats.get(metric_name),
-                step=train_step,
-                max_len=self.metrics_max_points,
-            ) or updated
+            updated = (
+                self._log_value_to_history(
+                    container=self._metrics_history,
+                    key=metric_name,
+                    value=stats.get(metric_name),
+                    step=train_step,
+                    max_len=self.metrics_max_points,
+                )
+                or updated
+            )
 
         if not updated:
             return
@@ -236,13 +238,16 @@ class ViewerRuntime:
 
         any_updated = False
         for key, raw_value in scalars.items():
-            any_updated = self._log_value_to_history(
-                container=self._scalar_history,
-                key=key,
-                value=raw_value,
-                step=train_step,
-                max_len=self.scalar_max_points,
-            ) or any_updated
+            any_updated = (
+                self._log_value_to_history(
+                    container=self._scalar_history,
+                    key=key,
+                    value=raw_value,
+                    step=train_step,
+                    max_len=self.scalar_max_points,
+                )
+                or any_updated
+            )
 
         if not any_updated:
             return
@@ -250,8 +255,10 @@ class ViewerRuntime:
         self._update_universal_metric_dropdown_options()
         self._refresh_universal_metric_plot()
 
-    def log_payload(self, *, payload: object) -> None:
+    def log_payload(self, *, payload: object | None) -> None:
         """Consume trainer log payload and update viewer plots."""
+        if payload is None:
+            return
         if self.viewer is None or self.server is None:
             return
 
@@ -596,9 +603,7 @@ class ViewerRuntime:
             @client.camera.on_update
             def _(_: Any) -> None:
                 # If user starts dragging after a click-focus, automatically restore all.
-                is_programmatic = (
-                    time.time() <= self._programmatic_camera_update_until
-                )
+                is_programmatic = time.time() <= self._programmatic_camera_update_until
                 self._last_camera_move_time = time.time()
                 if (
                     self._focused_camera_idx is not None
@@ -693,7 +698,9 @@ class ViewerRuntime:
     def _update_counts(self, meta: Optional[dict[str, torch.Tensor]]) -> None:
         if self.viewer is None:
             return
-        self.viewer.render_tab_state.total_gs_count = int(self.gaussian_model.num_gaussians)
+        self.viewer.render_tab_state.total_gs_count = int(
+            self.gaussian_model.num_gaussians
+        )
         if meta is None:
             return
         radii = meta.get("radii")

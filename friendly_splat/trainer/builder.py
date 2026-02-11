@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
@@ -8,15 +7,14 @@ import torch
 
 from friendly_splat.data import DataLoader, InputDataset
 from friendly_splat.data.colmap_dataparser import ColmapDataParser
-from friendly_splat.models.camera_opt import CameraOptModule
-from friendly_splat.models.gaussian import GaussianModel
-from friendly_splat.models.postprocess import PostProcessor, create_postprocessor
+from friendly_splat.modules.bilateral_grid import BilateralGridPostProcessor
+from friendly_splat.modules.gaussian import GaussianModel
+from friendly_splat.modules.pose_opt import PoseOptModule
 from friendly_splat.trainer.configs import (
     DataConfig,
     InitConfig,
     IOConfig,
     OptimConfig,
-    PoseConfig,
     TrainConfig,
 )
 from friendly_splat.trainer.optimizer_coordinator import (
@@ -39,8 +37,8 @@ class TrainingContext:
     eval_dataset: Optional[InputDataset]
     eval_loader: Optional[DataLoader]
     gaussian_model: GaussianModel
-    pose_adjust: Optional[CameraOptModule]
-    postprocessor: Optional[PostProcessor]
+    pose_adjust: Optional[PoseOptModule]
+    bilateral_grid: Optional[BilateralGridPostProcessor]
     natural_selection_policy: Optional[NaturalSelectionPolicy]
     strategy: ImprovedStrategy
     strategy_state: Dict[str, Any]
@@ -58,6 +56,7 @@ def build_dataset_and_loader(
     Infinite sampling is enabled only for the training split.
     """
     device = torch.device(io_cfg.device)
+    # DataParser defines the "scene contract": cameras, points, image paths, and scale.
     dataparser = ColmapDataParser(
         data_dir=io_cfg.data_dir,
         factor=data_cfg.data_factor,
@@ -97,6 +96,7 @@ def build_gaussian_model(
     init_scale = float(init_cfg.init_scale)
     init_opacity = float(init_cfg.init_opacity)
 
+    # Prefer SFM (COLMAP points) init when available; otherwise fall back to random.
     if init_cfg.init_type == "sfm" and int(parsed_scene.points.shape[0]) > 0:
         return GaussianModel.from_sfm(
             points=torch.from_numpy(parsed_scene.points),
@@ -123,120 +123,6 @@ def build_gaussian_model(
     )
 
 
-def build_optimizer_bundle(
-    *,
-    optim_cfg: OptimConfig,
-    batch_size: int,
-    pose_cfg: PoseConfig,
-    world_size: int,
-    device: torch.device,
-    scene_scale: float,
-    gaussian_model: GaussianModel,
-    pose_adjust: Optional[CameraOptModule],
-    postprocessor: Optional[PostProcessor],
-) -> OptimizerBundle:
-    # Scale learning rate based on batch size, reference:
-    # https://www.cs.princeton.edu/~smalladi/blog/2024/01/22/SDEs-ScalingRules/
-    # Note that this would not make the training exactly equivalent, see
-    # https://arxiv.org/pdf/2402.18824v1
-    BS = int(batch_size) * int(world_size)
-    if BS <= 0:
-        raise ValueError(f"batch_size*world_size must be > 0, got {BS}")
-    lr_scale = math.sqrt(float(BS))
-    eps = 1e-15 / lr_scale
-    beta1 = max(0.0, 1.0 - float(BS) * (1.0 - 0.9))
-    beta2 = max(0.0, 1.0 - float(BS) * (1.0 - 0.999))
-    betas = (beta1, beta2)
-
-    def _make_optimizer(param: torch.nn.Parameter, lr: float) -> torch.optim.Optimizer:
-        lr_scaled = float(lr) * lr_scale
-        if optim_cfg.sparse_grad:
-            return torch.optim.SparseAdam(
-                [{"params": param, "lr": lr_scaled}], betas=betas, eps=eps
-            )
-        if optim_cfg.visible_adam:
-            from gsplat.optimizers import SelectiveAdam  # noqa: WPS433
-
-            return SelectiveAdam(
-                [{"params": param, "lr": lr_scaled}], eps=eps, betas=betas
-            )
-
-        # Default: Adam with fused implementation when available.
-        if device.type == "cuda":
-            try:
-                return torch.optim.Adam(
-                    [{"params": param, "lr": lr_scaled}],
-                    eps=eps,
-                    betas=betas,
-                    fused=True,
-                )
-            except TypeError:
-                pass
-        return torch.optim.Adam(
-            [{"params": param, "lr": lr_scaled}], eps=eps, betas=betas
-        )
-
-    scene_scale = float(scene_scale)
-    splat_params = gaussian_model.splat_parameters()
-    splat_optimizers: Dict[str, torch.optim.Optimizer] = {
-        name: _make_optimizer(param, lr)
-        for name, param, lr in [
-            ("means", splat_params["means"], optim_cfg.means_lr * scene_scale),
-            ("scales", splat_params["scales"], optim_cfg.scales_lr),
-            ("quats", splat_params["quats"], optim_cfg.quats_lr),
-            ("opacities", splat_params["opacities"], optim_cfg.opacities_lr),
-        ]
-    }
-    splat_optimizers["sh0"] = _make_optimizer(splat_params["sh0"], optim_cfg.sh0_lr)
-    splat_optimizers["shN"] = _make_optimizer(splat_params["shN"], optim_cfg.shN_lr)
-
-    pose_optimizers: list[torch.optim.Optimizer] = []
-    if pose_cfg.pose_opt:
-        if pose_adjust is None:
-            raise RuntimeError("pose_opt=True but pose_adjust is not initialized.")
-        pose_optimizers = [
-            torch.optim.Adam(
-                pose_adjust.parameters(),
-                lr=float(pose_cfg.pose_opt_lr) * math.sqrt(float(BS)),
-                weight_decay=float(pose_cfg.pose_opt_reg),
-            )
-        ]
-
-    postprocess_optimizers: list[torch.optim.Optimizer] = []
-    if postprocessor is not None:
-        postprocess_optimizers = postprocessor.build_optimizers(
-            batch_size=int(BS),
-        )
-
-    schedulers: list[torch.optim.lr_scheduler.LRScheduler] = []
-    gamma = 0.01 ** (1.0 / float(optim_cfg.max_steps))
-    schedulers.append(
-        torch.optim.lr_scheduler.ExponentialLR(splat_optimizers["means"], gamma=gamma)
-    )
-    if pose_cfg.pose_opt:
-        # Pose optimization ends at 1% of the initial value.
-        if len(pose_optimizers) == 0:
-            raise RuntimeError("pose_opt=True but pose optimizer is not initialized.")
-        gamma = 0.01 ** (1.0 / float(optim_cfg.max_steps))
-        schedulers.append(
-            torch.optim.lr_scheduler.ExponentialLR(pose_optimizers[0], gamma=gamma)
-        )
-    if postprocessor is not None:
-        schedulers.extend(
-            postprocessor.build_schedulers(
-                optimizers=postprocess_optimizers,
-                max_steps=int(optim_cfg.max_steps),
-            )
-        )
-
-    return OptimizerBundle(
-        splat_optimizers=splat_optimizers,
-        pose_optimizers=pose_optimizers,
-        postprocess_optimizers=postprocess_optimizers,
-        schedulers=schedulers,
-    )
-
-
 def build_training_context(cfg: TrainConfig) -> TrainingContext:
     device = torch.device(cfg.io.device)
     dataset, loader = build_dataset_and_loader(
@@ -247,6 +133,7 @@ def build_training_context(cfg: TrainConfig) -> TrainingContext:
     eval_dataset: Optional[InputDataset] = None
     eval_loader: Optional[DataLoader] = None
     if cfg.eval.enable:
+        # Eval split is dataparser-defined (typically "test" / holdout).
         eval_dataset, eval_loader = build_dataset_and_loader(
             io_cfg=cfg.io,
             data_cfg=cfg.data,
@@ -261,38 +148,43 @@ def build_training_context(cfg: TrainConfig) -> TrainingContext:
     parsed_scene = dataset.parsed_scene
     n_images = int(len(parsed_scene.image_names))
 
-    postprocessor = create_postprocessor(
-        use_bilateral_grid=bool(cfg.postprocess.use_bilateral_grid),
-        use_ppisp=bool(cfg.postprocess.use_ppisp),
-        bilateral_grid_shape=tuple(
-            int(x) for x in cfg.postprocess.bilateral_grid_shape
-        ),
-        bilateral_grid_lr=float(cfg.postprocess.bilateral_grid_lr),
-        bilateral_grid_tv_weight=float(cfg.postprocess.bilateral_grid_tv_weight),
-        ppisp_reg_weight=float(cfg.postprocess.ppisp_reg_weight),
-        num_frames=int(n_images),
-        device=device,
-    )
+    bilateral_grid: Optional[BilateralGridPostProcessor] = None
+    if bool(cfg.postprocess.use_bilateral_grid):
+        # Optional post-process module: contributes its own param group(s).
+        bilateral_grid = BilateralGridPostProcessor.create(
+            num_frames=int(n_images),
+            grid_shape=tuple(int(x) for x in cfg.postprocess.bilateral_grid_shape),
+            device=device,
+        )
 
-    pose_adjust: Optional[CameraOptModule] = None
+    pose_adjust: Optional[PoseOptModule] = None
     if cfg.pose.pose_opt:
-        pose_adjust = CameraOptModule(n_images).to(device)
+        # Optional pose module: per-frame learnable adjustment (initialized at identity).
+        pose_adjust = PoseOptModule(n_images).to(device)
         pose_adjust.zero_init()
 
-    optimizer_bundle = build_optimizer_bundle(
+    # Core boundary contract: modules expose *named parameter groups*; trainer owns optimizer policy.
+    param_groups: Dict[str, list[torch.nn.Parameter]] = {}
+    param_groups.update(gaussian_model.get_param_groups())
+    if pose_adjust is not None:
+        param_groups.update(pose_adjust.get_param_groups())
+    if bilateral_grid is not None:
+        param_groups.update(bilateral_grid.get_param_groups())
+
+    # Build optimizers/schedulers from the merged param groups (nerfstudio-style config).
+    optimizer_bundle = OptimizerBundle.build_from_param_groups(
         optim_cfg=cfg.optim,
         batch_size=int(cfg.data.batch_size),
-        pose_cfg=cfg.pose,
         world_size=cfg.world_size,
         device=device,
         scene_scale=float(parsed_scene.scene_scale),
-        gaussian_model=gaussian_model,
-        pose_adjust=pose_adjust,
-        postprocessor=postprocessor,
+        param_groups=param_groups,
+        splat_group_names=set(gaussian_model.get_param_groups().keys()),
     )
 
     natural_selection_policy: Optional[NaturalSelectionPolicy] = None
     if cfg.gns.gns_enable:
+        # GNS regularizes opacity and influences which Gaussians survive/densify.
         gns_reg_interval = auto_gns_reg_interval(num_train_images=len(dataset))
         natural_selection_policy = NaturalSelectionPolicy(
             enable=True,
@@ -321,6 +213,7 @@ def build_training_context(cfg: TrainConfig) -> TrainingContext:
         key_for_gradient=str(cfg.strategy.key_for_gradient),
         budget=int(cfg.strategy.densification_budget),
     )
+    # Strategy sanity requires access to raw splat tensors + the per-splat optimizers.
     strategy.check_sanity(gaussian_model.splats, optimizer_bundle.splat_optimizers)
     strategy_state = strategy.initialize_state(
         scene_scale=float(parsed_scene.scene_scale)
@@ -343,7 +236,7 @@ def build_training_context(cfg: TrainConfig) -> TrainingContext:
         eval_loader=eval_loader,
         gaussian_model=gaussian_model,
         pose_adjust=pose_adjust,
-        postprocessor=postprocessor,
+        bilateral_grid=bilateral_grid,
         natural_selection_policy=natural_selection_policy,
         strategy=strategy,
         strategy_state=strategy_state,

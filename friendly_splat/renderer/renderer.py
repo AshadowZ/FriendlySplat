@@ -5,6 +5,8 @@ from typing import Dict, Literal, Optional
 
 import torch
 
+from friendly_splat.modules.gaussian import GaussianModel
+
 
 @dataclass(frozen=True)
 class RenderOutput:
@@ -18,7 +20,7 @@ class RenderOutput:
 
 def render_splats(
     *,
-    splats: torch.nn.ParameterDict,
+    gaussian_model: GaussianModel,
     camtoworlds: torch.Tensor,
     Ks: torch.Tensor,
     width: int,
@@ -40,18 +42,18 @@ def render_splats(
 
     sh_degree = int(sh_degree)
 
-    if sh_degree == 0:
-        sh_coeffs = splats["sh0"]
-    else:
-        sh_coeffs_full = torch.cat([splats["sh0"], splats["shN"]], dim=1)
-        active_k = (sh_degree + 1) ** 2
-        sh_coeffs = sh_coeffs_full[:, :active_k, :]
+    render_tensors = gaussian_model.to_render_tensors(sh_degree=sh_degree)
+    means = render_tensors["means"]
+    quats = render_tensors["quats"]
+    scales = render_tensors["scales"]
+    opacities = render_tensors["opacities"]
+    sh_coeffs = render_tensors["colors"]
 
     renders, alphas, meta = rasterization(
-        means=splats["means"],
-        quats=splats["quats"],
-        scales=torch.exp(splats["scales"]),
-        opacities=torch.sigmoid(splats["opacities"]),
+        means=means,
+        quats=quats,
+        scales=scales,
+        opacities=opacities,
         colors=sh_coeffs,
         viewmats=torch.linalg.inv(camtoworlds),  # world-to-camera
         Ks=Ks,

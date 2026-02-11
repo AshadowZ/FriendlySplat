@@ -85,30 +85,19 @@ class PoseConfig:
 
     # Whether to optimize per-image camera pose adjustments during training.
     pose_opt: bool = False
-    # Learning rate for pose optimization.
-    pose_opt_lr: float = 1e-5
-    # Weight decay for pose optimization.
-    pose_opt_reg: float = 1e-6
 
 
 @dataclass(frozen=True)
 class PostprocessConfig:
     ## Post-processing modules (experimental).
-    # Bilateral grid and PPISP are mutually exclusive and apply to rendered RGB.
+    # Postprocess modules apply to rendered RGB and help absorb cross-frame photometric drift.
 
     # Whether to enable fused bilateral grid post-processing (requires `fused_bilagrid`).
     use_bilateral_grid: bool = False
     # Bilateral grid resolution (X, Y, W).
     bilateral_grid_shape: Tuple[int, int, int] = (16, 16, 8)
-    # Learning rate for bilateral grid parameters.
-    bilateral_grid_lr: float = 2e-3
     # TV regularization weight for bilateral grid.
     bilateral_grid_tv_weight: float = 10.0
-
-    # Whether to enable PPISP post-processing (requires `ppisp`).
-    use_ppisp: bool = False
-    # Regularization weight for PPISP.
-    ppisp_reg_weight: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -142,30 +131,107 @@ class EvalConfig:
     eval_every_n: int = 1000
     # Optional cap on evaluated images (None means full split).
     max_images: Optional[int] = None
-    # LPIPS backbone for evaluation (aligned with Extended-GS defaults).
+    # LPIPS backbone for evaluation.
     lpips_net: Literal["alex", "vgg"] = "alex"
     # Whether to compute color-corrected metrics (cc_psnr/cc_ssim/cc_lpips).
-    # Effective only when postprocess uses bilateral grid or PPISP.
+    # Effective only when postprocess uses a photometric adapter (e.g. bilateral grid).
     compute_cc_metrics: bool = True
+
+
+@dataclass(frozen=True)
+class AdamOptimizerConfig:
+    lr: float
+    eps: float = 1e-15
+    weight_decay: float = 0.0
+
+
+@dataclass(frozen=True)
+class ExponentialDecaySchedulerConfig:
+    lr_final: float
+    # If None, use `OptimConfig.max_steps`.
+    max_steps: Optional[int] = None
+    warmup_steps: int = 0
+
+
+@dataclass(frozen=True)
+class OptimizerConfigEntry:
+    optimizer: AdamOptimizerConfig
+    scheduler: Optional[ExponentialDecaySchedulerConfig] = None
+    lr_mult_scene_scale: bool = False
+
+
+@dataclass(frozen=True)
+class OptimizersConfig:
+    means: OptimizerConfigEntry = field(
+        default_factory=lambda: OptimizerConfigEntry(
+            optimizer=AdamOptimizerConfig(lr=4e-5),
+            scheduler=ExponentialDecaySchedulerConfig(lr_final=4e-7),
+            lr_mult_scene_scale=True,
+        )
+    )
+    scales: OptimizerConfigEntry = field(
+        default_factory=lambda: OptimizerConfigEntry(
+            optimizer=AdamOptimizerConfig(lr=5e-3),
+            scheduler=None,
+        )
+    )
+    quats: OptimizerConfigEntry = field(
+        default_factory=lambda: OptimizerConfigEntry(
+            optimizer=AdamOptimizerConfig(lr=1e-3),
+            scheduler=None,
+        )
+    )
+    opacities: OptimizerConfigEntry = field(
+        default_factory=lambda: OptimizerConfigEntry(
+            optimizer=AdamOptimizerConfig(lr=5e-2),
+            scheduler=None,
+        )
+    )
+    sh0: OptimizerConfigEntry = field(
+        default_factory=lambda: OptimizerConfigEntry(
+            optimizer=AdamOptimizerConfig(lr=2.5e-3),
+            scheduler=None,
+        )
+    )
+    shN: OptimizerConfigEntry = field(
+        default_factory=lambda: OptimizerConfigEntry(
+            optimizer=AdamOptimizerConfig(lr=2.5e-3 / 20.0),
+            scheduler=None,
+        )
+    )
+    pose_opt: OptimizerConfigEntry = field(
+        default_factory=lambda: OptimizerConfigEntry(
+            optimizer=AdamOptimizerConfig(lr=1e-5, weight_decay=1e-6),
+            scheduler=ExponentialDecaySchedulerConfig(lr_final=1e-7),
+        )
+    )
+    bilateral_grid: OptimizerConfigEntry = field(
+        default_factory=lambda: OptimizerConfigEntry(
+            optimizer=AdamOptimizerConfig(lr=2e-3),
+            scheduler=ExponentialDecaySchedulerConfig(
+                lr_final=1e-4,
+                warmup_steps=1000,
+            ),
+        )
+    )
+
+    def as_dict(self) -> dict[str, OptimizerConfigEntry]:
+        return {
+            "means": self.means,
+            "scales": self.scales,
+            "quats": self.quats,
+            "opacities": self.opacities,
+            "sh0": self.sh0,
+            "shN": self.shN,
+            "pose_opt": self.pose_opt,
+            "bilateral_grid": self.bilateral_grid,
+        }
 
 
 @dataclass(frozen=True)
 class OptimConfig:
     # Number of training steps.
     max_steps: int = 30_000
-
-    # LR for 3D Gaussian means (positions).
-    means_lr: float = 4e-5
-    # LR for Gaussian log-scales.
-    scales_lr: float = 5e-3
-    # LR for Gaussian quaternions (orientation).
-    quats_lr: float = 1e-3
-    # LR for opacity logits.
-    opacities_lr: float = 5e-2
-    # LR for SH band 0.
-    sh0_lr: float = 2.5e-3
-    # LR for higher-order SH coefficients.
-    shN_lr: float = 2.5e-3 / 20.0
 
     # Spherical harmonics configuration.
     # Maximum degree of spherical harmonics for color.
@@ -184,6 +250,9 @@ class OptimConfig:
     sparse_grad: bool = False
     # Use SelectiveAdam to update only visible Gaussians (experimental).
     visible_adam: bool = False
+
+    # Per-parameter-group optimizer/scheduler configuration (nerfstudio-style).
+    optimizers: OptimizersConfig = field(default_factory=OptimizersConfig)
 
 
 @dataclass(frozen=True)
@@ -307,7 +376,7 @@ class TrainConfig:
     gns: GNSConfig = field(default_factory=GNSConfig)
     # Pose optimization / noise configuration.
     pose: PoseConfig = field(default_factory=PoseConfig)
-    # Post-processing configuration (bilateral grid / PPISP).
+    # Post-processing configuration (photometric adapters).
     postprocess: PostprocessConfig = field(default_factory=PostprocessConfig)
     # Online viewer configuration (viser/nerfview).
     viewer: ViewerConfig = field(default_factory=ViewerConfig)
@@ -387,10 +456,6 @@ def validate_train_config(cfg: TrainConfig) -> None:
             "strategy.key_for_gradient must be 'means2d' (3DGS) or 'gradient_2dgs' (2DGS), "
             f"got {cfg.strategy.key_for_gradient!r}"
         )
-    if cfg.postprocess.use_bilateral_grid and cfg.postprocess.use_ppisp:
-        raise ValueError(
-            "postprocess.use_bilateral_grid and postprocess.use_ppisp are mutually exclusive."
-        )
 
     if not cfg.viewer.disable_viewer:
         if not (1 <= cfg.viewer.port <= 65535):
@@ -445,3 +510,32 @@ def validate_train_config(cfg: TrainConfig) -> None:
         raise ValueError(
             f"eval.enable=True requires eval.eval_every_n > 0, got {cfg.eval.eval_every_n}"
         )
+
+    for name, entry in cfg.optim.optimizers.as_dict().items():
+        opt = entry.optimizer
+        if float(opt.lr) <= 0.0:
+            raise ValueError(
+                f"optim.optimizers.{name}.optimizer.lr must be > 0, got {opt.lr}"
+            )
+        if float(opt.eps) <= 0.0:
+            raise ValueError(
+                f"optim.optimizers.{name}.optimizer.eps must be > 0, got {opt.eps}"
+            )
+        if float(opt.weight_decay) < 0.0:
+            raise ValueError(
+                f"optim.optimizers.{name}.optimizer.weight_decay must be >= 0, got {opt.weight_decay}"
+            )
+        sch = entry.scheduler
+        if sch is not None:
+            if float(sch.lr_final) <= 0.0:
+                raise ValueError(
+                    f"optim.optimizers.{name}.scheduler.lr_final must be > 0, got {sch.lr_final}"
+                )
+            if sch.max_steps is not None and int(sch.max_steps) <= 0:
+                raise ValueError(
+                    f"optim.optimizers.{name}.scheduler.max_steps must be > 0, got {sch.max_steps}"
+                )
+            if int(sch.warmup_steps) < 0:
+                raise ValueError(
+                    f"optim.optimizers.{name}.scheduler.warmup_steps must be >= 0, got {sch.warmup_steps}"
+                )

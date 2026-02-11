@@ -1,10 +1,36 @@
 from __future__ import annotations
 
-from typing import Dict, Iterable
+import math
+from typing import Dict
 
 import torch
 
-from friendly_splat.utils.common_utils import knn_distances, logit, rgb_to_sh
+
+def _logit(x: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+    x = x.clamp(float(eps), 1.0 - float(eps))
+    return torch.log(x / (1.0 - x))
+
+
+def _rgb_to_sh(rgb: torch.Tensor) -> torch.Tensor:
+    # Matches gsplat/exporter.py.
+    c0 = 0.28209479177387814
+    return (rgb - 0.5) / c0
+
+
+def _knn_distances(points: torch.Tensor, k: int = 4) -> torch.Tensor:
+    """Return Euclidean KNN distances. Shape [N, k]."""
+    try:
+        from sklearn.neighbors import NearestNeighbors  # type: ignore
+    except Exception as e:  # pragma: no cover
+        raise ImportError(
+            "KNN-based scale initialization requires scikit-learn. "
+            "Install it (e.g. `pip install scikit-learn` or `pip install -r friendly_splat/requirements.txt`)."
+        ) from e
+
+    x_np = points.detach().cpu().numpy()
+    model = NearestNeighbors(n_neighbors=int(k), metric="euclidean").fit(x_np)
+    distances, _indices = model.kneighbors(x_np)
+    return torch.from_numpy(distances).to(points)
 
 
 class GaussianModel(torch.nn.Module):
@@ -52,9 +78,74 @@ class GaussianModel(torch.nn.Module):
     def num_gaussians(self) -> int:
         return int(self.means.shape[0])
 
-    def splats_state_dict(self) -> dict[str, torch.Tensor]:
-        """Return a checkpoint-friendly state dict with canonical splat keys."""
-        return {str(k): v for k, v in self.params.state_dict().items()}
+    @property
+    def scales(self) -> torch.Tensor:
+        """3D Gaussian scales in linear space (exp of log-scales)."""
+        return torch.exp(self.log_scales)
+
+    @property
+    def opacities(self) -> torch.Tensor:
+        """3D Gaussian opacities in [0,1] (sigmoid of logits)."""
+        return torch.sigmoid(self.opacity_logits)
+
+    @property
+    def num_sh_coeffs(self) -> int:
+        """Total number of SH coefficients per Gaussian."""
+        return 1 + int(self.shN.shape[1])
+
+    @property
+    def max_sh_degree(self) -> int:
+        """Maximum SH degree supported by the stored SH coefficients."""
+        total = int(self.num_sh_coeffs)
+        root = math.isqrt(total)
+        if root * root != total:
+            raise ValueError(
+                f"Invalid SH coefficient count: 1+shN={total} is not a perfect square."
+            )
+        max_degree = int(root) - 1
+        if max_degree < 0:
+            raise ValueError(
+                f"Invalid SH coefficient count: 1+shN={total} yields max_degree={max_degree}."
+            )
+        return max_degree
+
+    def sh_coeffs(self, *, sh_degree: int) -> torch.Tensor:
+        """Return SH coefficients sliced to the active SH degree.
+
+        Args:
+            sh_degree: Active SH degree (0 uses only DC term).
+        """
+        sh_degree = int(sh_degree)
+        if sh_degree < 0:
+            raise ValueError(f"sh_degree must be >= 0, got {sh_degree}")
+        if sh_degree > int(self.max_sh_degree):
+            raise ValueError(
+                f"sh_degree={sh_degree} exceeds max_sh_degree={self.max_sh_degree} "
+                f"(num_sh_coeffs={self.num_sh_coeffs})."
+            )
+        if sh_degree == 0:
+            return self.sh0
+        sh_coeffs_full = torch.cat([self.sh0, self.shN], dim=1)
+        active_k = (sh_degree + 1) ** 2
+        return sh_coeffs_full[:, :active_k, :]
+
+    def to_render_tensors(self, *, sh_degree: int) -> dict[str, torch.Tensor]:
+        """Return tensors in the form expected by gsplat rasterization."""
+        return {
+            "means": self.means,
+            "quats": self.quats,
+            "scales": self.scales,
+            "opacities": self.opacities,
+            "colors": self.sh_coeffs(sh_degree=int(sh_degree)),
+        }
+
+    def get_param_groups(self) -> dict[str, list[torch.nn.Parameter]]:
+        """Return named parameter groups for optimizer construction.
+
+        This method intentionally returns only structural information (group name
+        to parameters). Optimizer/scheduler policies live in trainer code.
+        """
+        return {name: [param] for name, param in self.splat_parameters().items()}
 
     def splat_parameters(self) -> dict[str, torch.nn.Parameter]:
         """Return the canonical set of trainable splat parameters."""
@@ -66,12 +157,6 @@ class GaussianModel(torch.nn.Module):
             "sh0": self.sh0,
             "shN": self.shN,
         }
-
-    def iter_splat_parameters(self) -> Iterable[torch.nn.Parameter]:
-        return self.splat_parameters().values()
-
-    def as_parameter_dict(self) -> torch.nn.ParameterDict:
-        return self.params
 
     @classmethod
     def from_sfm(
@@ -144,18 +229,26 @@ class GaussianModel(torch.nn.Module):
         if sh_degree < 0:
             raise ValueError(f"sh_degree must be >= 0, got {sh_degree}")
 
-        # KNN includes self as nearest neighbor. Use K=4 then drop [:, 0].
-        dists = knn_distances(points, k=4)
-        dist2_avg = (dists[:, 1:] ** 2).mean(dim=-1)
-        dist_avg = torch.sqrt(dist2_avg).clamp(min=1e-8)
+        # KNN includes self as nearest neighbor. Use K<=4 then drop [:, 0].
+        if n < 2:
+            dist_avg = torch.ones((n,), device=points.device, dtype=points.dtype)
+        else:
+            k = min(4, n)
+            dists = _knn_distances(points, k=k)
+            neighbor_dists = dists[:, 1:] if k > 1 else dists
+            if int(neighbor_dists.numel()) == 0:
+                dist_avg = torch.ones((n,), device=points.device, dtype=points.dtype)
+            else:
+                dist2_avg = (neighbor_dists**2).mean(dim=-1)
+                dist_avg = torch.sqrt(dist2_avg).clamp(min=1e-8)
         scales = torch.log(dist_avg * float(init_scale)).unsqueeze(-1).repeat(1, 3)
 
         quats = torch.rand((n, 4))
-        opacities = logit(torch.full((n,), float(init_opacity), dtype=torch.float32))
+        opacities = _logit(torch.full((n,), float(init_opacity), dtype=torch.float32))
 
         n_coeff = (sh_degree + 1) ** 2
         sh = torch.zeros((n, n_coeff, 3), dtype=torch.float32)
-        sh[:, 0, :] = rgb_to_sh(rgbs)
+        sh[:, 0, :] = _rgb_to_sh(rgbs)
 
         params: Dict[str, torch.nn.Parameter] = {
             "means": torch.nn.Parameter(points.to(device)),
