@@ -127,7 +127,9 @@ class OptimizerBundle:
                     else int(optim_cfg.max_steps)
                 )
                 if max_steps <= 0:
-                    raise ValueError(f"scheduler.max_steps must be > 0, got {max_steps}")
+                    raise ValueError(
+                        f"scheduler.max_steps must be > 0, got {max_steps}"
+                    )
                 ratio = float(sch_cfg.lr_final) / float(base_lr)
                 gamma = float(ratio) ** (1.0 / float(max_steps))
                 if int(sch_cfg.warmup_steps) > 0:
@@ -289,8 +291,7 @@ class OptimizerCoordinator:
                         self._gns_opacity_visibility is None
                         or int(self._gns_opacity_visibility.numel())
                         != int(opacity_logits.numel())
-                        or self._gns_opacity_visibility.device
-                        != opacity_logits.device
+                        or self._gns_opacity_visibility.device != opacity_logits.device
                     ):
                         self._gns_opacity_visibility = torch.ones_like(
                             opacity_logits, dtype=torch.bool

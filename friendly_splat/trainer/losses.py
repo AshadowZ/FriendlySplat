@@ -192,7 +192,9 @@ def sky_transparency_loss(
     elif alphas.dim() == 3:
         acc = alphas
     else:
-        raise ValueError(f"alphas must have shape [B,H,W,1] or [B,H,W], got {alphas.shape}")
+        raise ValueError(
+            f"alphas must have shape [B,H,W,1] or [B,H,W], got {alphas.shape}"
+        )
 
     acc = acc.clamp(min=float(eps), max=1.0 - float(eps))
     return (-torch.log1p(-acc))[mask].mean()

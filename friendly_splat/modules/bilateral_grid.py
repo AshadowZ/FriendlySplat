@@ -5,7 +5,6 @@ from typing import Any
 import torch
 
 
-
 class BilateralGridPostProcessor(torch.nn.Module):
     """Fused bilateral-grid postprocessor with TV regularization.
 

@@ -5,6 +5,7 @@ from typing import Dict
 
 import torch
 
+
 def _logit(x: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
     x = x.clamp(float(eps), 1.0 - float(eps))
     return torch.log(x / (1.0 - x))

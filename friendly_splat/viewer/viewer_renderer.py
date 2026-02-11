@@ -43,7 +43,9 @@ class ViewerRenderer:
         packed: bool = False,
         sparse_grad: bool = False,
         absgrad: bool = False,
-        update_counts_fn: Optional[Callable[[Optional[dict[str, torch.Tensor]]], None]] = None,
+        update_counts_fn: Optional[
+            Callable[[Optional[dict[str, torch.Tensor]]], None]
+        ] = None,
     ) -> None:
         self.device = device
         self.gaussian_model = gaussian_model
@@ -69,8 +71,7 @@ class ViewerRenderer:
             missing.append("friendly_splat.renderer.renderer")
         if len(missing) > 0:
             raise ImportError(
-                "Viewer renderer dependencies are missing: "
-                + ", ".join(missing)
+                "Viewer renderer dependencies are missing: " + ", ".join(missing)
             )
 
     def _max_sh_degree_supported(self) -> int:
@@ -96,7 +97,11 @@ class ViewerRenderer:
         np_module: Any,
     ) -> Any:
         if mode == "expected_depth":
-            depth = out.expected_depth[0, ..., 0:1] if out.expected_depth is not None else None
+            depth = (
+                out.expected_depth[0, ..., 0:1]
+                if out.expected_depth is not None
+                else None
+            )
         else:
             median = out.meta.get("render_median")
             depth = median[0] if isinstance(median, torch.Tensor) else None

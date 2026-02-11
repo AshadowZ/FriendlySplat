@@ -158,7 +158,9 @@ class Trainer:
                 render_out=render_out,
                 gaussian_model=gaussian_model,
                 bilateral_grid=bilateral_grid,
-                bilateral_grid_tv_weight=float(cfg.postprocess.bilateral_grid_tv_weight),
+                bilateral_grid_tv_weight=float(
+                    cfg.postprocess.bilateral_grid_tv_weight
+                ),
                 gns=gns,
             )
             loss = loss_output.total

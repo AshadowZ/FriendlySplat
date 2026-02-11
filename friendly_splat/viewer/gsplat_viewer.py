@@ -40,6 +40,7 @@ class GsplatRenderTabState(RenderTabState):
 
 class GsplatViewer(Viewer):
     """Viewer for gsplat-style trainers (viser GUI + nerfview tabs)."""
+
     HANDLE_TOTAL_GS_COUNT = "total_gs_count_number"
     HANDLE_RENDERED_GS_COUNT = "rendered_gs_count_number"
     HANDLE_VIEWER_RES_SLIDER = "viewer_res_slider"
@@ -334,11 +335,11 @@ class GsplatViewer(Viewer):
 
     def _after_render(self) -> None:
         # Sync GUI read-only values from state.
-        self._rendering_tab_handles[self.HANDLE_TOTAL_GS_COUNT].value = (
-            self.render_tab_state.total_gs_count
-        )
-        self._rendering_tab_handles[self.HANDLE_RENDERED_GS_COUNT].value = (
-            self.render_tab_state.rendered_gs_count
-        )
+        self._rendering_tab_handles[
+            self.HANDLE_TOTAL_GS_COUNT
+        ].value = self.render_tab_state.total_gs_count
+        self._rendering_tab_handles[
+            self.HANDLE_RENDERED_GS_COUNT
+        ].value = self.render_tab_state.rendered_gs_count
         if self._after_render_hook is not None:
             self._after_render_hook()

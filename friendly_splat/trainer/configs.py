@@ -514,9 +514,13 @@ def validate_train_config(cfg: TrainConfig) -> None:
     for name, entry in cfg.optim.optimizers.as_dict().items():
         opt = entry.optimizer
         if float(opt.lr) <= 0.0:
-            raise ValueError(f"optim.optimizers.{name}.optimizer.lr must be > 0, got {opt.lr}")
+            raise ValueError(
+                f"optim.optimizers.{name}.optimizer.lr must be > 0, got {opt.lr}"
+            )
         if float(opt.eps) <= 0.0:
-            raise ValueError(f"optim.optimizers.{name}.optimizer.eps must be > 0, got {opt.eps}")
+            raise ValueError(
+                f"optim.optimizers.{name}.optimizer.eps must be > 0, got {opt.eps}"
+            )
         if float(opt.weight_decay) < 0.0:
             raise ValueError(
                 f"optim.optimizers.{name}.optimizer.weight_decay must be >= 0, got {opt.weight_decay}"
