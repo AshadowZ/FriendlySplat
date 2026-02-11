@@ -8,9 +8,9 @@ import torch
 
 from friendly_splat.data import DataLoader, InputDataset
 from friendly_splat.data.colmap_dataparser import ColmapDataParser
+from friendly_splat.models.bilateral_grid import BilateralGridPostProcessor
 from friendly_splat.models.camera_opt import CameraOptModule
 from friendly_splat.models.gaussian import GaussianModel
-from friendly_splat.models.postprocess import PostProcessor, create_postprocessor
 from friendly_splat.trainer.configs import (
     DataConfig,
     InitConfig,
@@ -40,7 +40,7 @@ class TrainingContext:
     eval_loader: Optional[DataLoader]
     gaussian_model: GaussianModel
     pose_adjust: Optional[CameraOptModule]
-    postprocessor: Optional[PostProcessor]
+    bilateral_grid: Optional[BilateralGridPostProcessor]
     natural_selection_policy: Optional[NaturalSelectionPolicy]
     strategy: ImprovedStrategy
     strategy_state: Dict[str, Any]
@@ -133,7 +133,8 @@ def build_optimizer_bundle(
     scene_scale: float,
     gaussian_model: GaussianModel,
     pose_adjust: Optional[CameraOptModule],
-    postprocessor: Optional[PostProcessor],
+    bilateral_grid: Optional[BilateralGridPostProcessor],
+    bilateral_grid_lr: float,
 ) -> OptimizerBundle:
     # Scale learning rate based on batch size, reference:
     # https://www.cs.princeton.edu/~smalladi/blog/2024/01/22/SDEs-ScalingRules/
@@ -202,11 +203,15 @@ def build_optimizer_bundle(
             )
         ]
 
-    postprocess_optimizers: list[torch.optim.Optimizer] = []
-    if postprocessor is not None:
-        postprocess_optimizers = postprocessor.build_optimizers(
-            batch_size=int(BS),
-        )
+    bilateral_grid_optimizers: list[torch.optim.Optimizer] = []
+    if bilateral_grid is not None:
+        bilateral_grid_optimizers = [
+            torch.optim.Adam(
+                bilateral_grid.parameters(),
+                lr=float(bilateral_grid_lr) * float(BS) ** 0.5,
+                eps=1e-15,
+            )
+        ]
 
     schedulers: list[torch.optim.lr_scheduler.LRScheduler] = []
     gamma = 0.01 ** (1.0 / float(optim_cfg.max_steps))
@@ -221,18 +226,30 @@ def build_optimizer_bundle(
         schedulers.append(
             torch.optim.lr_scheduler.ExponentialLR(pose_optimizers[0], gamma=gamma)
         )
-    if postprocessor is not None:
-        schedulers.extend(
-            postprocessor.build_schedulers(
-                optimizers=postprocess_optimizers,
-                max_steps=int(optim_cfg.max_steps),
+    if bilateral_grid is not None:
+        if len(bilateral_grid_optimizers) == 0:
+            raise RuntimeError("bilateral_grid=True but bilateral grid optimizer is not initialized.")
+        gamma = 0.01 ** (1.0 / float(optim_cfg.max_steps))
+        schedulers.append(
+            torch.optim.lr_scheduler.ChainedScheduler(
+                [
+                    torch.optim.lr_scheduler.LinearLR(
+                        bilateral_grid_optimizers[0],
+                        start_factor=0.01,
+                        total_iters=1000,
+                    ),
+                    torch.optim.lr_scheduler.ExponentialLR(
+                        bilateral_grid_optimizers[0],
+                        gamma=gamma,
+                    ),
+                ]
             )
         )
 
     return OptimizerBundle(
         splat_optimizers=splat_optimizers,
         pose_optimizers=pose_optimizers,
-        postprocess_optimizers=postprocess_optimizers,
+        postprocess_optimizers=bilateral_grid_optimizers,
         schedulers=schedulers,
     )
 
@@ -261,18 +278,13 @@ def build_training_context(cfg: TrainConfig) -> TrainingContext:
     parsed_scene = dataset.parsed_scene
     n_images = int(len(parsed_scene.image_names))
 
-    postprocessor = create_postprocessor(
-        use_bilateral_grid=bool(cfg.postprocess.use_bilateral_grid),
-        use_ppisp=bool(cfg.postprocess.use_ppisp),
-        bilateral_grid_shape=tuple(
-            int(x) for x in cfg.postprocess.bilateral_grid_shape
-        ),
-        bilateral_grid_lr=float(cfg.postprocess.bilateral_grid_lr),
-        bilateral_grid_tv_weight=float(cfg.postprocess.bilateral_grid_tv_weight),
-        ppisp_reg_weight=float(cfg.postprocess.ppisp_reg_weight),
-        num_frames=int(n_images),
-        device=device,
-    )
+    bilateral_grid: Optional[BilateralGridPostProcessor] = None
+    if bool(cfg.postprocess.use_bilateral_grid):
+        bilateral_grid = BilateralGridPostProcessor.create(
+            num_frames=int(n_images),
+            grid_shape=tuple(int(x) for x in cfg.postprocess.bilateral_grid_shape),
+            device=device,
+        )
 
     pose_adjust: Optional[CameraOptModule] = None
     if cfg.pose.pose_opt:
@@ -288,7 +300,8 @@ def build_training_context(cfg: TrainConfig) -> TrainingContext:
         scene_scale=float(parsed_scene.scene_scale),
         gaussian_model=gaussian_model,
         pose_adjust=pose_adjust,
-        postprocessor=postprocessor,
+        bilateral_grid=bilateral_grid,
+        bilateral_grid_lr=float(cfg.postprocess.bilateral_grid_lr),
     )
 
     natural_selection_policy: Optional[NaturalSelectionPolicy] = None
@@ -343,7 +356,7 @@ def build_training_context(cfg: TrainConfig) -> TrainingContext:
         eval_loader=eval_loader,
         gaussian_model=gaussian_model,
         pose_adjust=pose_adjust,
-        postprocessor=postprocessor,
+        bilateral_grid=bilateral_grid,
         natural_selection_policy=natural_selection_policy,
         strategy=strategy,
         strategy_state=strategy_state,

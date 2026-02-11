@@ -7,8 +7,8 @@ from typing import Dict, Mapping, Optional, Tuple
 import torch
 
 from friendly_splat.data.dataloader import DataLoader, PreparedBatch
+from friendly_splat.models.bilateral_grid import BilateralGridPostProcessor
 from friendly_splat.models.gaussian import GaussianModel
-from friendly_splat.models.postprocess import PostProcessor, apply_postprocess
 from friendly_splat.renderer.renderer import render_splats
 from friendly_splat.trainer.configs import (
     EvalConfig,
@@ -121,7 +121,7 @@ def run_evaluation(
     step: int,
     eval_loader: DataLoader,
     gaussian_model: GaussianModel,
-    postprocessor: Optional[PostProcessor] = None,
+    bilateral_grid: Optional[BilateralGridPostProcessor] = None,
 ) -> EvalOutput:
     max_images = cfg.eval.max_images
     active_sh_degree = _active_sh_degree_for_step(step=int(step), optim_cfg=cfg.optim)
@@ -138,7 +138,7 @@ def run_evaluation(
     total_cc_lpips = 0.0
     total_images = 0
     compute_cc_metrics = bool(cfg.eval.compute_cc_metrics) and (
-        postprocessor is not None
+        bilateral_grid is not None
     )
 
     tic = time.time()
@@ -171,11 +171,11 @@ def run_evaluation(
         )
         pred_rgb = out.pred_rgb
 
-        pred_rgb = apply_postprocess(
-            pred_rgb=pred_rgb,
-            image_ids=prepared_batch.image_ids,
-            postprocessor=postprocessor,
-        )
+        if bilateral_grid is not None:
+            image_ids = prepared_batch.image_ids
+            if image_ids is None:
+                raise KeyError("Bilateral grid requires `image_id` in the batch.")
+            pred_rgb = bilateral_grid.apply(rgb=pred_rgb, image_ids=image_ids)
 
         pred_rgb = pred_rgb.clamp(0.0, 1.0)
         target_rgb = prepared_batch.pixels

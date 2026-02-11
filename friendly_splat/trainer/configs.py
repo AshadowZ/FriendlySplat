@@ -94,7 +94,7 @@ class PoseConfig:
 @dataclass(frozen=True)
 class PostprocessConfig:
     ## Post-processing modules (experimental).
-    # Bilateral grid and PPISP are mutually exclusive and apply to rendered RGB.
+    # Postprocess modules apply to rendered RGB and help absorb cross-frame photometric drift.
 
     # Whether to enable fused bilateral grid post-processing (requires `fused_bilagrid`).
     use_bilateral_grid: bool = False
@@ -104,11 +104,6 @@ class PostprocessConfig:
     bilateral_grid_lr: float = 2e-3
     # TV regularization weight for bilateral grid.
     bilateral_grid_tv_weight: float = 10.0
-
-    # Whether to enable PPISP post-processing (requires `ppisp`).
-    use_ppisp: bool = False
-    # Regularization weight for PPISP.
-    ppisp_reg_weight: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -145,7 +140,7 @@ class EvalConfig:
     # LPIPS backbone for evaluation (aligned with Extended-GS defaults).
     lpips_net: Literal["alex", "vgg"] = "alex"
     # Whether to compute color-corrected metrics (cc_psnr/cc_ssim/cc_lpips).
-    # Effective only when postprocess uses bilateral grid or PPISP.
+    # Effective only when postprocess uses a photometric adapter (e.g. bilateral grid).
     compute_cc_metrics: bool = True
 
 
@@ -307,7 +302,7 @@ class TrainConfig:
     gns: GNSConfig = field(default_factory=GNSConfig)
     # Pose optimization / noise configuration.
     pose: PoseConfig = field(default_factory=PoseConfig)
-    # Post-processing configuration (bilateral grid / PPISP).
+    # Post-processing configuration (photometric adapters).
     postprocess: PostprocessConfig = field(default_factory=PostprocessConfig)
     # Online viewer configuration (viser/nerfview).
     viewer: ViewerConfig = field(default_factory=ViewerConfig)
@@ -386,10 +381,6 @@ def validate_train_config(cfg: TrainConfig) -> None:
         raise ValueError(
             "strategy.key_for_gradient must be 'means2d' (3DGS) or 'gradient_2dgs' (2DGS), "
             f"got {cfg.strategy.key_for_gradient!r}"
-        )
-    if cfg.postprocess.use_bilateral_grid and cfg.postprocess.use_ppisp:
-        raise ValueError(
-            "postprocess.use_bilateral_grid and postprocess.use_ppisp are mutually exclusive."
         )
 
     if not cfg.viewer.disable_viewer:

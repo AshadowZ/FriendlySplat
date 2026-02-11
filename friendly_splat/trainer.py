@@ -59,7 +59,7 @@ class Trainer:
         self.eval_dataset = context.eval_dataset
         self.eval_loader = context.eval_loader
         self.gaussian_model = context.gaussian_model
-        self.postprocessor = context.postprocessor
+        self.bilateral_grid = context.bilateral_grid
         self.pose_adjust = context.pose_adjust
         self.natural_selection_policy = context.natural_selection_policy
         self.strategy = context.strategy
@@ -77,7 +77,7 @@ class Trainer:
         cfg = self.cfg
         gaussian_model = self.gaussian_model
         eval_loader = self.eval_loader
-        postprocessor = self.postprocessor
+        bilateral_grid = self.bilateral_grid
         pose_adjust = self.pose_adjust
         strategy = self.strategy
         strategy_state = self.strategy_state
@@ -136,7 +136,7 @@ class Trainer:
                 optim_cfg=cfg.optim,
                 schedule=schedule,
                 absgrad=bool(cfg.strategy.absgrad),
-                postprocessor=postprocessor,
+                bilateral_grid=bilateral_grid,
             )
             meta = render_out.meta
             active_sh_degree = render_out.active_sh_degree
@@ -149,7 +149,8 @@ class Trainer:
                 prepared_batch=prepared_batch,
                 render_out=render_out,
                 gaussian_model=gaussian_model,
-                postprocessor=postprocessor,
+                bilateral_grid=bilateral_grid,
+                bilateral_grid_tv_weight=float(cfg.postprocess.bilateral_grid_tv_weight),
                 gns=gns,
             )
             loss = loss_output.total
@@ -210,7 +211,7 @@ class Trainer:
                 train_cfg=cfg,
                 eval_loader=eval_loader,
                 gaussian_model=gaussian_model,
-                postprocessor=postprocessor,
+                bilateral_grid=bilateral_grid,
             )
             log_payload = handle_step_logging(
                 step=int(step),
@@ -237,7 +238,7 @@ class Trainer:
                 gaussian_model=gaussian_model,
                 active_sh_degree=int(active_sh_degree),
                 pose_adjust=pose_adjust,
-                postprocessor=postprocessor,
+                bilateral_grid=bilateral_grid,
             )
 
         tb_writer.close()
