@@ -130,14 +130,14 @@ class SSIMMetric:
 
 
 class LPIPSMetric:
-    """Torchmetrics LPIPS wrapper aligned with Extended-GS settings."""
+    """Torchmetrics LPIPS wrapper with common 3DGS evaluation settings."""
 
     def __init__(
         self, *, device: torch.device, net: Literal["alex", "vgg"] = "alex"
     ) -> None:
         if str(net) not in ("alex", "vgg"):
             raise ValueError(f"LPIPS net must be 'alex' or 'vgg', got {net!r}")
-        # Extended-GS uses normalize=True for alex and normalize=False for vgg.
+        # Common convention: normalize=True for alex and normalize=False for vgg.
         normalize = bool(net == "alex")
         with warnings.catch_warnings():
             warnings.filterwarnings(

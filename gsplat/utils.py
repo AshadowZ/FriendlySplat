@@ -1,6 +1,7 @@
 import math
 import struct
 import warnings
+from functools import lru_cache
 
 import numpy as np
 import torch
@@ -229,6 +230,74 @@ def depth_to_normal(
     normals = F.normalize(torch.cross(dx, dy, dim=-1), dim=-1)  # [..., H-2, W-2, 3]
     normals = F.pad(normals, (0, 0, 1, 1, 1, 1), value=0.0)  # [..., H, W, 3]
     return normals
+
+
+@lru_cache(maxsize=16)
+def _pixel_coords_3N(
+    height: int, width: int, device: torch.device, dtype: torch.dtype
+) -> Tensor:
+    """Cached homogeneous pixel coordinates [3, H*W] with +0.5 center offset."""
+    xx, yy = torch.meshgrid(
+        torch.arange(width, device=device, dtype=dtype),
+        torch.arange(height, device=device, dtype=dtype),
+        indexing="xy",
+    )
+    ones = torch.ones_like(xx)
+    return torch.stack((xx + 0.5, yy + 0.5, ones), dim=0).reshape(3, -1)  # [3, N]
+
+
+def get_implied_normal_from_depth(
+    depths_bhw1: Tensor,
+    Ks_b33: Tensor,
+    *,
+    eps: float = 1e-6,
+) -> Tensor:
+    """Compute camera-space surface normals from depth maps and camera intrinsics.
+
+    Args:
+        depths_bhw1: Depth maps in shape [H, W, 1] or [B, H, W, 1].
+        Ks_b33: Camera intrinsics in shape [3, 3] or [B, 3, 3].
+        eps: Normalization epsilon.
+
+    Returns:
+        Camera-space normals in shape [B, H, W, 3]. Border pixels are zero-padded.
+    """
+    if depths_bhw1.dim() == 3:
+        depths_bhw1 = depths_bhw1.unsqueeze(0)
+    if depths_bhw1.dim() != 4 or depths_bhw1.shape[-1] != 1:
+        raise ValueError(
+            f"depths_bhw1 must be [H,W,1] or [B,H,W,1], got {tuple(depths_bhw1.shape)}"
+        )
+
+    B, H, W, _ = depths_bhw1.shape
+    device = depths_bhw1.device
+    dtype = depths_bhw1.dtype
+
+    if Ks_b33.dim() == 2:
+        Ks_b33 = Ks_b33.unsqueeze(0).expand(B, -1, -1)
+    if Ks_b33.dim() != 3 or Ks_b33.shape[0] != B or Ks_b33.shape[-2:] != (3, 3):
+        raise ValueError(
+            f"Ks_b33 must be [3,3] or [B,3,3] with B={B}, got {tuple(Ks_b33.shape)}"
+        )
+
+    if H < 3 or W < 3:
+        return torch.zeros((B, H, W, 3), device=device, dtype=dtype)
+
+    depths_b1hw = depths_bhw1.permute(0, 3, 1, 2).contiguous()  # [B,1,H,W]
+
+    invK = torch.linalg.inv(Ks_b33.to(dtype=dtype))  # [B,3,3]
+    pix_3N = _pixel_coords_3N(int(H), int(W), device, dtype)  # [3, H*W]
+    rays_b3N = torch.matmul(invK, pix_3N)  # [B,3,N]
+    points_b3hw = rays_b3N.view(B, 3, H, W) * depths_b1hw  # [B,3,H,W]
+
+    grad_x = points_b3hw[:, :, 1:-1, 2:] - points_b3hw[:, :, 1:-1, :-2]  # [B,3,H-2,W-2]
+    grad_y = points_b3hw[:, :, 2:, 1:-1] - points_b3hw[:, :, :-2, 1:-1]  # [B,3,H-2,W-2]
+
+    normals_b3hw = -torch.cross(grad_x, grad_y, dim=1)  # [B,3,H-2,W-2]
+    normals_b3hw = F.normalize(normals_b3hw, dim=1, eps=float(eps))
+
+    normals_b3hw = F.pad(normals_b3hw, (1, 1, 1, 1), value=0.0)
+    return normals_b3hw.permute(0, 2, 3, 1).contiguous()
 
 
 def get_projection_matrix(znear, zfar, fovX, fovY, device="cuda"):

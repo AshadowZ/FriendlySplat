@@ -78,17 +78,20 @@ def should_run_evaluation(*, eval_cfg: EvalConfig, step: int) -> bool:
     if not bool(eval_cfg.enable):
         return False
     train_step = int(step) + 1
+    # Eval cadence uses 1-based step numbers for user-facing logs/settings.
     return (int(train_step) % int(eval_cfg.eval_every_n)) == 0
 
 
 def _active_sh_degree_for_step(*, step: int, optim_cfg: OptimConfig) -> int:
     max_sh_degree = int(optim_cfg.sh_degree)
     if int(optim_cfg.sh_degree_interval) > 0:
+        # Progressive SH: start from degree 0 and grow until max_sh_degree.
         return min(max_sh_degree, int(step) // int(optim_cfg.sh_degree_interval))
     return max_sh_degree
 
 
 def _slice_batch(batch: PreparedBatch, n: int) -> PreparedBatch:
+    # Used only when eval.max_images cuts through a batch.
     return PreparedBatch(
         pixels=batch.pixels[:n],
         camtoworlds=batch.camtoworlds[:n],
@@ -114,7 +117,7 @@ def _slice_batch(batch: PreparedBatch, n: int) -> PreparedBatch:
     )
 
 
-@torch.no_grad()
+@torch.inference_mode()
 def run_evaluation(
     *,
     cfg: TrainConfig,
@@ -130,17 +133,22 @@ def run_evaluation(
         lpips_net=str(cfg.eval.lpips_net),
     )
 
-    total_psnr = 0.0
-    total_ssim = 0.0
-    total_lpips = 0.0
-    total_cc_psnr = 0.0
-    total_cc_ssim = 0.0
-    total_cc_lpips = 0.0
+    # Keep accumulators on device to avoid per-batch `.item()` sync stalls.
+    device = gaussian_model.device
+    total_psnr = torch.zeros((), device=device)
+    total_ssim = torch.zeros((), device=device)
+    total_lpips = torch.zeros((), device=device)
+    total_cc_psnr = torch.zeros((), device=device)
+    total_cc_ssim = torch.zeros((), device=device)
+    total_cc_lpips = torch.zeros((), device=device)
     total_images = 0
     compute_cc_metrics = bool(cfg.eval.compute_cc_metrics) and (
         bilateral_grid is not None
     )
 
+    # Synchronize around the timer for accurate seconds/image measurement.
+    if device.type == "cuda":
+        torch.cuda.synchronize(device=device)
     tic = time.time()
 
     for prepared_batch in eval_loader.iter_once():
@@ -174,32 +182,28 @@ def run_evaluation(
         if bilateral_grid is not None:
             image_ids = prepared_batch.image_ids
             if image_ids is None:
+                # Bilateral grid is per-frame; we need frame IDs to pick the right slice.
                 raise KeyError("Bilateral grid requires `image_id` in the batch.")
             pred_rgb = bilateral_grid.apply(rgb=pred_rgb, image_ids=image_ids)
 
+        # Bilateral grid can output out-of-range values.
         pred_rgb = pred_rgb.clamp(0.0, 1.0)
         target_rgb = prepared_batch.pixels
 
-        batch_psnr = float(eval_metrics.psnr(pred_rgb, target_rgb).item())
-        batch_ssim = float(eval_metrics.ssim(pred_rgb, target_rgb).item())
-        batch_lpips = float(eval_metrics.lpips(pred_rgb, target_rgb).item())
-        batch_cc_psnr = 0.0
-        batch_cc_ssim = 0.0
-        batch_cc_lpips = 0.0
+        weight = float(batch_size)
+        total_psnr += eval_metrics.psnr(pred_rgb, target_rgb) * weight
+        total_ssim += eval_metrics.ssim(pred_rgb, target_rgb) * weight
+        total_lpips += eval_metrics.lpips(pred_rgb, target_rgb) * weight
         if compute_cc_metrics:
+            # Color-corrected metrics: solve a per-image photometric warp (heavier).
             cc_pred_rgb = color_correct(pred_rgb, target_rgb)
-            batch_cc_psnr = float(eval_metrics.psnr(cc_pred_rgb, target_rgb).item())
-            batch_cc_ssim = float(eval_metrics.ssim(cc_pred_rgb, target_rgb).item())
-            batch_cc_lpips = float(eval_metrics.lpips(cc_pred_rgb, target_rgb).item())
-
-        total_psnr += batch_psnr * float(batch_size)
-        total_ssim += batch_ssim * float(batch_size)
-        total_lpips += batch_lpips * float(batch_size)
-        total_cc_psnr += batch_cc_psnr * float(batch_size)
-        total_cc_ssim += batch_cc_ssim * float(batch_size)
-        total_cc_lpips += batch_cc_lpips * float(batch_size)
+            total_cc_psnr += eval_metrics.psnr(cc_pred_rgb, target_rgb) * weight
+            total_cc_ssim += eval_metrics.ssim(cc_pred_rgb, target_rgb) * weight
+            total_cc_lpips += eval_metrics.lpips(cc_pred_rgb, target_rgb) * weight
         total_images += int(batch_size)
 
+    if device.type == "cuda":
+        torch.cuda.synchronize(device=device)
     elapsed = max(time.time() - tic, 1e-10)
 
     if total_images <= 0:
@@ -210,16 +214,16 @@ def run_evaluation(
     stats: Dict[str, float | int] = {
         "step": int(step),
         "train_step": int(step) + 1,
-        "psnr": float(total_psnr / float(total_images)),
-        "ssim": float(total_ssim / float(total_images)),
-        "lpips": float(total_lpips / float(total_images)),
+        "psnr": float((total_psnr / float(total_images)).item()),
+        "ssim": float((total_ssim / float(total_images)).item()),
+        "lpips": float((total_lpips / float(total_images)).item()),
         "seconds_per_image": float(elapsed / float(total_images)),
         "num_eval_images": int(total_images),
         "num_gaussians": int(gaussian_model.num_gaussians),
         "active_sh_degree": int(active_sh_degree),
     }
     if compute_cc_metrics:
-        stats["cc_psnr"] = float(total_cc_psnr / float(total_images))
-        stats["cc_ssim"] = float(total_cc_ssim / float(total_images))
-        stats["cc_lpips"] = float(total_cc_lpips / float(total_images))
+        stats["cc_psnr"] = float((total_cc_psnr / float(total_images)).item())
+        stats["cc_ssim"] = float((total_cc_ssim / float(total_images)).item())
+        stats["cc_lpips"] = float((total_cc_lpips / float(total_images)).item())
     return EvalOutput(stats=stats)

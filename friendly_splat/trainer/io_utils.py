@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import json
 from dataclasses import asdict
 from typing import Dict, Optional, Set
 
@@ -11,14 +10,13 @@ import yaml
 from friendly_splat.modules.gaussian import GaussianModel
 from friendly_splat.modules.bilateral_grid import BilateralGridPostProcessor
 from friendly_splat.trainer.configs import (
-    EvalConfig,
     IOConfig,
     PoseConfig,
     TrainConfig,
 )
 
 
-def init_output_paths(*, io_cfg: IOConfig, eval_cfg: Optional[EvalConfig] = None) -> None:
+def init_output_paths(*, io_cfg: IOConfig) -> None:
     os.makedirs(io_cfg.result_dir, exist_ok=True)
 
     if io_cfg.save_ckpt:
@@ -26,9 +24,6 @@ def init_output_paths(*, io_cfg: IOConfig, eval_cfg: Optional[EvalConfig] = None
 
     if io_cfg.export_ply:
         os.makedirs(os.path.join(io_cfg.result_dir, "ply"), exist_ok=True)
-
-    if eval_cfg is not None and bool(eval_cfg.enable):
-        os.makedirs(os.path.join(io_cfg.result_dir, "stats"), exist_ok=True)
 
 
 def save_train_config_snapshot(
@@ -45,27 +40,6 @@ def save_train_config_snapshot(
             allow_unicode=True,
         )
     print(f"Saved config snapshot: {out_path}", flush=True)
-    return out_path
-
-
-def save_eval_stats(
-    *,
-    io_cfg: IOConfig,
-    eval_cfg: EvalConfig,
-    step: int,
-    stats: Dict[str, float | int],
-) -> str:
-    split = str(eval_cfg.split)
-    train_step = int(step) + 1
-    stats_dir = os.path.join(io_cfg.result_dir, "stats")
-    os.makedirs(stats_dir, exist_ok=True)
-    out_path = os.path.join(stats_dir, f"{split}_step{train_step:06d}.json")
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(stats, f, indent=2, sort_keys=True)
-    history_path = os.path.join(stats_dir, f"{split}_history.jsonl")
-    with open(history_path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(stats, sort_keys=True) + "\n")
-    print(f"Saved eval stats: {out_path}", flush=True)
     return out_path
 
 

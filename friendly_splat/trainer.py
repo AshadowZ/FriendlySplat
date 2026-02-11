@@ -2,21 +2,25 @@ from __future__ import annotations
 
 """Training entrypoint for FriendlySplat.
 
-This file intentionally stays thin and delegates most logic to:
-- `friendly_splat.trainer.builder`: context construction (data/model/components/optimizers)
-- `friendly_splat.trainer.step_runtime`: per-step schedule/render/loss helpers
-- `friendly_splat.trainer.io_utils`: checkpoints / PLY export
-- `friendly_splat.viewer.viewer_runtime`: optional online viewer (viser/nerfview)
+This file intentionally stays thin and mostly orchestrates:
+- `friendly_splat.trainer.builder`: builds the training context (data/modules/strategy/optimizers)
+- `friendly_splat.trainer.step_runtime`: per-step batch prep/schedule/render/loss helpers
+- `friendly_splat.trainer.logger`: TensorBoard writing + (optional) viewer log payloads
+- `friendly_splat.trainer.io_utils`: output folders, checkpoints, and exports
+- `friendly_splat.viewer.viewer_runtime`: optional online viewer integration
 """
 
 import torch
 import tyro
 import tqdm
 
+import random
+import numpy as np
+
 from friendly_splat.viewer.viewer_runtime import ViewerRuntime
 
 from friendly_splat.trainer.builder import build_training_context
-from friendly_splat.trainer.logger import TensorBoardWriter, handle_step_logging
+from friendly_splat.trainer.logger import TensorBoardWriter, maybe_handle_step_logging
 
 from friendly_splat.trainer.step_runtime import (
     build_step_schedule_from_prepared_batch,
@@ -27,13 +31,20 @@ from friendly_splat.trainer.step_runtime import (
 )
 
 from friendly_splat.trainer.configs import TrainConfig, validate_train_config
-from friendly_splat.utils.common_utils import set_seed
 from friendly_splat.trainer.io_utils import (
     init_output_paths,
     save_train_config_snapshot,
     maybe_save_outputs,
 )
 
+
+def set_seed(seed: int) -> None:
+    # Local, explicit seeding (kept in trainer to avoid a shared utils module).
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
 class Trainer:
@@ -50,7 +61,7 @@ class Trainer:
             raise RuntimeError("CUDA requested but torch.cuda.is_available() is False.")
 
         # Prepare output folders (checkpoints / PLY exports).
-        init_output_paths(io_cfg=cfg.io, eval_cfg=cfg.eval)
+        init_output_paths(io_cfg=cfg.io)
         save_train_config_snapshot(io_cfg=cfg.io, train_cfg=cfg)
 
         context = build_training_context(cfg)
@@ -69,8 +80,8 @@ class Trainer:
 
         torch.backends.cudnn.benchmark = True
 
-        # Viewer runtime is initialized lazily in `train()` after DataLoader workers
-        # are started, to avoid fork-after-threads stalls with num_workers>0.
+        # Viewer runtime is initialized in `train()` (after DataLoader workers are
+        # started) to avoid fork-after-threads stalls when num_workers>0.
         self.viewer_runtime = None
 
     def train(self) -> None:
@@ -102,25 +113,23 @@ class Trainer:
         )
 
         for step in pbar:
-            # /*-------------------- Viewer / Step Preamble --------------------*/
-            # Respect viewer pause state and take the step lock.
+            # Viewer sync (pause/step-lock).
             tic = viewer_runtime.before_step()
 
-            # Apply per-step optimizer/GNS policy updates.
+            # Per-step policy hooks (LR updates, etc.).
             optimizer_coordinator.prepare_step(step=int(step))
 
-            # /*-------------------- Data + Schedule --------------------*/
-            # Load one training batch.
+            # Data.
             prepared_batch = next(loader_iter)
 
-            # Optionally adjust camera poses for this batch.
+            # Optional pose optimization (applies to this batch only).
             prepared_batch = prepare_training_batch(
                 prepared_batch=prepared_batch,
                 pose_opt=bool(cfg.pose.pose_opt),
                 pose_adjust=pose_adjust,
             )
 
-            # Build the step schedule (active regs + render mode).
+            # Step schedule (which regularizers/aux outputs are active).
             schedule = build_step_schedule_from_prepared_batch(
                 step=step,
                 optim_cfg=cfg.optim,
@@ -128,8 +137,7 @@ class Trainer:
                 prepared_batch=prepared_batch,
             )
 
-            # /*-------------------- Forward Render + Loss --------------------*/
-            # Render with optional postprocessing.
+            # Render.
             render_out = render_from_prepared_batch(
                 prepared_batch=prepared_batch,
                 gaussian_model=gaussian_model,
@@ -141,7 +149,7 @@ class Trainer:
             meta = render_out.meta
             active_sh_degree = render_out.active_sh_degree
 
-            # Assemble total loss and per-term loss items.
+            # Losses.
             loss_output = compute_losses_from_prepared_batch_and_render(
                 reg_cfg=cfg.reg,
                 schedule=schedule,
@@ -155,8 +163,7 @@ class Trainer:
             )
             loss = loss_output.total
 
-            # /*-------------------- Backward + Optimizer Step --------------------*/
-            # Run pre-backward strategy hooks.
+            # Strategy hooks may modify params/optimizers (e.g., densification).
             strategy.step_pre_backward(
                 gaussian_model.splats,
                 optimizer_coordinator.splat_optimizers,
@@ -165,7 +172,7 @@ class Trainer:
                 meta,
             )
 
-            # Backpropagate and apply optimizer/scheduler updates.
+            # Backward + optimizer step.
             optimizer_coordinator.zero_grad()
             loss.backward()
 
@@ -175,8 +182,7 @@ class Trainer:
                 batch_size=int(prepared_batch.pixels.shape[0]),
             )
 
-            # /*-------------------- Strategy Post Update --------------------*/
-            # Run post-update densification/pruning hooks.
+            # Strategy post-update (densify/prune).
             strategy.step_post_backward(
                 params=gaussian_model.splats,
                 optimizers=optimizer_coordinator.splat_optimizers,
@@ -194,7 +200,7 @@ class Trainer:
                     strategy_state=strategy_state,
                 )
 
-            # Update viewer statistics and release the step lock.
+            # Update viewer stats + release step lock.
             viewer_runtime.after_step(
                 step=int(step),
                 tic=tic,
@@ -204,8 +210,7 @@ class Trainer:
                 meta=meta,
             )
 
-            # /*-------------------- Eval / Logging / Outputs --------------------*/
-            # Run periodic evaluation and report summary in the progress bar.
+            # Periodic evaluation.
             eval_output = maybe_run_evaluation_for_step(
                 step=int(step),
                 train_cfg=cfg,
@@ -213,22 +218,26 @@ class Trainer:
                 gaussian_model=gaussian_model,
                 bilateral_grid=bilateral_grid,
             )
-            log_payload = handle_step_logging(
+            # Logging is cadence-driven; when nothing is due, payload is None.
+            log_payload = maybe_handle_step_logging(
                 step=int(step),
                 device=self.device,
                 num_gs=int(gaussian_model.num_gaussians),
                 train_loss_items=loss_output.items,
                 eval_stats=eval_output.stats if eval_output is not None else None,
                 tb_writer=tb_writer,
+                emit_payload=not bool(cfg.viewer.disable_viewer),
             )
-            viewer_runtime.log_payload(payload=log_payload)
+            if not bool(cfg.viewer.disable_viewer):
+                viewer_runtime.log_payload(payload=log_payload)
+
             # Keep tqdm refresh frequency low to reduce terminal overhead.
             if (int(step) % int(tqdm_update_every) == 0) or (
                 int(step) == int(cfg.optim.max_steps) - 1
             ):
                 pbar.set_description(f"sh degree={active_sh_degree}| ")
 
-            # Save configured artifacts (checkpoint / PLY).
+            # Save configured artifacts (checkpoint / exports).
             maybe_save_outputs(
                 io_cfg=cfg.io,
                 pose_cfg=cfg.pose,

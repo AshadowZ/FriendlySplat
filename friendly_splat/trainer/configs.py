@@ -131,7 +131,7 @@ class EvalConfig:
     eval_every_n: int = 1000
     # Optional cap on evaluated images (None means full split).
     max_images: Optional[int] = None
-    # LPIPS backbone for evaluation (aligned with Extended-GS defaults).
+    # LPIPS backbone for evaluation.
     lpips_net: Literal["alex", "vgg"] = "alex"
     # Whether to compute color-corrected metrics (cc_psnr/cc_ssim/cc_lpips).
     # Effective only when postprocess uses a photometric adapter (e.g. bilateral grid).

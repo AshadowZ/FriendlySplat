@@ -250,8 +250,10 @@ class ViewerRuntime:
         self._update_universal_metric_dropdown_options()
         self._refresh_universal_metric_plot()
 
-    def log_payload(self, *, payload: object) -> None:
+    def log_payload(self, *, payload: object | None) -> None:
         """Consume trainer log payload and update viewer plots."""
+        if payload is None:
+            return
         if self.viewer is None or self.server is None:
             return
 

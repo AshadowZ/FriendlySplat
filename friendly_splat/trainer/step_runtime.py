@@ -20,7 +20,6 @@ from friendly_splat.trainer.eval_runtime import (
     run_evaluation,
     should_run_evaluation,
 )
-from friendly_splat.trainer.io_utils import save_eval_stats
 from friendly_splat.trainer.losses import LossOutput, compute_losses
 from friendly_splat.trainer.step_schedule import StepSchedule, compute_step_schedule
 from gsplat.strategy.natural_selection import NaturalSelectionPolicy
@@ -211,12 +210,6 @@ def maybe_run_evaluation_for_step(
         eval_loader=eval_loader,
         gaussian_model=gaussian_model,
         bilateral_grid=bilateral_grid,
-    )
-    save_eval_stats(
-        io_cfg=train_cfg.io,
-        eval_cfg=train_cfg.eval,
-        step=int(step),
-        stats=eval_output.stats,
     )
     eval_step = int(eval_output.stats.get("step", int(step)))
     print(

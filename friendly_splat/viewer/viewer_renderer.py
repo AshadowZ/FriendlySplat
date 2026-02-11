@@ -22,7 +22,7 @@ except ImportError:  # pragma: no cover
     GsplatRenderTabState = None  # type: ignore[assignment]
 
 try:
-    from friendly_splat.utils.common_utils import get_implied_normal_from_depth
+    from gsplat.utils import get_implied_normal_from_depth
 except ImportError:  # pragma: no cover
     get_implied_normal_from_depth = None  # type: ignore[assignment]
 
@@ -64,7 +64,7 @@ class ViewerRenderer:
         if GsplatRenderTabState is None:
             missing.append("friendly_splat.viewer.gsplat_viewer")
         if get_implied_normal_from_depth is None:
-            missing.append("friendly_splat.utils.common_utils")
+            missing.append("gsplat.utils")
         if render_splats is None:
             missing.append("friendly_splat.renderer.renderer")
         if len(missing) > 0:

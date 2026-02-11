@@ -5,7 +5,31 @@ from typing import Dict
 
 import torch
 
-from friendly_splat.utils.common_utils import knn_distances, logit, rgb_to_sh
+def _logit(x: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+    x = x.clamp(float(eps), 1.0 - float(eps))
+    return torch.log(x / (1.0 - x))
+
+
+def _rgb_to_sh(rgb: torch.Tensor) -> torch.Tensor:
+    # Matches gsplat/exporter.py.
+    c0 = 0.28209479177387814
+    return (rgb - 0.5) / c0
+
+
+def _knn_distances(points: torch.Tensor, k: int = 4) -> torch.Tensor:
+    """Return Euclidean KNN distances. Shape [N, k]."""
+    try:
+        from sklearn.neighbors import NearestNeighbors  # type: ignore
+    except Exception as e:  # pragma: no cover
+        raise ImportError(
+            "KNN-based scale initialization requires scikit-learn. "
+            "Install it (e.g. `pip install scikit-learn` or `pip install -r friendly_splat/requirements.txt`)."
+        ) from e
+
+    x_np = points.detach().cpu().numpy()
+    model = NearestNeighbors(n_neighbors=int(k), metric="euclidean").fit(x_np)
+    distances, _indices = model.kneighbors(x_np)
+    return torch.from_numpy(distances).to(points)
 
 
 class GaussianModel(torch.nn.Module):
@@ -209,7 +233,7 @@ class GaussianModel(torch.nn.Module):
             dist_avg = torch.ones((n,), device=points.device, dtype=points.dtype)
         else:
             k = min(4, n)
-            dists = knn_distances(points, k=k)
+            dists = _knn_distances(points, k=k)
             neighbor_dists = dists[:, 1:] if k > 1 else dists
             if int(neighbor_dists.numel()) == 0:
                 dist_avg = torch.ones((n,), device=points.device, dtype=points.dtype)
@@ -219,11 +243,11 @@ class GaussianModel(torch.nn.Module):
         scales = torch.log(dist_avg * float(init_scale)).unsqueeze(-1).repeat(1, 3)
 
         quats = torch.rand((n, 4))
-        opacities = logit(torch.full((n,), float(init_opacity), dtype=torch.float32))
+        opacities = _logit(torch.full((n,), float(init_opacity), dtype=torch.float32))
 
         n_coeff = (sh_degree + 1) ** 2
         sh = torch.zeros((n, n_coeff, 3), dtype=torch.float32)
-        sh[:, 0, :] = rgb_to_sh(rgbs)
+        sh[:, 0, :] = _rgb_to_sh(rgbs)
 
         params: Dict[str, torch.nn.Parameter] = {
             "means": torch.nn.Parameter(points.to(device)),

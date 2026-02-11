@@ -56,6 +56,7 @@ def build_dataset_and_loader(
     Infinite sampling is enabled only for the training split.
     """
     device = torch.device(io_cfg.device)
+    # DataParser defines the "scene contract": cameras, points, image paths, and scale.
     dataparser = ColmapDataParser(
         data_dir=io_cfg.data_dir,
         factor=data_cfg.data_factor,
@@ -95,6 +96,7 @@ def build_gaussian_model(
     init_scale = float(init_cfg.init_scale)
     init_opacity = float(init_cfg.init_opacity)
 
+    # Prefer SFM (COLMAP points) init when available; otherwise fall back to random.
     if init_cfg.init_type == "sfm" and int(parsed_scene.points.shape[0]) > 0:
         return GaussianModel.from_sfm(
             points=torch.from_numpy(parsed_scene.points),
@@ -131,6 +133,7 @@ def build_training_context(cfg: TrainConfig) -> TrainingContext:
     eval_dataset: Optional[InputDataset] = None
     eval_loader: Optional[DataLoader] = None
     if cfg.eval.enable:
+        # Eval split is dataparser-defined (typically "test" / holdout).
         eval_dataset, eval_loader = build_dataset_and_loader(
             io_cfg=cfg.io,
             data_cfg=cfg.data,
@@ -147,6 +150,7 @@ def build_training_context(cfg: TrainConfig) -> TrainingContext:
 
     bilateral_grid: Optional[BilateralGridPostProcessor] = None
     if bool(cfg.postprocess.use_bilateral_grid):
+        # Optional post-process module: contributes its own param group(s).
         bilateral_grid = BilateralGridPostProcessor.create(
             num_frames=int(n_images),
             grid_shape=tuple(int(x) for x in cfg.postprocess.bilateral_grid_shape),
@@ -155,9 +159,11 @@ def build_training_context(cfg: TrainConfig) -> TrainingContext:
 
     pose_adjust: Optional[PoseOptModule] = None
     if cfg.pose.pose_opt:
+        # Optional pose module: per-frame learnable adjustment (initialized at identity).
         pose_adjust = PoseOptModule(n_images).to(device)
         pose_adjust.zero_init()
 
+    # Core boundary contract: modules expose *named parameter groups*; trainer owns optimizer policy.
     param_groups: Dict[str, list[torch.nn.Parameter]] = {}
     param_groups.update(gaussian_model.get_param_groups())
     if pose_adjust is not None:
@@ -165,6 +171,7 @@ def build_training_context(cfg: TrainConfig) -> TrainingContext:
     if bilateral_grid is not None:
         param_groups.update(bilateral_grid.get_param_groups())
 
+    # Build optimizers/schedulers from the merged param groups (nerfstudio-style config).
     optimizer_bundle = OptimizerBundle.build_from_param_groups(
         optim_cfg=cfg.optim,
         batch_size=int(cfg.data.batch_size),
@@ -177,6 +184,7 @@ def build_training_context(cfg: TrainConfig) -> TrainingContext:
 
     natural_selection_policy: Optional[NaturalSelectionPolicy] = None
     if cfg.gns.gns_enable:
+        # GNS regularizes opacity and influences which Gaussians survive/densify.
         gns_reg_interval = auto_gns_reg_interval(num_train_images=len(dataset))
         natural_selection_policy = NaturalSelectionPolicy(
             enable=True,
@@ -205,6 +213,7 @@ def build_training_context(cfg: TrainConfig) -> TrainingContext:
         key_for_gradient=str(cfg.strategy.key_for_gradient),
         budget=int(cfg.strategy.densification_budget),
     )
+    # Strategy sanity requires access to raw splat tensors + the per-splat optimizers.
     strategy.check_sanity(gaussian_model.splats, optimizer_bundle.splat_optimizers)
     strategy_state = strategy.initialize_state(
         scene_scale=float(parsed_scene.scene_scale)

@@ -15,7 +15,7 @@ from gsplat.strategy.natural_selection import NaturalSelectionPolicy
 class OptimizerBundle:
     splat_optimizers: Dict[str, torch.optim.Optimizer]
     extra_optimizers: Dict[str, torch.optim.Optimizer]
-    schedulers: Dict[str, torch.optim.lr_scheduler.LRScheduler]
+    lr_schedulers: Dict[str, torch.optim.lr_scheduler.LRScheduler]
 
     @classmethod
     def build_from_param_groups(
@@ -93,7 +93,7 @@ class OptimizerBundle:
         scene_scale = float(scene_scale)
         splat_optimizers: Dict[str, torch.optim.Optimizer] = {}
         extra_optimizers: Dict[str, torch.optim.Optimizer] = {}
-        schedulers: Dict[str, torch.optim.lr_scheduler.LRScheduler] = {}
+        lr_schedulers: Dict[str, torch.optim.lr_scheduler.LRScheduler] = {}
 
         for name, params in param_groups.items():
             entry = group_cfgs[name]
@@ -134,7 +134,7 @@ class OptimizerBundle:
                     # Use a tiny-but-nonzero warmup start factor to satisfy torch scheduler
                     # constraints.
                     start_factor = 1e-8
-                    schedulers[name] = torch.optim.lr_scheduler.ChainedScheduler(
+                    lr_schedulers[name] = torch.optim.lr_scheduler.ChainedScheduler(
                         [
                             torch.optim.lr_scheduler.LinearLR(
                                 opt,
@@ -145,14 +145,14 @@ class OptimizerBundle:
                         ]
                     )
                 else:
-                    schedulers[name] = torch.optim.lr_scheduler.ExponentialLR(
+                    lr_schedulers[name] = torch.optim.lr_scheduler.ExponentialLR(
                         opt, gamma=gamma
                     )
 
         return cls(
             splat_optimizers=splat_optimizers,
             extra_optimizers=extra_optimizers,
-            schedulers=schedulers,
+            lr_schedulers=lr_schedulers,
         )
 
 
@@ -212,7 +212,7 @@ class OptimizerCoordinator:
         - optional dense->sparse grad conversion for packed sparse training;
         - optional visibility-gated updates for SelectiveAdam;
         - GNS-specific opacity handling in the pruning window;
-        - stepping all auxiliary optimizers and schedulers.
+        - stepping all auxiliary optimizers and LR schedulers.
         """
         optim_cfg = self.optim_cfg
         gaussian_model = self.gaussian_model
@@ -301,8 +301,8 @@ class OptimizerCoordinator:
             else:
                 opt.step()
 
-        # Step non-splat optimizers and then schedulers.
+        # Step non-splat optimizers and then LR schedulers.
         for opt in self.optimizers.extra_optimizers.values():
             opt.step()
-        for sch in self.optimizers.schedulers.values():
+        for sch in self.optimizers.lr_schedulers.values():
             sch.step()
