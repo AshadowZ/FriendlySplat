@@ -26,8 +26,8 @@ def apply_pose_adjust(
     camtoworlds: torch.Tensor,
     image_ids: Optional[torch.Tensor],
     pose_opt: bool,
-    pose_adjust: Optional["CameraOptModule"],
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    pose_adjust: Optional["PoseOptModule"],
+) -> Tuple[torch.Tensor, torch.Tensor]:
     """Apply pose optimization transforms."""
     if pose_opt and image_ids is None:
         raise RuntimeError("pose_opt requires image_ids in the dataloader batch.")
@@ -45,7 +45,7 @@ def apply_pose_adjust(
     return camtoworlds, camtoworlds_input
 
 
-class CameraOptModule(torch.nn.Module):
+class PoseOptModule(torch.nn.Module):
     """Camera pose optimization module (per-image SE(3) deltas)."""
 
     def __init__(self, n: int):
@@ -65,6 +65,10 @@ class CameraOptModule(torch.nn.Module):
 
     def random_init(self, std: float) -> None:
         torch.nn.init.normal_(self.embeds.weight, std=float(std))
+
+    def get_param_groups(self) -> dict[str, list[torch.nn.Parameter]]:
+        """Return named parameter groups for optimizer construction."""
+        return {"pose_opt": list(self.parameters())}
 
     def forward(
         self, camtoworlds: torch.Tensor, embed_ids: torch.Tensor

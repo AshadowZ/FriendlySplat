@@ -9,7 +9,7 @@ import tyro
 
 from friendly_splat.data.colmap_dataparser import ColmapDataParser
 from friendly_splat.data.dataset import InputDataset
-from friendly_splat.models.gaussian import GaussianModel
+from friendly_splat.modules.gaussian import GaussianModel
 from friendly_splat.viewer.viewer_runtime import ViewerRuntime
 
 

@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, Mapping, Optional
 
 import torch
 
-from friendly_splat.models.gaussian import GaussianModel
+from friendly_splat.modules.gaussian import GaussianModel
 from friendly_splat.viewer import viewer_panels
 from friendly_splat.viewer.viewer_renderer import ViewerRenderer
 

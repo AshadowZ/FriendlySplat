@@ -105,6 +105,10 @@ class BilateralGridPostProcessor(torch.nn.Module):
         out = self._slice(self.bil_grids, grid_xy, rgb, image_ids.unsqueeze(-1))  # type: ignore[misc]
         return out["rgb"]
 
+    def get_param_groups(self) -> dict[str, list[torch.nn.Parameter]]:
+        """Return named parameter groups for optimizer construction."""
+        return {"bilateral_grid": list(self.parameters())}
+
     def tv_loss(self, *, image_ids: torch.Tensor) -> torch.Tensor:
         # Only regularize active grids for this batch.
         if image_ids.dim() == 0:
