@@ -78,6 +78,10 @@ class Trainer:
         self.optimizer_coordinator = context.optimizer_coordinator
         print(f"Initialized {self.gaussian_model.num_gaussians} gaussians.")
 
+        # Similarity transform applied by the dataparser (COLMAP -> training space).
+        # Used for exporting artifacts (e.g. PLY) in the original COLMAP coordinate system.
+        self.scene_transform = torch.from_numpy(self.dataset.parsed_scene.transform).float()
+
         torch.backends.cudnn.benchmark = True
 
         # Viewer runtime is initialized in `train()` (after DataLoader workers are
@@ -250,6 +254,7 @@ class Trainer:
                 active_sh_degree=int(active_sh_degree),
                 pose_adjust=pose_adjust,
                 bilateral_grid=bilateral_grid,
+                scene_transform=self.scene_transform,
             )
 
         tb_writer.close()
