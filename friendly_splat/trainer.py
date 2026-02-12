@@ -183,7 +183,6 @@ class Trainer:
             )
 
             # Backward + optimizer step.
-            optimizer_coordinator.zero_grad()
             loss.backward()
 
             optimizer_coordinator.step_all(
@@ -212,6 +211,9 @@ class Trainer:
                     optimizers=optimizer_coordinator.splat_optimizers,
                     strategy_state=strategy_state,
                 )
+
+            # Prepare for the next backward pass.
+            optimizer_coordinator.zero_grad(step=int(step))
 
             # Update viewer stats + release step lock.
             if viewer_runtime is not None:

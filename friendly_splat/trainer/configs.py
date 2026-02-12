@@ -256,6 +256,17 @@ class OptimConfig:
     # Use SelectiveAdam to update only visible Gaussians (experimental).
     visible_adam: bool = False
 
+    # MU-style splat optimizer step schedule (optional).
+    # After densification, step splat optimizers less frequently and accumulate gradients in between.
+    # Schedule: [1..mu_start_iter] every step; (mu_start_iter..mu_end_iter] every 5 steps; (mu_end_iter..] every 20 steps.
+
+    # Enable MU schedule.
+    mu_enable: bool = False
+    # Phase-1 end iteration (1-based, inclusive).
+    mu_start_iter: int = 15_000
+    # Phase-2 end iteration (1-based, inclusive).
+    mu_end_iter: int = 30_000
+
     # Per-parameter-group optimizer/scheduler configuration (nerfstudio-style).
     optimizers: OptimizersConfig = field(default_factory=OptimizersConfig)
 
@@ -508,6 +519,37 @@ def validate_train_config(cfg: TrainConfig) -> None:
             "strategy.key_for_gradient must be 'means2d' (3DGS) or 'gradient_2dgs' (2DGS), "
             f"got {cfg.strategy.key_for_gradient!r}"
         )
+
+    if cfg.optim.mu_enable:
+        if cfg.gns.gns_enable:
+            raise ValueError(
+                "optim.mu_enable=True is incompatible with gns.gns_enable=True. "
+                "Disable GNS or disable MU."
+            )
+        if str(cfg.strategy.impl).strip().lower() == "mcmc":
+            raise ValueError(
+                "optim.mu_enable=True is incompatible with strategy.impl='mcmc'."
+            )
+        if int(cfg.optim.mu_start_iter) <= 0:
+            raise ValueError(
+                f"optim.mu_start_iter must be > 0, got {cfg.optim.mu_start_iter}"
+            )
+        if int(cfg.optim.mu_end_iter) < int(cfg.optim.mu_start_iter):
+            raise ValueError(
+                "optim.mu_end_iter must be >= optim.mu_start_iter, "
+                f"got {cfg.optim.mu_end_iter} < {cfg.optim.mu_start_iter}."
+            )
+        if int(cfg.optim.mu_start_iter) < int(cfg.strategy.refine_stop_iter):
+            raise ValueError(
+                "optim.mu requires phase 1 (per-step updates) to cover the entire densification window. "
+                "Set optim.mu_start_iter >= strategy.refine_stop_iter, "
+                f"got {cfg.optim.mu_start_iter} < {cfg.strategy.refine_stop_iter}."
+            )
+        if int(cfg.optim.mu_end_iter) > int(cfg.optim.max_steps):
+            raise ValueError(
+                "optim.mu_end_iter must be <= optim.max_steps, "
+                f"got {cfg.optim.mu_end_iter} > {cfg.optim.max_steps}."
+            )
 
     if str(cfg.strategy.impl).strip().lower() == "mcmc" and cfg.gns.gns_enable:
         raise ValueError(

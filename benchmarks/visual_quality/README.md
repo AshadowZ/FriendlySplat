@@ -23,13 +23,14 @@ By default, outputs are written under each dataset directory:
 - `<data-root>/Tanks&Temples-Vis/benchmark/improved/<scene>/`
 - `<data-root>/DeepBlending/benchmark/improved/<scene>/`
 
-This benchmark runner is intentionally opinionated:
+This benchmark runner is designed to benchmark different densification strategies.
+It always exports the final PLY and enables TensorBoard logging.
 
-- Always trains with `strategy.impl=improved`
-- Always exports PLY at the final step and does not save checkpoints
-- Disables the online viewer and online evaluation during training
+For `--strategy-impl improved`, it also applies an Improved-GS-style alignment:
+
 - Enables `data.benchmark_train_split=True` so training uses a disjoint split from evaluation (Improved-GS-style)
-- Aligns key strategy switches and optimizer hyperparameters to Improved-GS defaults
+- Sets key strategy switches and optimizer hyperparameters to Improved-GS defaults
+- Enables the MU-style splat optimizer step schedule by default (`optim.mu_enable=True`) (disable with `--no-mu`)
 
 By default it also uses `preload='cuda'` for faster throughput (at the cost of GPU memory).
 To disable preloading:
@@ -83,6 +84,7 @@ python3 benchmarks/visual_quality/run_eval_batch.py \
   --data-root /media/joker/HV/3DGS/PublicDataset \
   --datasets mipnerf360 \
   --scenes garden \
+  --strategy-impl improved \
   --device cuda:0
 ```
 
