@@ -34,6 +34,11 @@ class DataConfig:
     data_factor: int = 1
     # Normalize the world space based on COLMAP points/cameras.
     normalize_world_space: bool = True
+    # Whether to align world axes during normalization (z-up + PCA principal axes).
+    # When False, normalization becomes translation+uniform scale only (no rotation).
+    # This keeps the world axes aligned with COLMAP and avoids SH coefficient rotation
+    # when exporting/evaluating in COLMAP coordinates.
+    align_world_axes: bool = False
     # Every N images there is a test image.
     test_every: int = 8
     # Benchmark split mode for training:
@@ -251,6 +256,17 @@ class OptimConfig:
     # Use SelectiveAdam to update only visible Gaussians (experimental).
     visible_adam: bool = False
 
+    # MU-style splat optimizer step schedule (optional).
+    # After densification, step splat optimizers less frequently and accumulate gradients in between.
+    # Schedule: [1..mu_start_iter] every step; (mu_start_iter..mu_end_iter] every 5 steps; (mu_end_iter..] every 20 steps.
+
+    # Enable MU schedule.
+    mu_enable: bool = False
+    # Phase-1 end iteration (1-based, inclusive).
+    mu_start_iter: int = 15_000
+    # Phase-2 end iteration (1-based, inclusive).
+    mu_end_iter: int = 30_000
+
     # Per-parameter-group optimizer/scheduler configuration (nerfstudio-style).
     optimizers: OptimizersConfig = field(default_factory=OptimizersConfig)
 
@@ -262,6 +278,13 @@ class RegConfig:
     # Weight for SSIM in the RGB loss (rgb = (1-ssim)*L1 + ssim*SSIM).
     ssim_lambda: float = 0.2
 
+    ## MCMC-style regularizers (optional).
+
+    # Mean opacity penalty (MCMC-3DGS-style): `mean(sigmoid(opacity_logits))`.
+    opacity_reg_weight: float = 0.0
+    # Mean scale penalty (MCMC-3DGS-style): `mean(exp(log_scales))` (not the scale-ratio reg below).
+    scale_l1_reg_weight: float = 0.0
+
     # PhysGauss-style scale regularizations (optional).
     # - Flatness: encourages each Gaussian to have a small minimum axis (disk-/sheet-like).
     # - Scale ratio: suppresses spiky Gaussians where max(scale) >> median(scale).
@@ -269,11 +292,11 @@ class RegConfig:
     # Weight of flatness regularization (encourage Gaussians to be flat/disc-like).
     flat_reg_weight: float = 0.0
     # Weight of scale ratio regularization (PhysGauss-style, adapted to max/median ratio).
-    scale_reg_weight: float = 0.0
+    scale_ratio_reg_weight: float = 0.0
     # Threshold of max/median scale ratio before applying regularization.
     max_gauss_ratio: float = 6.0
     # Apply scale ratio regularization once every N steps.
-    scale_reg_every_n: int = 10
+    scale_ratio_reg_every_n: int = 10
 
     ## Regularizations using priors / masks.
 
@@ -326,9 +349,18 @@ class GNSConfig:
 
 @dataclass(frozen=True)
 class StrategyConfig:
-    """Densification strategy config (this repo currently supports improved only)."""
+    """Densification strategy config.
 
-    # ImprovedStrategy parameters (see `gsplat/strategy/improved.py`).
+    The implementation lives in `gsplat.strategy.*`. FriendlySplat selects the
+    concrete strategy via `impl`.
+    """
+
+    # Strategy implementation.
+    impl: Literal["improved", "default", "mcmc"] = "improved"
+
+    # ---------------------------
+    # Shared across strategies
+    # ---------------------------
 
     # Opacity threshold for pruning.
     prune_opa: float = 0.005
@@ -354,8 +386,39 @@ class StrategyConfig:
     verbose: bool = True
     # Which meta key to use for gradients ("means2d" for 3DGS; "gradient_2dgs" for 2DGS).
     key_for_gradient: str = "means2d"
+
+    # ---------------------------
+    # DefaultStrategy-only knobs
+    # ---------------------------
+
+    # 3D scale threshold for grow mode (duplicate vs split decision).
+    grow_scale3d: float = 0.01
+    # 2D projected scale threshold for grow mode.
+    grow_scale2d: float = 0.05
+    # Pause refine for N steps after each opacity reset.
+    pause_refine_after_reset: int = 0
+    # Experimental revised opacity heuristic.
+    revised_opacity: bool = False
+
+    # ---------------------------
+    # ImprovedStrategy-only knobs
+    # ---------------------------
+
     # Maximum number of Gaussians allowed during densification.
     densification_budget: int = 2_500_000
+
+    # ---------------------------
+    # MCMCStrategy-only knobs
+    # ---------------------------
+
+    # Maximum number of Gaussians.
+    mcmc_cap_max: int = 1_000_000
+    # Noise scale multiplier (position noise ~ lr_means * mcmc_noise_lr).
+    mcmc_noise_lr: float = 5e5
+    # Stop injecting noise after this step (-1 means never stop).
+    mcmc_noise_injection_stop_iter: int = -1
+    # Minimum opacity (post-sigmoid) for "alive" Gaussians.
+    mcmc_min_opacity: float = 0.005
 
 
 @dataclass(frozen=True)
@@ -455,6 +518,43 @@ def validate_train_config(cfg: TrainConfig) -> None:
         raise ValueError(
             "strategy.key_for_gradient must be 'means2d' (3DGS) or 'gradient_2dgs' (2DGS), "
             f"got {cfg.strategy.key_for_gradient!r}"
+        )
+
+    if cfg.optim.mu_enable:
+        if cfg.gns.gns_enable:
+            raise ValueError(
+                "optim.mu_enable=True is incompatible with gns.gns_enable=True. "
+                "Disable GNS or disable MU."
+            )
+        if str(cfg.strategy.impl).strip().lower() == "mcmc":
+            raise ValueError(
+                "optim.mu_enable=True is incompatible with strategy.impl='mcmc'."
+            )
+        if int(cfg.optim.mu_start_iter) <= 0:
+            raise ValueError(
+                f"optim.mu_start_iter must be > 0, got {cfg.optim.mu_start_iter}"
+            )
+        if int(cfg.optim.mu_end_iter) < int(cfg.optim.mu_start_iter):
+            raise ValueError(
+                "optim.mu_end_iter must be >= optim.mu_start_iter, "
+                f"got {cfg.optim.mu_end_iter} < {cfg.optim.mu_start_iter}."
+            )
+        if int(cfg.optim.mu_start_iter) < int(cfg.strategy.refine_stop_iter):
+            raise ValueError(
+                "optim.mu requires phase 1 (per-step updates) to cover the entire densification window. "
+                "Set optim.mu_start_iter >= strategy.refine_stop_iter, "
+                f"got {cfg.optim.mu_start_iter} < {cfg.strategy.refine_stop_iter}."
+            )
+        if int(cfg.optim.mu_end_iter) > int(cfg.optim.max_steps):
+            raise ValueError(
+                "optim.mu_end_iter must be <= optim.max_steps, "
+                f"got {cfg.optim.mu_end_iter} > {cfg.optim.max_steps}."
+            )
+
+    if str(cfg.strategy.impl).strip().lower() == "mcmc" and cfg.gns.gns_enable:
+        raise ValueError(
+            "strategy.impl='mcmc' is incompatible with gns.gns_enable=True. "
+            "Disable GNS or switch to a densification strategy ('default'/'improved')."
         )
 
     if not cfg.viewer.disable_viewer:

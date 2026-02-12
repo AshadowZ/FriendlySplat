@@ -190,14 +190,39 @@ class OptimizerCoordinator:
             gns.maybe_restore_opacity_lr(step=step, optimizers=splat_optimizers)
             gns.maybe_scale_opacity_lr(step=step, optimizers=splat_optimizers)
 
-    def zero_grad(self) -> None:
-        """Clear gradients on all managed optimizers before backprop.
+    def _splat_update_every(self, *, step: int) -> int:
+        if not bool(self.optim_cfg.mu_enable):
+            return 1
+        iter1 = int(step) + 1
+        if iter1 <= int(self.optim_cfg.mu_start_iter):
+            return 1
+        if iter1 <= int(self.optim_cfg.mu_end_iter):
+            return 5
+        return 20
+
+    def _should_step_splats(self, *, step: int) -> bool:
+        update_every = int(self._splat_update_every(step=int(step)))
+        if update_every <= 1:
+            return True
+        iter1 = int(step) + 1
+        if iter1 % update_every == 0:
+            return True
+        if bool(self.optim_cfg.mu_enable) and int(step) == int(self.optim_cfg.max_steps) - 1:
+            return True
+        return False
+
+    def zero_grad(self, *, step: int) -> None:
+        """Clear gradients after a training step.
 
         Uses ``set_to_none=True`` to reduce memory traffic and let PyTorch
         allocate grad tensors lazily on the next backward pass.
+
+        When `optim.mu_enable=True`, splat gradients are only cleared on iterations
+        where splat optimizers actually step (otherwise gradients accumulate).
         """
-        for opt in self.optimizers.splat_optimizers.values():
-            opt.zero_grad(set_to_none=True)
+        if self._should_step_splats(step=int(step)):
+            for opt in self.optimizers.splat_optimizers.values():
+                opt.zero_grad(set_to_none=True)
         for opt in self.optimizers.extra_optimizers.values():
             opt.zero_grad(set_to_none=True)
 
@@ -222,9 +247,11 @@ class OptimizerCoordinator:
         splat_optimizers = self.optimizers.splat_optimizers
         gns = self.gns
 
+        step_splats = self._should_step_splats(step=int(step))
+
         # In packed+sparse mode, convert dense grads to sparse COO so SparseAdam
         # updates only active Gaussian entries.
-        if optim_cfg.sparse_grad:
+        if step_splats and optim_cfg.sparse_grad:
             gaussian_ids = meta.get("gaussian_ids")
             if not isinstance(gaussian_ids, torch.Tensor):
                 raise KeyError(
@@ -245,7 +272,7 @@ class OptimizerCoordinator:
 
         # Build visibility mask for SelectiveAdam (visible-only updates).
         visibility = None
-        if optim_cfg.visible_adam:
+        if step_splats and optim_cfg.visible_adam:
             opacity_logits = gaussian_model.opacity_logits
             if optim_cfg.packed:
                 gaussian_ids = meta.get("gaussian_ids")
@@ -277,30 +304,31 @@ class OptimizerCoordinator:
             and int(gns.reg_start) <= int(step) <= int(gns.reg_end)
         )
 
-        # Step splat optimizers.
-        # During the GNS window, opacities are forced to "fully visible" so the
-        # global opacity regularizer can affect every Gaussian.
-        for name, opt in splat_optimizers.items():
-            if optim_cfg.visible_adam:
-                assert visibility is not None
-                # During GNS, update *all* opacities regardless of visibility so the global
-                # opacity regularizer can actually push Gaussians below the pruning threshold.
-                if gns_window_active and name == "opacities":
-                    opacity_logits = gaussian_model.opacity_logits
-                    if (
-                        self._gns_opacity_visibility is None
-                        or int(self._gns_opacity_visibility.numel())
-                        != int(opacity_logits.numel())
-                        or self._gns_opacity_visibility.device != opacity_logits.device
-                    ):
-                        self._gns_opacity_visibility = torch.ones_like(
-                            opacity_logits, dtype=torch.bool
-                        )
-                    opt.step(self._gns_opacity_visibility)
+        if step_splats:
+            # Step splat optimizers.
+            # During the GNS window, opacities are forced to "fully visible" so the
+            # global opacity regularizer can affect every Gaussian.
+            for name, opt in splat_optimizers.items():
+                if optim_cfg.visible_adam:
+                    assert visibility is not None
+                    # During GNS, update *all* opacities regardless of visibility so the global
+                    # opacity regularizer can actually push Gaussians below the pruning threshold.
+                    if gns_window_active and name == "opacities":
+                        opacity_logits = gaussian_model.opacity_logits
+                        if (
+                            self._gns_opacity_visibility is None
+                            or int(self._gns_opacity_visibility.numel())
+                            != int(opacity_logits.numel())
+                            or self._gns_opacity_visibility.device != opacity_logits.device
+                        ):
+                            self._gns_opacity_visibility = torch.ones_like(
+                                opacity_logits, dtype=torch.bool
+                            )
+                        opt.step(self._gns_opacity_visibility)
+                    else:
+                        opt.step(visibility)
                 else:
-                    opt.step(visibility)
-            else:
-                opt.step()
+                    opt.step()
 
         # Step non-splat optimizers and then LR schedulers.
         for opt in self.optimizers.extra_optimizers.values():
