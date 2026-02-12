@@ -6,6 +6,8 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 
+from gsplat import quat_scale_to_covar_preci
+from gsplat.relocation import compute_relocation
 from gsplat.utils import normalized_quat_to_rotmat
 
 
@@ -257,6 +259,143 @@ def long_axis_split(
             repeats = [2] + [1] * (v.dim() - 1)
             v_new = v[sel].repeat(repeats)
             state[k] = torch.cat((v[rest], v_new))
+
+
+@torch.no_grad()
+def relocate(
+    params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
+    optimizers: Dict[str, torch.optim.Optimizer],
+    state: Dict[str, Tensor],
+    mask: Tensor,
+    binoms: Tensor,
+    min_opacity: float = 0.005,
+):
+    """Inplace relocate dead Gaussians to high-opacity regions (MCMC).
+
+    This mirrors the gsplat MCMC relocation logic:
+    - sample alive indices proportional to opacity
+    - update sampled opacities/scales via relocation formula
+    - copy sampled Gaussian params into dead slots
+    - clear optimizer state for sampled entries
+    """
+    opacities = torch.sigmoid(params["opacities"])
+
+    dead_indices = mask.nonzero(as_tuple=True)[0]
+    alive_indices = (~mask).nonzero(as_tuple=True)[0]
+    n = int(len(dead_indices))
+    if n <= 0 or int(len(alive_indices)) == 0:
+        return
+
+    probs = opacities[alive_indices].flatten()
+    sampled_idxs = _multinomial_sample(probs, n, replacement=True)
+    sampled_idxs = alive_indices[sampled_idxs]
+
+    ratios = torch.bincount(sampled_idxs)[sampled_idxs] + 1
+    new_opacities, new_scales = compute_relocation(
+        opacities=opacities[sampled_idxs],
+        scales=torch.exp(params["scales"])[sampled_idxs],
+        ratios=ratios,
+        binoms=binoms,
+    )
+    eps = torch.finfo(torch.float32).eps
+    new_opacities = torch.clamp(
+        new_opacities, max=1.0 - float(eps), min=float(min_opacity)
+    )
+
+    def param_fn(name: str, p: Tensor) -> Tensor:
+        if name == "opacities":
+            p[sampled_idxs] = torch.logit(new_opacities)
+        elif name == "scales":
+            p[sampled_idxs] = torch.log(new_scales)
+        p[dead_indices] = p[sampled_idxs]
+        return torch.nn.Parameter(p, requires_grad=p.requires_grad)
+
+    def optimizer_fn(key: str, v: Tensor) -> Tensor:
+        v[sampled_idxs] = 0
+        return v
+
+    _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
+    for k, v in state.items():
+        if isinstance(v, torch.Tensor):
+            v[sampled_idxs] = 0
+
+
+@torch.no_grad()
+def sample_add(
+    params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
+    optimizers: Dict[str, torch.optim.Optimizer],
+    state: Dict[str, Tensor],
+    n: int,
+    binoms: Tensor,
+    min_opacity: float = 0.005,
+):
+    """Sample-add new Gaussians proportional to opacity (MCMC)."""
+    n = int(n)
+    if n <= 0:
+        return
+    opacities = torch.sigmoid(params["opacities"])
+
+    probs = opacities.flatten()
+    sampled_idxs = _multinomial_sample(probs, n, replacement=True)
+    ratios = torch.bincount(sampled_idxs)[sampled_idxs] + 1
+    new_opacities, new_scales = compute_relocation(
+        opacities=opacities[sampled_idxs],
+        scales=torch.exp(params["scales"])[sampled_idxs],
+        ratios=ratios,
+        binoms=binoms,
+    )
+    eps = torch.finfo(torch.float32).eps
+    new_opacities = torch.clamp(
+        new_opacities, max=1.0 - float(eps), min=float(min_opacity)
+    )
+
+    def param_fn(name: str, p: Tensor) -> Tensor:
+        if name == "opacities":
+            p[sampled_idxs] = torch.logit(new_opacities)
+        elif name == "scales":
+            p[sampled_idxs] = torch.log(new_scales)
+        p_new = torch.cat([p, p[sampled_idxs]])
+        return torch.nn.Parameter(p_new, requires_grad=p.requires_grad)
+
+    def optimizer_fn(key: str, v: Tensor) -> Tensor:
+        v_new = torch.zeros((len(sampled_idxs), *v.shape[1:]), device=v.device)
+        return torch.cat([v, v_new])
+
+    _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
+    for k, v in state.items():
+        v_new = torch.zeros((len(sampled_idxs), *v.shape[1:]), device=v.device)
+        if isinstance(v, torch.Tensor):
+            state[k] = torch.cat((v, v_new))
+
+
+@torch.no_grad()
+def inject_noise_to_position(
+    params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
+    optimizers: Dict[str, torch.optim.Optimizer],
+    state: Dict[str, Tensor],
+    scaler: float,
+):
+    """Inject anisotropic Gaussian noise into `means` (MCMC)."""
+    opacities = torch.sigmoid(params["opacities"].flatten())
+    scales = torch.exp(params["scales"])
+    covars, _ = quat_scale_to_covar_preci(
+        params["quats"],
+        scales,
+        compute_covar=True,
+        compute_preci=False,
+        triu=False,
+    )
+
+    def op_sigmoid(x: Tensor, k: float = 100.0, x0: float = 0.995) -> Tensor:
+        return 1.0 / (1.0 + torch.exp(-k * (x - x0)))
+
+    noise = (
+        torch.randn_like(params["means"])
+        * (op_sigmoid(1.0 - opacities)).unsqueeze(-1)
+        * float(scaler)
+    )
+    noise = torch.einsum("bij,bj->bi", covars, noise)
+    params["means"].add_(noise)
 
 
 @torch.no_grad()

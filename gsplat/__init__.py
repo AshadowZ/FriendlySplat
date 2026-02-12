@@ -28,13 +28,14 @@ from .rendering import (
     rasterization_2dgs_inria_wrapper,
     rasterization_inria_wrapper,
 )
-from .strategy import DefaultStrategy, ImprovedStrategy, Strategy
+from .strategy import DefaultStrategy, ImprovedStrategy, MCMCStrategy, Strategy
 from .version import __version__
 
 all = [
     "PngCompression",
     "DefaultStrategy",
     "ImprovedStrategy",
+    "MCMCStrategy",
     "Strategy",
     "rasterization",
     "rasterization_2dgs",

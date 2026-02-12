@@ -32,6 +32,7 @@ class ViewerDatasetConfig:
     data_dir: str
     data_factor: int = 1
     normalize_world_space: bool = True
+    align_world_axes: bool = True
     test_every: int = 8
     benchmark_train_split: bool = False
     depth_dir_name: Optional[str] = None
@@ -188,6 +189,14 @@ def _parse_ckpt_settings(ckpt_obj: dict[str, Any]) -> ViewerCkptSettings:
             data_raw.get("normalize_world_space", True),
             True,
         ),
+        # Backward compatibility: older configs did rotate normalization by default.
+        align_world_axes=_coerce_bool(
+            data_raw.get(
+                "align_world_axes",
+                data_raw.get("normalize_world_space_rotate", True),
+            ),
+            True,
+        ),
         test_every=_coerce_int(data_raw.get("test_every", 8), 8),
         benchmark_train_split=_coerce_bool(
             data_raw.get("benchmark_train_split", False),
@@ -233,6 +242,7 @@ def _build_train_dataset_from_ckpt_settings(
             data_dir=dataset_cfg.data_dir,
             factor=int(dataset_cfg.data_factor),
             normalize_world_space=bool(dataset_cfg.normalize_world_space),
+            align_world_axes=bool(dataset_cfg.align_world_axes),
             test_every=int(dataset_cfg.test_every),
             benchmark_train_split=bool(dataset_cfg.benchmark_train_split),
             depth_dir_name=dataset_cfg.depth_dir_name,
