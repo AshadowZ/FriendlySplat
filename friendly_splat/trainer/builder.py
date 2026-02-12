@@ -21,7 +21,7 @@ from friendly_splat.trainer.optimizer_coordinator import (
     OptimizerBundle,
     OptimizerCoordinator,
 )
-from gsplat.strategy import DefaultStrategy, ImprovedStrategy, Strategy
+from gsplat.strategy import DefaultStrategy, ImprovedStrategy, MCMCStrategy, Strategy
 from gsplat.strategy.natural_selection import (
     NaturalSelectionPolicy,
     auto_gns_reg_interval,
@@ -234,15 +234,25 @@ def build_training_context(cfg: TrainConfig) -> TrainingContext:
             verbose=bool(cfg.strategy.verbose),
             key_for_gradient=str(cfg.strategy.key_for_gradient),  # type: ignore[arg-type]
         )
+    elif impl == "mcmc":
+        strategy = MCMCStrategy(
+            cap_max=int(cfg.strategy.mcmc_cap_max),
+            noise_lr=float(cfg.strategy.mcmc_noise_lr),
+            refine_start_iter=int(cfg.strategy.refine_start_iter),
+            refine_stop_iter=int(cfg.strategy.refine_stop_iter),
+            noise_injection_stop_iter=int(cfg.strategy.mcmc_noise_injection_stop_iter),
+            refine_every=int(cfg.strategy.refine_every),
+            min_opacity=float(cfg.strategy.mcmc_min_opacity),
+            verbose=bool(cfg.strategy.verbose),
+        )
     else:
         raise ValueError(
-            f"Unknown strategy.impl={cfg.strategy.impl!r} (expected 'improved' or 'default')."
+            "Unknown strategy.impl="
+            f"{cfg.strategy.impl!r} (expected 'improved', 'default', or 'mcmc')."
         )
     # Strategy sanity requires access to raw splat tensors + the per-splat optimizers.
     strategy.check_sanity(gaussian_model.splats, optimizer_bundle.splat_optimizers)
-    strategy_state = strategy.initialize_state(
-        scene_scale=float(parsed_scene.scene_scale)
-    )
+    strategy_state = strategy.initialize_state(scene_scale=float(parsed_scene.scene_scale))
 
     optimizer_coordinator = OptimizerCoordinator(
         optim_cfg=cfg.optim,

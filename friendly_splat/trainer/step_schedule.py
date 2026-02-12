@@ -15,7 +15,7 @@ class StepSchedule:
     do_surf_normal_reg: bool
     do_consistency_normal_reg: bool
     do_flat_reg: bool
-    do_scale_reg: bool
+    do_scale_ratio_reg: bool
     active_sh_degree: int
     render_mode: Literal["RGB", "RGB+ED", "RGB+N+ED"]
 
@@ -44,8 +44,8 @@ def compute_step_schedule(
     normal_due = reg_cfg.normal_reg_every_n > 0 and (
         step % reg_cfg.normal_reg_every_n == 0
     )
-    scale_due = reg_cfg.scale_reg_every_n > 0 and (
-        step % reg_cfg.scale_reg_every_n == 0
+    scale_ratio_due = reg_cfg.scale_ratio_reg_every_n > 0 and (
+        step % reg_cfg.scale_ratio_reg_every_n == 0
     )
 
     do_depth_reg = (
@@ -73,7 +73,7 @@ def compute_step_schedule(
     )
 
     do_flat_reg = reg_cfg.flat_reg_weight > 0.0
-    do_scale_reg = reg_cfg.scale_reg_weight > 0.0 and scale_due
+    do_scale_ratio_reg = reg_cfg.scale_ratio_reg_weight > 0.0 and scale_ratio_due
 
     need_expected_depth = (
         do_depth_reg or do_surf_normal_reg or do_consistency_normal_reg
@@ -93,7 +93,7 @@ def compute_step_schedule(
         do_surf_normal_reg=do_surf_normal_reg,
         do_consistency_normal_reg=do_consistency_normal_reg,
         do_flat_reg=do_flat_reg,
-        do_scale_reg=do_scale_reg,
+        do_scale_ratio_reg=do_scale_ratio_reg,
         active_sh_degree=int(active_sh_degree),
         render_mode=render_mode,
     )

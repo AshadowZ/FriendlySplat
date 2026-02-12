@@ -138,7 +138,7 @@ def compute_losses_from_prepared_batch_and_render(
     do_surf_normal_reg = bool(schedule.do_surf_normal_reg)
     do_consistency_normal_reg = bool(schedule.do_consistency_normal_reg)
     do_flat_reg = bool(schedule.do_flat_reg)
-    do_scale_reg = bool(schedule.do_scale_reg)
+    do_scale_ratio_reg = bool(schedule.do_scale_ratio_reg)
 
     base = compute_losses(
         reg_cfg=reg_cfg,
@@ -147,7 +147,7 @@ def compute_losses_from_prepared_batch_and_render(
         do_surf_normal_reg=do_surf_normal_reg,
         do_consistency_normal_reg=do_consistency_normal_reg,
         do_flat_reg=do_flat_reg,
-        do_scale_reg=do_scale_reg,
+        do_scale_ratio_reg=do_scale_ratio_reg,
         pixels=prepared_batch.pixels,
         pred_rgb=render_out.pred_rgb,
         alphas=render_out.alphas,

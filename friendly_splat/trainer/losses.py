@@ -251,6 +251,30 @@ def scale_ratio_regularization_from_log_scales(
     return (ratio - thr).clamp(min=0.0).mean()
 
 
+def opacity_mean_regularization_from_logits(opacity_logits: torch.Tensor) -> torch.Tensor:
+    """MCMC-3DGS-style opacity regularization.
+
+    Inspired by "3D Gaussian Splatting as Markov Chain Monte Carlo"
+    (https://arxiv.org/abs/2404.09591).
+
+    In our parameterization, per-Gaussian opacity is `sigmoid(opacity_logits)`, and
+    we penalize its mean value to encourage transparent / relocatable Gaussians.
+    """
+    return torch.sigmoid(opacity_logits).mean()
+
+
+def scale_mean_regularization_from_log_scales(log_scales: torch.Tensor) -> torch.Tensor:
+    """MCMC-3DGS-style scale/covariance regularization.
+
+    Inspired by "3D Gaussian Splatting as Markov Chain Monte Carlo"
+    (https://arxiv.org/abs/2404.09591).
+
+    We store per-axis log standard deviations (`log_scales`); this penalizes the mean
+    standard deviation `exp(log_scales)` to discourage overly large Gaussians.
+    """
+    return torch.exp(log_scales).mean()
+
+
 def cosine_normal_loss(
     pred_normals: torch.Tensor,
     gt_normals: torch.Tensor,
@@ -324,7 +348,7 @@ def compute_losses(
     do_surf_normal_reg: bool,
     do_consistency_normal_reg: bool,
     do_flat_reg: bool,
-    do_scale_reg: bool,
+    do_scale_ratio_reg: bool,
     pixels: torch.Tensor,
     pred_rgb: torch.Tensor,
     alphas: torch.Tensor,
@@ -339,7 +363,8 @@ def compute_losses(
 ) -> LossOutput:
     """Compute total loss and per-term metrics for one training step.
 
-    The `do_*` switches are decided by train pipeline scheduling logic.
+    The `do_*` switches are decided by per-step scheduling logic (see step_schedule.py).
+    Returned `items` are detached scalars suitable for logging.
     """
     device = pixels.device
     batch_size, height, width = (
@@ -350,7 +375,7 @@ def compute_losses(
 
     items: Dict[str, torch.Tensor] = {}
 
-    # Shared validity mask for color/geometry terms.
+    # Valid pixels for photometric/geometry terms (exclude sky/dynamic masks when present).
     valid_color = torch.ones(
         (batch_size, height, width), dtype=torch.bool, device=device
     )
@@ -359,7 +384,7 @@ def compute_losses(
     if isinstance(dynamic_mask, torch.Tensor):
         valid_color = valid_color & (~dynamic_mask.bool())
 
-    # Photometric RGB loss: masked L1 + optional SSIM.
+    # Photometric RGB loss (masked L1 + optional SSIM).
     rgb_loss, photometric_items = photometric_loss(
         pred_rgb=pred_rgb,
         gt_rgb=pixels,
@@ -369,7 +394,7 @@ def compute_losses(
     total = rgb_loss
     items.update(photometric_items)
 
-    # Sky supervision: encourage transparency on sky pixels.
+    # Sky supervision (encourage transparency on sky pixels).
     sky_loss = torch.tensor(0.0, device=device)
     if float(reg_cfg.sky_loss_weight) > 0.0 and isinstance(sky_mask, torch.Tensor):
         sky_loss = sky_transparency_loss(
@@ -394,7 +419,7 @@ def compute_losses(
     # Normal-related terms share the same visibility mask.
     valid_norm = valid_color & (alphas[..., 0] > 1e-6)
 
-    # Rendered normal supervision.
+    # Rendered normal supervision (gsplat normals vs normal prior).
     render_normal_loss = torch.tensor(0.0, device=device)
     if do_render_normal_reg:
         render_normal_loss = cosine_normal_loss(
@@ -405,12 +430,12 @@ def compute_losses(
         total = total + float(reg_cfg.normal_loss_weight) * render_normal_loss
         items["render_normal"] = render_normal_loss.detach()
 
-    # Compute depth-implied normals only when needed by downstream terms.
+    # Depth-implied normals are computed only if needed by downstream terms.
     surf_normals = None
     if do_surf_normal_reg or do_consistency_normal_reg:
         surf_normals = get_implied_normal_from_depth(expected_depth, Ks)
 
-    # Depth-implied normal supervision.
+    # Depth-implied normal supervision (depth-implied normals vs normal prior).
     surf_normal_loss = torch.tensor(0.0, device=device)
     if do_surf_normal_reg:
         surf_normal_loss = cosine_normal_loss(
@@ -421,7 +446,7 @@ def compute_losses(
         total = total + float(reg_cfg.surf_normal_loss_weight) * surf_normal_loss
         items["surf_normal"] = surf_normal_loss.detach()
 
-    # Normal consistency: rendered normals should match depth-implied normals.
+    # Normal consistency (rendered normals vs depth-implied normals).
     consistency_normal_loss = torch.tensor(0.0, device=device)
     if do_consistency_normal_reg:
         consistency_normal_loss = cosine_normal_loss(
@@ -435,22 +460,34 @@ def compute_losses(
         )
         items["consistency_normal"] = consistency_normal_loss.detach()
 
-    # Scale regularizations.
-    # `scale_reg` is used to prevent Gaussians from becoming overly elongated.
+    # Scale regularizations (PhysGauss-style).
     flat_reg = torch.tensor(0.0, device=device)
     if do_flat_reg:
         flat_reg = flatness_loss_from_log_scales(gaussian_model.log_scales)
         total = total + float(reg_cfg.flat_reg_weight) * flat_reg
         items["flat_reg"] = flat_reg.detach()
 
-    scale_reg = torch.tensor(0.0, device=device)
-    if do_scale_reg:
-        scale_reg = scale_ratio_regularization_from_log_scales(
+    scale_ratio_reg = torch.tensor(0.0, device=device)
+    if do_scale_ratio_reg:
+        scale_ratio_reg = scale_ratio_regularization_from_log_scales(
             gaussian_model.log_scales,
             max_gauss_ratio=float(reg_cfg.max_gauss_ratio),
         )
-        total = total + float(reg_cfg.scale_reg_weight) * scale_reg
-        items["scale_reg"] = scale_reg.detach()
+        total = total + float(reg_cfg.scale_ratio_reg_weight) * scale_ratio_reg
+        items["scale_ratio_reg"] = scale_ratio_reg.detach()
+
+    # Optional MCMC regularizers (only active when weights > 0).
+    opacity_reg = torch.tensor(0.0, device=device)
+    if float(reg_cfg.opacity_reg_weight) > 0.0:
+        opacity_reg = opacity_mean_regularization_from_logits(gaussian_model.opacity_logits)
+        total = total + float(reg_cfg.opacity_reg_weight) * opacity_reg
+        items["opacity_reg"] = opacity_reg.detach()
+
+    scale_l1_reg = torch.tensor(0.0, device=device)
+    if float(reg_cfg.scale_l1_reg_weight) > 0.0:
+        scale_l1_reg = scale_mean_regularization_from_log_scales(gaussian_model.log_scales)
+        total = total + float(reg_cfg.scale_l1_reg_weight) * scale_l1_reg
+        items["scale_l1_reg"] = scale_l1_reg.detach()
 
     items["total"] = total.detach()
     return LossOutput(total=total, items=items)

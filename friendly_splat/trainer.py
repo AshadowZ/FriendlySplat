@@ -189,6 +189,8 @@ class Trainer:
             )
 
             # Strategy post-update (densify/prune).
+            means_opt = optimizer_coordinator.splat_optimizers["means"]
+            lr_means = float(means_opt.param_groups[0]["lr"])
             strategy.step_post_backward(
                 params=gaussian_model.splats,
                 optimizers=optimizer_coordinator.splat_optimizers,
@@ -196,6 +198,7 @@ class Trainer:
                 step=step,
                 info=meta,
                 packed=cfg.optim.packed,
+                lr=lr_means,  # MCMC only
             )
 
             if gns is not None:
