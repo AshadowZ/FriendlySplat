@@ -79,6 +79,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("rasterize_to_pixels_from_world_3dgs_fwd", &gsplat::rasterize_to_pixels_from_world_3dgs_fwd);
     m.def("rasterize_to_pixels_from_world_3dgs_bwd", &gsplat::rasterize_to_pixels_from_world_3dgs_bwd);
 
+    m.def("relocation", &gsplat::relocation);
+
     // Cameras from 3DGUT
     py::enum_<ShutterType>(m, "ShutterType")
         .value("ROLLING_TOP_TO_BOTTOM", ShutterType::ROLLING_TOP_TO_BOTTOM)

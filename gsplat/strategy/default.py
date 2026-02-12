@@ -157,8 +157,10 @@ class DefaultStrategy(Strategy):
         step: int,
         info: Dict[str, Any],
         packed: bool = False,
+        lr: float | None = None,
     ):
         """Callback function to be executed after the `loss.backward()` call."""
+        del lr
         if step >= self.refine_stop_iter:
             return
 
