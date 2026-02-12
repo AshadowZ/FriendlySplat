@@ -38,6 +38,18 @@ For `--strategy-impl default`, it applies a gsplat DefaultStrategy-style baselin
 - Sets `strategy.refine_scale2d_stop_iter=0` and `strategy.prune_scale3d=0.1`
 - Aligns the main optimizer LRs (means/scales/quats/opacities/SH) and sets means `lr_final=0.01*lr_init`
 
+For `--strategy-impl mcmc`, it aligns to gsplat's MCMC preset:
+
+- Sets `init.init_opacity=0.5` and `init.init_scale=0.1`
+- Enables MCMC regularizers (`reg.opacity_reg_weight=0.01`, `reg.scale_l1_reg_weight=0.01`)
+- Sets `strategy.refine_stop_iter=25_000` and aligns key MCMC knobs (noise/min_opacity)
+- Aligns the main optimizer LRs (means/scales/quats/opacities/SH) and sets means `lr_final=0.01*lr_init`
+
+When `--budget-profile` is enabled, the per-scene budgets are applied as:
+
+- ImprovedStrategy: `strategy.densification_budget`
+- MCMCStrategy: `strategy.mcmc_cap_max`
+
 By default it also uses `preload='cuda'` for faster throughput (at the cost of GPU memory).
 To disable preloading:
 

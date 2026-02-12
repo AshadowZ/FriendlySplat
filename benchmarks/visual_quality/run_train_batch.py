@@ -479,9 +479,59 @@ def main(argv: list[str]) -> int:
                 ]
                 # Keep the gsplat baseline behavior: means LR decays to 0.01x by the end.
                 means_lr_final_override = "1.6e-6"
+            elif str(args.strategy_impl) == "mcmc":
+                # Gsplat MCMCStrategy baseline alignment (see /home/joker/learning/gsplat/examples/simple_trainer.py).
+                #
+                # Notable MCMC preset differences:
+                # - init_opacity=0.5, init_scale=0.1
+                # - opacity_reg=0.01, scale_reg=0.01
+                # - refine_stop_iter=25_000
+                cmd += [
+                    "--init.init-opacity",
+                    "0.5",
+                    "--init.init-scale",
+                    "0.1",
+                ]
+                cmd += [
+                    "--reg.opacity-reg-weight",
+                    "0.01",
+                    "--reg.scale-l1-reg-weight",
+                    "0.01",
+                ]
+                cmd += [
+                    "--strategy.refine-stop-iter",
+                    "25000",
+                    "--strategy.mcmc-noise-lr",
+                    "5e5",
+                    "--strategy.mcmc-noise-injection-stop-iter",
+                    "-1",
+                    "--strategy.mcmc-min-opacity",
+                    "0.005",
+                    "--strategy.verbose",
+                ]
+                # Optimizer hyperparameters (gsplat simple_trainer mcmc preset shares baseline LRs).
+                cmd += ["--optim.no-random-bkgd"]
+                cmd += [
+                    "--optim.optimizers.means.optimizer.lr",
+                    "1.6e-4",
+                    "--optim.optimizers.opacities.optimizer.lr",
+                    "5e-2",
+                    "--optim.optimizers.sh0.optimizer.lr",
+                    "2.5e-3",
+                    "--optim.optimizers.shN.optimizer.lr",
+                    "1.25e-4",
+                    "--optim.optimizers.scales.optimizer.lr",
+                    "5e-3",
+                    "--optim.optimizers.quats.optimizer.lr",
+                    "1e-3",
+                ]
+                means_lr_final_override = "1.6e-6"
 
-            # Apply per-scene budget when requested and when the chosen strategy consumes it.
-            if budgets:
+            # Apply Improved-GS per-scene budgets.
+            #
+            # - ImprovedStrategy: maps to densification_budget.
+            # - MCMCStrategy: maps to cap_max.
+            if budgets and str(args.strategy_impl) in ("improved", "mcmc"):
                 if scene not in budgets:
                     raise KeyError(
                         f"Budget missing for scene {scene!r} (budget_profile={args.budget_profile})."
