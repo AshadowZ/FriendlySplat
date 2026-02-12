@@ -32,6 +32,12 @@ For `--strategy-impl improved`, it also applies an Improved-GS-style alignment:
 - Sets key strategy switches and optimizer hyperparameters to Improved-GS defaults
 - Enables the MU-style splat optimizer step schedule by default (`optim.mu_enable=True`) (disable with `--no-mu`)
 
+For `--strategy-impl default`, it applies a gsplat DefaultStrategy-style baseline:
+
+- Disables `strategy.absgrad` and enables `strategy.verbose`
+- Sets `strategy.refine_scale2d_stop_iter=0` and `strategy.prune_scale3d=0.1`
+- Aligns the main optimizer LRs (means/scales/quats/opacities/SH) and sets means `lr_final=0.01*lr_init`
+
 By default it also uses `preload='cuda'` for faster throughput (at the cost of GPU memory).
 To disable preloading:
 
