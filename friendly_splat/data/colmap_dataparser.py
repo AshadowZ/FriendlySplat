@@ -70,6 +70,12 @@ class ColmapDataParser(DataParser):
         )
         # 4) Resolve image paths and validate intrinsics/image consistency.
         image_paths = self._resolve_image_paths(image_names=image_names)
+        self._maybe_rescale_intrinsics_to_match_image_resolution(
+            camera_ids=camera_ids,
+            Ks_dict=Ks_dict,
+            imsize_dict=imsize_dict,
+            image_paths=image_paths,
+        )
         self._validate_intrinsics_image_resolution_matches(
             camera_ids=camera_ids,
             imsize_dict=imsize_dict,
@@ -345,6 +351,74 @@ class ColmapDataParser(DataParser):
                 f"factor={int(self.factor)}. "
                 "Please regenerate COLMAP or use matching images/intrinsics."
             )
+
+    def _maybe_rescale_intrinsics_to_match_image_resolution(
+        self,
+        *,
+        camera_ids: List[int],
+        Ks_dict: Dict[int, np.ndarray],
+        imsize_dict: Dict[int, tuple[int, int]],
+        image_paths: List[str],
+    ) -> None:
+        """Try to fix a global COLMAP intrinsics/image resolution mismatch.
+
+        Some datasets may ship images whose resolution differs from the COLMAP model's
+        recorded (width, height) and intrinsics, but only by a global uniform scale
+        factor (e.g. 2x upsampled intrinsics in Tanks&Temples, or users keeping only
+        `images_4/` on disk).
+
+        In this case, we can rescale all intrinsics by the observed ratio between the
+        first image's *actual* resolution and COLMAP's *expected* resolution.
+
+        If the mismatch is not close to a uniform scale (e.g. cropping/letterboxing),
+        we keep strict behavior and let validation raise.
+        """
+        if not camera_ids or not image_paths:
+            return
+
+        camera_id0 = int(camera_ids[0])
+        if camera_id0 not in imsize_dict:
+            return
+
+        image0 = imread_rgb(image_paths[0])
+        actual_h, actual_w = image0.shape[:2]
+        expected_w, expected_h = imsize_dict[camera_id0]
+        if int(actual_w) == int(expected_w) and int(actual_h) == int(expected_h):
+            return
+        if expected_w <= 0 or expected_h <= 0:
+            return
+
+        s_w = float(actual_w) / float(expected_w)
+        s_h = float(actual_h) / float(expected_h)
+        if not np.isfinite(s_w) or not np.isfinite(s_h) or s_w <= 0.0 or s_h <= 0.0:
+            return
+
+        # Only accept near-uniform scaling. Cropping would require shifting cx/cy,
+        # so we keep strict-mode for that case.
+        if abs((s_w / s_h) - 1.0) > 0.01:
+            return
+
+        warnings.warn(
+            "COLMAP intrinsics/image resolution mismatch detected; applying a global intrinsics "
+            f"rescale using the first image: expected=({expected_w}, {expected_h}), "
+            f"actual=({actual_w}, {actual_h}), scale≈{0.5 * (s_w + s_h):.6f} "
+            f"(w={s_w:.6f}, h={s_h:.6f}).",
+            category=UserWarning,
+            stacklevel=2,
+        )
+
+        for cam_id, K in Ks_dict.items():
+            K = np.asarray(K)
+            K = K.copy()
+            K[0, :] *= s_w
+            K[1, :] *= s_h
+            Ks_dict[int(cam_id)] = K
+
+            w, h = imsize_dict[int(cam_id)]
+            if int(cam_id) == camera_id0:
+                imsize_dict[int(cam_id)] = (int(actual_w), int(actual_h))
+            else:
+                imsize_dict[int(cam_id)] = (int(round(float(w) * s_w)), int(round(float(h) * s_h)))
 
     def _build_paths(self, dir_name: Optional[str], ext: str) -> Optional[List[str]]:
         if dir_name is None:
