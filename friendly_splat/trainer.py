@@ -10,6 +10,18 @@ This file intentionally stays thin and mostly orchestrates:
 - `friendly_splat.viewer.viewer_runtime`: optional online viewer integration
 """
 
+import sys
+from pathlib import Path
+
+# When invoked as a script (`python friendly_splat/trainer.py`), Python sets sys.path[0] to
+# `<repo>/friendly_splat/`, which prevents `import friendly_splat...` from resolving.
+# Ensure the repository root is on sys.path for script-style execution.
+if __name__ == "__main__" and __package__ is None:
+    repo_root = Path(__file__).resolve().parents[1]
+    repo_root_str = str(repo_root)
+    if repo_root_str not in sys.path:
+        sys.path.insert(0, repo_root_str)
+
 import torch
 import tyro
 import tqdm
