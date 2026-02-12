@@ -446,6 +446,39 @@ def main(argv: list[str]) -> int:
                     "999.0",
                 ]
                 means_lr_final_override = "2e-6"
+            elif str(args.strategy_impl) == "default":
+                # Gsplat DefaultStrategy baseline alignment (original 3DGS-style).
+                #
+                # Strategy defaults differ from FriendlySplat's shared defaults:
+                # - absgrad=False
+                # - refine_scale2d_stop_iter=0
+                # - prune_scale3d=0.1
+                cmd += [
+                    "--strategy.no-absgrad",
+                    "--strategy.verbose",
+                    "--strategy.refine-scale2d-stop-iter",
+                    "0",
+                    "--strategy.prune-scale3d",
+                    "0.1",
+                ]
+                # Optimizer hyperparameters (gsplat simple_trainer baseline).
+                cmd += ["--optim.no-random-bkgd"]
+                cmd += [
+                    "--optim.optimizers.means.optimizer.lr",
+                    "1.6e-4",
+                    "--optim.optimizers.opacities.optimizer.lr",
+                    "5e-2",
+                    "--optim.optimizers.sh0.optimizer.lr",
+                    "2.5e-3",
+                    "--optim.optimizers.shN.optimizer.lr",
+                    "1.25e-4",
+                    "--optim.optimizers.scales.optimizer.lr",
+                    "5e-3",
+                    "--optim.optimizers.quats.optimizer.lr",
+                    "1e-3",
+                ]
+                # Keep the gsplat baseline behavior: means LR decays to 0.01x by the end.
+                means_lr_final_override = "1.6e-6"
 
             # Apply per-scene budget when requested and when the chosen strategy consumes it.
             if budgets:
