@@ -34,6 +34,11 @@ class DataConfig:
     data_factor: int = 1
     # Normalize the world space based on COLMAP points/cameras.
     normalize_world_space: bool = True
+    # Whether to align world axes during normalization (z-up + PCA principal axes).
+    # When False, normalization becomes translation+uniform scale only (no rotation).
+    # This keeps the world axes aligned with COLMAP and avoids SH coefficient rotation
+    # when exporting/evaluating in COLMAP coordinates.
+    align_world_axes: bool = False
     # Every N images there is a test image.
     test_every: int = 8
     # Benchmark split mode for training:

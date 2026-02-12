@@ -25,6 +25,7 @@ class ColmapDataParser(DataParser):
         data_dir: str,
         factor: int = 1,
         normalize_world_space: bool = False,
+        align_world_axes: bool = False,
         test_every: int = 8,
         benchmark_train_split: bool = False,
         depth_dir_name: Optional[str] = None,
@@ -35,6 +36,7 @@ class ColmapDataParser(DataParser):
         self.data_dir = str(data_dir)
         self.factor = int(factor)
         self.normalize_world_space = bool(normalize_world_space)
+        self.align_world_axes = bool(align_world_axes)
         self.test_every = int(test_every)
         self.benchmark_train_split = bool(benchmark_train_split)
         self.depth_dir_name = depth_dir_name
@@ -204,7 +206,9 @@ class ColmapDataParser(DataParser):
                     "normalize_world_space=True requires points3D in the COLMAP model."
                 )
             camtoworlds, points, transform, scale = transform_cameras_and_points(
-                camtoworlds, points
+                camtoworlds,
+                points,
+                rotate=bool(self.align_world_axes),
             )
             return camtoworlds, points, transform.astype(np.float32), float(scale)
 
@@ -225,7 +229,16 @@ class ColmapDataParser(DataParser):
         image_dir = data_dir / f"images_{factor}" if factor > 1 else colmap_image_dir
 
         if not colmap_image_dir.exists():
-            raise FileNotFoundError(f"Image folder {colmap_image_dir} does not exist.")
+            # Benchmarking convenience: some datasets keep only downsampled images on disk
+            # (e.g. `images_4/`) while still using a COLMAP model reconstructed from the
+            # original resolution. In this case, we treat `images_<factor>/` as the
+            # reference image folder for COLMAP name resolution checks.
+            if factor > 1 and image_dir.exists():
+                colmap_image_dir = image_dir
+            else:
+                raise FileNotFoundError(
+                    f"Image folder {colmap_image_dir} does not exist."
+                )
         if factor <= 1 and not image_dir.exists():
             raise FileNotFoundError(f"Image folder {image_dir} does not exist.")
         return colmap_image_dir, image_dir
@@ -250,14 +263,28 @@ class ColmapDataParser(DataParser):
         if len(image_files) == 0:
             raise FileNotFoundError(f"No images found under {image_dir}.")
 
-        colmap_file_set = set(get_rel_paths(str(colmap_image_dir)))
-        missing_in_colmap = [
-            name for name in image_names if name not in colmap_file_set
-        ]
+        # Ensure every COLMAP-referenced image has a corresponding file under the
+        # COLMAP reference image directory. Allow extension changes (e.g. .JPG -> .png)
+        # since our downsample pipeline writes `.png` by default.
+        colmap_files = sorted(get_rel_paths(str(colmap_image_dir)))
+        colmap_file_set = set(colmap_files)
+        colmap_files_by_stem: Dict[str, List[str]] = {}
+        for rel_path in colmap_files:
+            stem = os.path.splitext(rel_path)[0]
+            colmap_files_by_stem.setdefault(stem, []).append(rel_path)
+
+        missing_in_colmap: List[str] = []
+        for name in image_names:
+            if name in colmap_file_set:
+                continue
+            stem = os.path.splitext(name)[0]
+            if stem not in colmap_files_by_stem:
+                missing_in_colmap.append(name)
         if missing_in_colmap:
             sample = missing_in_colmap[0]
             raise FileNotFoundError(
-                f"Image referenced by COLMAP model not found in source images dir: {sample}"
+                "Image referenced by COLMAP model not found in reference images dir "
+                f"(by path or stem match): {sample}"
             )
 
         image_file_set = set(image_files)
