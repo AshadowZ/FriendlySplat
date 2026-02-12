@@ -411,6 +411,13 @@ def main(argv: list[str]) -> int:
         help="Optional comma-separated scene names to exclude.",
     )
     parser.add_argument(
+        "--strategy-impl",
+        type=str,
+        default="improved",
+        choices=("improved", "default", "mcmc"),
+        help="Which benchmark output folder to evaluate (under benchmark/<strategy>/...).",
+    )
+    parser.add_argument(
         "--step",
         type=int,
         default=None,
@@ -631,6 +638,7 @@ def main(argv: list[str]) -> int:
                 row: dict[str, object] = {
                     "dataset": dataset.key,
                     "scene": scene,
+                    "strategy": str(args.strategy_impl),
                     "step": int(ply_step),
                     "data_factor": int(data_factor),
                     "psnr": float(stats["psnr"]),
@@ -652,6 +660,7 @@ def main(argv: list[str]) -> int:
     fieldnames = [
         "dataset",
         "scene",
+        "strategy",
         "step",
         "data_factor",
         "psnr",

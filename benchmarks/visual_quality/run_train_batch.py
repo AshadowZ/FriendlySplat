@@ -183,7 +183,7 @@ def main(argv: list[str]) -> int:
         prog="run_train_batch.py",
         description=(
             "Batch runner for FriendlySplat training (single GPU, sequential). "
-            "Designed for Improved-GS-style benchmarking where only per-scene budget differs."
+            "Designed for benchmarking different densification strategies."
         ),
     )
     parser.add_argument(
@@ -254,6 +254,13 @@ def main(argv: list[str]) -> int:
         help="Improved-GS per-scene budget table to use. 'none' disables budget overrides.",
     )
     parser.add_argument(
+        "--strategy-impl",
+        type=str,
+        default="improved",
+        choices=("improved", "default", "mcmc"),
+        help="Strategy implementation to use for training.",
+    )
+    parser.add_argument(
         "--tb-every-n",
         type=int,
         default=100,
@@ -264,6 +271,11 @@ def main(argv: list[str]) -> int:
         type=int,
         default=500,
         help="TensorBoard flush cadence in logged training steps.",
+    )
+    parser.add_argument(
+        "--no-mu",
+        action="store_true",
+        help="Disable MU schedule (only used when --strategy-impl improved).",
     )
     parser.add_argument(
         "--dry-run",
@@ -279,6 +291,11 @@ def main(argv: list[str]) -> int:
         "--skip-existing",
         action="store_true",
         help="Skip a scene if its output directory already exists (even if not done).",
+    )
+    parser.add_argument(
+        "extra_args",
+        nargs=argparse.REMAINDER,
+        help="Extra args forwarded to friendly_splat/trainer.py (use after '--').",
     )
 
     args = parser.parse_args(argv)
@@ -317,6 +334,10 @@ def main(argv: list[str]) -> int:
     if not trainer_py.exists():
         raise FileNotFoundError(f"Trainer script not found: {trainer_py}")
 
+    extra_args = list(args.extra_args)
+    if extra_args and extra_args[0] == "--":
+        extra_args = extra_args[1:]
+
     any_failed = False
     for dataset_key in dataset_keys:
         dataset = _DATASETS.get(dataset_key)
@@ -334,7 +355,7 @@ def main(argv: list[str]) -> int:
 
             # Improved-GS-style layout: store outputs under the dataset directory.
             # Example: <data-root>/Mip-NeRF360/benchmark/improved/bicycle/
-            scene_out_dir = dataset_dir / "benchmark" / "improved" / scene
+            scene_out_dir = dataset_dir / "benchmark" / str(args.strategy_impl) / scene
 
             log_path: Optional[Path] = None
             if not bool(args.dry_run):
@@ -351,9 +372,8 @@ def main(argv: list[str]) -> int:
                 log_path = log_dir / "train.log"
 
             # Resolve data_factor with the following precedence:
-            # 1) Explicit per-scene override (--scene-data-factor / --scene-data-factors)
+            # 1) Explicit per-scene override (--scene-data-factor)
             # 2) Auto-infer from on-disk image folders
-            # 3) Global default (--data-factor)
             if scene in scene_data_factors:
                 data_factor = int(scene_data_factors[scene])
             else:
@@ -385,11 +405,11 @@ def main(argv: list[str]) -> int:
                 "--optim.max-steps",
                 str(int(args.max_steps)),
                 "--strategy.impl",
-                "improved",
+                str(args.strategy_impl),
                 "--viewer.disable-viewer",
                 "--data.benchmark-train-split",
             ]
-            means_lr_final_override = "2e-6"
+            means_lr_final_override: Optional[str] = None
 
             # Enforce preload='cuda' constraints (see validate_train_config / DataLoader assertions).
             if str(args.data_preload) == "cuda":
@@ -399,29 +419,33 @@ def main(argv: list[str]) -> int:
                     "0",
                 ]
 
-            # Improved-GS alignment: match key benchmark switches + optimizer hyperparameters.
-            cmd += ["--strategy.grow-grad2d", "0.0003"]
-            cmd += ["--optim.no-random-bkgd"]
-            cmd += [
-                "--optim.optimizers.means.optimizer.lr",
-                "4e-5",
-                "--optim.optimizers.opacities.optimizer.lr",
-                "0.025",
-                "--optim.optimizers.sh0.optimizer.lr",
-                "0.0025",
-                "--optim.optimizers.shN.optimizer.lr",
-                "0.00025",
-                "--optim.optimizers.scales.optimizer.lr",
-                "0.005",
-                "--optim.optimizers.quats.optimizer.lr",
-                "0.001",
-            ]
-            cmd += [
-                "--strategy.refine-scale2d-stop-iter",
-                "0",
-                "--strategy.prune-scale3d",
-                "999.0",
-            ]
+            if str(args.strategy_impl) == "improved":
+                # Improved-GS alignment: match key benchmark switches + optimizer hyperparameters.
+                cmd += ["--strategy.grow-grad2d", "0.0003"]
+                cmd += ["--optim.no-random-bkgd"]
+                if not bool(args.no_mu):
+                    cmd += ["--optim.mu-enable"]
+                cmd += [
+                    "--optim.optimizers.means.optimizer.lr",
+                    "4e-5",
+                    "--optim.optimizers.opacities.optimizer.lr",
+                    "0.025",
+                    "--optim.optimizers.sh0.optimizer.lr",
+                    "0.0025",
+                    "--optim.optimizers.shN.optimizer.lr",
+                    "0.00025",
+                    "--optim.optimizers.scales.optimizer.lr",
+                    "0.005",
+                    "--optim.optimizers.quats.optimizer.lr",
+                    "0.001",
+                ]
+                cmd += [
+                    "--strategy.refine-scale2d-stop-iter",
+                    "0",
+                    "--strategy.prune-scale3d",
+                    "999.0",
+                ]
+                means_lr_final_override = "2e-6"
 
             # Apply per-scene budget when requested and when the chosen strategy consumes it.
             if budgets:
@@ -429,10 +453,16 @@ def main(argv: list[str]) -> int:
                     raise KeyError(
                         f"Budget missing for scene {scene!r} (budget_profile={args.budget_profile})."
                     )
-                cmd += [
-                    "--strategy.densification-budget",
-                    str(int(budgets[scene])),
-                ]
+                if str(args.strategy_impl) == "improved":
+                    cmd += [
+                        "--strategy.densification-budget",
+                        str(int(budgets[scene])),
+                    ]
+                elif str(args.strategy_impl) == "mcmc":
+                    cmd += [
+                        "--strategy.mcmc-cap-max",
+                        str(int(budgets[scene])),
+                    ]
 
             cmd += [
                 "--io.export-ply",
@@ -443,6 +473,9 @@ def main(argv: list[str]) -> int:
             cmd += ["--tb.enable"]
             cmd += ["--tb.every-n", str(int(args.tb_every_n))]
             cmd += ["--tb.flush-every-n", str(int(args.tb_flush_every_n))]
+
+            if extra_args:
+                cmd += extra_args
 
             if means_lr_final_override is not None:
                 # Tyro models Optional[...] dataclasses as a subcommand. To override
