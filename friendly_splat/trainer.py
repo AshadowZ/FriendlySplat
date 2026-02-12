@@ -15,6 +15,7 @@ import tyro
 import tqdm
 
 import random
+import time
 import numpy as np
 
 from friendly_splat.viewer.viewer_runtime import ViewerRuntime
@@ -101,24 +102,27 @@ class Trainer:
         loader_iter = iter(self.loader)
         tb_writer = TensorBoardWriter(io_cfg=cfg.io, tb_cfg=cfg.tb)
 
-        viewer_runtime = ViewerRuntime(
-            disable_viewer=cfg.viewer.disable_viewer,
-            port=cfg.viewer.port,
-            device=self.device,
-            gaussian_model=gaussian_model,
-            output_dir=cfg.io.result_dir,
-            train_dataset=self.dataset,
-        )
+        viewer_runtime = None
+        if not bool(cfg.viewer.disable_viewer):
+            viewer_runtime = ViewerRuntime(
+                disable_viewer=cfg.viewer.disable_viewer,
+                port=cfg.viewer.port,
+                device=self.device,
+                gaussian_model=gaussian_model,
+                output_dir=cfg.io.result_dir,
+                train_dataset=self.dataset,
+            )
         self.viewer_runtime = viewer_runtime
         tqdm_update_every = 10
         pbar = tqdm.tqdm(
             range(cfg.optim.max_steps),
             miniters=int(tqdm_update_every),
         )
+        wall_start_s = float(time.perf_counter())
 
         for step in pbar:
             # Viewer sync (pause/step-lock).
-            tic = viewer_runtime.before_step()
+            tic = viewer_runtime.before_step() if viewer_runtime is not None else None
 
             # Per-step policy hooks (LR updates, etc.).
             optimizer_coordinator.prepare_step(step=int(step))
@@ -210,14 +214,15 @@ class Trainer:
                 )
 
             # Update viewer stats + release step lock.
-            viewer_runtime.after_step(
-                step=int(step),
-                tic=tic,
-                batch_size=int(prepared_batch.pixels.shape[0]),
-                height=int(prepared_batch.height),
-                width=int(prepared_batch.width),
-                meta=meta,
-            )
+            if viewer_runtime is not None:
+                viewer_runtime.after_step(
+                    step=int(step),
+                    tic=tic,
+                    batch_size=int(prepared_batch.pixels.shape[0]),
+                    height=int(prepared_batch.height),
+                    width=int(prepared_batch.width),
+                    meta=meta,
+                )
 
             # Periodic evaluation.
             eval_output = maybe_run_evaluation_for_step(
@@ -235,9 +240,9 @@ class Trainer:
                 train_loss_items=loss_output.items,
                 eval_stats=eval_output.stats if eval_output is not None else None,
                 tb_writer=tb_writer,
-                emit_payload=not bool(cfg.viewer.disable_viewer),
+                emit_payload=viewer_runtime is not None,
             )
-            if not bool(cfg.viewer.disable_viewer):
+            if viewer_runtime is not None:
                 viewer_runtime.log_payload(payload=log_payload)
 
             # Keep tqdm refresh frequency low to reduce terminal overhead.
@@ -260,10 +265,21 @@ class Trainer:
                 scene_transform=self.scene_transform,
             )
 
+        wall_total_s = float(time.perf_counter() - float(wall_start_s))
+        print(f"Training time: wall={wall_total_s:.2f}s", flush=True)
+        if tb_writer.should_log(step=int(cfg.optim.max_steps) - 1, respect_every_n=False):
+            tb_writer.log_scalars(
+                step=int(cfg.optim.max_steps) - 1,
+                scalars={"total_time_s": wall_total_s},
+                prefix="train/",
+                flush=True,
+            )
+
         tb_writer.close()
-        viewer_runtime.complete()
-        if (not cfg.viewer.disable_viewer) and cfg.viewer.keep_alive_after_train:
-            viewer_runtime.keep_alive()
+        if viewer_runtime is not None:
+            viewer_runtime.complete()
+            if cfg.viewer.keep_alive_after_train:
+                viewer_runtime.keep_alive()
 
 
 def train(cfg: TrainConfig) -> None:

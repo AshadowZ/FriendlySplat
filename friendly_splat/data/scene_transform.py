@@ -71,6 +71,35 @@ def similarity_from_cameras(c2w, strict_scaling=False, center_method="focus"):
     return transform, scale
 
 
+def similarity_from_cameras_no_rotation(c2w, strict_scaling=False, center_method="focus"):
+    """Get a similarity transform (translation + uniform scale only) from camera poses.
+
+    This variant intentionally avoids any world rotation. It is useful when you want
+    training space to stay aligned with the original COLMAP frame, so exported PLYs
+    can be mapped back without rotating SH coefficients.
+    """
+    t = c2w[:, :3, 3]
+    R = c2w[:, :3, :3]
+
+    fwds = np.sum(R * np.array([0.0, 0.0, 1.0]), axis=-1)
+
+    if center_method == "focus":
+        nearest = t + (fwds * -t).sum(-1)[:, None] * fwds
+        translate = -np.median(nearest, axis=0)
+    elif center_method == "poses":
+        translate = -np.median(t, axis=0)
+    else:
+        raise ValueError(f"Unknown center_method {center_method}")
+
+    transform = np.eye(4)
+    transform[:3, 3] = translate
+
+    scale_fn = np.max if strict_scaling else np.median
+    scale = 1.0 / scale_fn(np.linalg.norm(t + translate, axis=-1))
+    transform[:3, :] *= scale
+    return transform, scale
+
+
 def align_principal_axes(point_cloud):
     """Align principal axes of a point cloud using PCA.
 
@@ -144,25 +173,29 @@ def transform_cameras(matrix, camtoworlds):
     return camtoworlds
 
 
-def transform_cameras_and_points(camtoworlds, points):
+def transform_cameras_and_points(camtoworlds, points, *, rotate: bool = True):
     """Normalize cameras and points into a canonical frame.
 
-    This is a convenience wrapper that:
-      - Computes a similarity transform from cameras.
-      - Applies it to cameras and points.
-      - Aligns the principal axes using the transformed points.
+    When `rotate=True` (default), this matches the original behavior:
+      - Align world up axis (z-up)
+      - Recentering
+      - Uniform rescaling
+      - Principal axes alignment (PCA)
 
-    Returns:
-        camtoworlds: Transformed camera-to-world matrices.
-        points: Transformed 3D points.
-        transform: The composed 4x4 transform applied to the original world frame.
-        scale: Scale factor returned by `similarity_from_cameras`.
+    When `rotate=False`, this performs translation+uniform scale only (no rotation, no PCA).
     """
-    T1, scale = similarity_from_cameras(camtoworlds, strict_scaling=False)
+    if rotate:
+        T1, scale = similarity_from_cameras(camtoworlds, strict_scaling=False)
+        camtoworlds = transform_cameras(T1, camtoworlds)
+        points = transform_points(T1, points)
+        T2 = align_principal_axes(points)
+        camtoworlds = transform_cameras(T2, camtoworlds)
+        points = transform_points(T2, points)
+        transform = T2 @ T1
+        return camtoworlds, points, transform, scale
+
+    T1, scale = similarity_from_cameras_no_rotation(camtoworlds, strict_scaling=False)
     camtoworlds = transform_cameras(T1, camtoworlds)
     points = transform_points(T1, points)
-    T2 = align_principal_axes(points)
-    camtoworlds = transform_cameras(T2, camtoworlds)
-    points = transform_points(T2, points)
-    transform = T2 @ T1
+    transform = T1
     return camtoworlds, points, transform, scale
