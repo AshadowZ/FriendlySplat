@@ -32,8 +32,11 @@ except ImportError:  # pragma: no cover
 
 try:
     from friendly_splat.viewer.gsplat_viewer import GsplatViewer  # type: ignore
-except ImportError:  # pragma: no cover
+except ImportError as e:  # pragma: no cover
+    _GSPLAT_VIEWER_IMPORT_ERROR: ImportError | None = e
     GsplatViewer = None  # type: ignore[assignment]
+else:
+    _GSPLAT_VIEWER_IMPORT_ERROR = None
 
 if TYPE_CHECKING:
     from friendly_splat.data.dataset import InputDataset
@@ -111,11 +114,15 @@ class ViewerRuntime:
         if self.disable_viewer:
             return
 
-        if viser is None or GsplatViewer is None or np is None:
+        if viser is None or vtf is None or uplot is None or GsplatViewer is None or np is None:
+            detail = None
+            if _GSPLAT_VIEWER_IMPORT_ERROR is not None:
+                detail = f"{type(_GSPLAT_VIEWER_IMPORT_ERROR).__name__}: {_GSPLAT_VIEWER_IMPORT_ERROR}"
             raise ImportError(
                 "Online viewer requested but dependencies are missing. "
                 "Install `viser` and `nerfview` (see friendly_splat/requirements.txt) or run with disable_viewer=True."
-            )
+                + (f" (import error: {detail})" if detail else "")
+            ) from _GSPLAT_VIEWER_IMPORT_ERROR
 
         self.server = viser.ViserServer(port=self.port, verbose=False)
         self.renderer = ViewerRenderer(
