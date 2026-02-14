@@ -138,6 +138,10 @@ class EvalConfig:
     max_images: Optional[int] = None
     # LPIPS backbone for evaluation.
     lpips_net: Literal["alex", "vgg"] = "alex"
+    # Metric implementation backend:
+    # - "gsplat": torchmetrics-based metrics (current default)
+    # - "inria": inria/gaussian-splatting-style metrics
+    metrics_backend: Literal["gsplat", "inria"] = "gsplat"
     # Whether to compute color-corrected metrics (cc_psnr/cc_ssim/cc_lpips).
     # Effective only when postprocess uses a photometric adapter (e.g. bilateral grid).
     compute_cc_metrics: bool = True

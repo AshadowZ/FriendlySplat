@@ -440,6 +440,13 @@ def main(argv: list[str]) -> int:
         help="DataLoader preload mode for evaluation.",
     )
     parser.add_argument(
+        "--metrics-backend",
+        type=str,
+        choices=("inria", "gsplat"),
+        default="inria",
+        help="Metric backend to use during benchmarking (default: inria).",
+    )
+    parser.add_argument(
         "--max-images",
         type=int,
         default=None,
@@ -612,6 +619,7 @@ def main(argv: list[str]) -> int:
                 eval_cfg = replace(
                     EvalConfig(),
                     lpips_net="vgg",
+                    metrics_backend=str(args.metrics_backend),
                     max_images=int(args.max_images) if args.max_images is not None else None,
                     compute_cc_metrics=False,
                 )
