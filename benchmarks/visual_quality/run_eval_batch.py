@@ -414,8 +414,20 @@ def main(argv: list[str]) -> int:
         "--strategy-impl",
         type=str,
         default="improved",
-        choices=("improved", "default", "mcmc"),
-        help="Which benchmark output folder to evaluate (under benchmark/<strategy>/...).",
+        choices=("all", "improved", "default", "mcmc"),
+        help=(
+            "Which benchmark output folder(s) to evaluate (under benchmark/<strategy>/...). "
+            "Use 'all' to evaluate improved/default/mcmc sequentially."
+        ),
+    )
+    parser.add_argument(
+        "--out-name",
+        type=str,
+        default=None,
+        help=(
+            "Output markdown filename under the benchmark folder. "
+            "Defaults to 'summary.md' (single strategy) or 'summary_all.md' (all strategies)."
+        ),
     )
     parser.add_argument(
         "--step",
@@ -481,7 +493,17 @@ def main(argv: list[str]) -> int:
     else:
         out_dir = data_root / "benchmark"
     out_dir.mkdir(parents=True, exist_ok=True)
-    md_path = out_dir / "summary.md"
+    strategy_impl_raw = str(args.strategy_impl)
+    if args.out_name is not None:
+        md_path = out_dir / str(args.out_name)
+    else:
+        default_name = "summary_all.md" if strategy_impl_raw == "all" else "summary.md"
+        md_path = out_dir / default_name
+
+    if strategy_impl_raw == "all":
+        strategy_impls = ("improved", "default", "mcmc")
+    else:
+        strategy_impls = (strategy_impl_raw,)
 
     device = torch.device(str(args.device))
 
@@ -506,160 +528,178 @@ def main(argv: list[str]) -> int:
                 print(f"[skip] missing scene data: {scene_data_dir}", flush=True)
                 continue
 
-            scene_out_dir = dataset_dir / "benchmark" / str(args.strategy_impl) / scene
-            if not scene_out_dir.exists():
-                print(f"[skip] missing outputs: {scene_out_dir}", flush=True)
-                continue
-
-            try:
-                cfg_dict = _read_cfg_snapshot(scene_out_dir)
-                data_factor = None
-                test_every = 8
-                benchmark_train_split = True
-                normalize_world_space = True
-                align_world_axes = True
-                default_optim = OptimConfig()
-                default_strategy = StrategyConfig()
-                sh_degree = int(default_optim.sh_degree)
-                sh_degree_interval = int(default_optim.sh_degree_interval)
-                packed = bool(default_optim.packed)
-                sparse_grad = bool(default_optim.sparse_grad)
-                antialiased = bool(default_optim.antialiased)
-                absgrad = bool(default_strategy.absgrad)
-                if cfg_dict is not None:
-                    data_cfg = cfg_dict.get("data") or {}
-                    if isinstance(data_cfg, dict):
-                        data_factor = data_cfg.get("data_factor")
-                        test_every = int(data_cfg.get("test_every", test_every))
-                        benchmark_train_split = bool(
-                            data_cfg.get("benchmark_train_split", benchmark_train_split)
-                        )
-                        normalize_world_space = bool(
-                            data_cfg.get("normalize_world_space", normalize_world_space)
-                        )
-                        # Backward compatibility: older configs rotated by default.
-                        align_world_axes = bool(
-                            data_cfg.get(
-                                "align_world_axes",
-                                data_cfg.get("normalize_world_space_rotate", True),
-                            )
-                        )
-                    optim_cfg = cfg_dict.get("optim") or {}
-                    if isinstance(optim_cfg, dict):
-                        sh_degree = int(optim_cfg.get("sh_degree", sh_degree))
-                        sh_degree_interval = int(
-                            optim_cfg.get("sh_degree_interval", sh_degree_interval)
-                        )
-                        packed = bool(optim_cfg.get("packed", packed))
-                        sparse_grad = bool(optim_cfg.get("sparse_grad", sparse_grad))
-                        antialiased = bool(optim_cfg.get("antialiased", antialiased))
-                    strategy_cfg = cfg_dict.get("strategy") or {}
-                    if isinstance(strategy_cfg, dict):
-                        absgrad = bool(strategy_cfg.get("absgrad", absgrad))
-
-                if data_factor is None:
-                    inferred = _infer_data_factor_from_scene_dir(scene_data_dir)
-                    data_factor = int(inferred) if inferred is not None else 1
-                data_factor = int(data_factor)
-
-                if args.step is None:
-                    ply_path, ply_step = _find_latest_ply_path(scene_out_dir)
-                else:
-                    ply_step = int(args.step)
-                    ply_path = _find_ply_path(scene_out_dir=scene_out_dir, step=int(ply_step))
-                step_index = int(ply_step) - 1
-                if step_index < 0:
-                    raise ValueError(f"--step must be > 0, got {ply_step}")
-                train_time_s = _read_train_time_s(scene_out_dir)
-
-                cam_space = "train" if bool(normalize_world_space) else "colmap"
-                normalize_world_space_for_eval = bool(normalize_world_space) and cam_space == "train"
-
-                dataparser = ColmapDataParser(
-                    data_dir=str(scene_data_dir),
-                    factor=int(data_factor),
-                    normalize_world_space=bool(normalize_world_space_for_eval),
-                    align_world_axes=bool(align_world_axes),
-                    test_every=int(test_every),
-                    benchmark_train_split=bool(benchmark_train_split),
-                    depth_dir_name=None,
-                    normal_dir_name=None,
-                    dynamic_mask_dir_name=None,
-                    sky_mask_dir_name=None,
-                )
-                parsed = dataparser.get_dataparser_outputs(split="test")
-                dataset_test = InputDataset(parsed)
-
-                preload = str(args.eval_preload)
-                num_workers = 0 if preload == "cuda" else None
-                eval_loader = DataLoader(
-                    dataset_test,
-                    batch_size=1,
-                    num_workers=num_workers,
-                    device=device,
-                    infinite_sampler=False,
-                    prefetch_to_gpu=False,
-                    preload=preload,  # type: ignore[arg-type]
-                    seed=42,
-                )
-
-                splats = _load_ply_splats(ply_path)
-                num_gaussians = int(splats["means"].shape[0])
-                if cam_space == "train" and bool(normalize_world_space):
-                    # Map geometry back into training coords to match the camera space (and SH basis).
-                    transform = torch.from_numpy(dataparser.transform).float().to(device=device)
-                    _apply_colmap_to_train_transform_inplace(
-                        splats=splats,
-                        transform_colmap_to_train=transform,
+            for strategy_impl in strategy_impls:
+                scene_out_dir = dataset_dir / "benchmark" / str(strategy_impl) / scene
+                if not scene_out_dir.exists():
+                    print(
+                        f"[skip] missing outputs: {dataset.key}/{scene} ({strategy_impl})",
+                        flush=True,
                     )
-                gaussian_model = _build_gaussian_model(splats=splats, device=device)
-                if int(gaussian_model.num_gaussians) != int(num_gaussians):
-                    num_gaussians = int(gaussian_model.num_gaussians)
+                    continue
 
-                eval_cfg = replace(
-                    EvalConfig(),
-                    lpips_net="vgg",
-                    metrics_backend=str(args.metrics_backend),
-                    max_images=int(args.max_images) if args.max_images is not None else None,
-                    compute_cc_metrics=False,
-                )
-                optim_cfg = replace(
-                    OptimConfig(),
-                    sh_degree=int(sh_degree),
-                    sh_degree_interval=int(sh_degree_interval),
-                    packed=bool(packed),
-                    sparse_grad=bool(sparse_grad),
-                    antialiased=bool(antialiased),
-                )
-                strategy_cfg = replace(StrategyConfig(), absgrad=bool(absgrad))
-                eval_out = run_evaluation(
-                    cfg=_EvalCfg(eval=eval_cfg, optim=optim_cfg, strategy=strategy_cfg),  # type: ignore[arg-type]
-                    step=int(step_index),
-                    eval_loader=eval_loader,
-                    gaussian_model=gaussian_model,
-                    bilateral_grid=None,
-                )
-                stats = dict(eval_out.stats)
-                summary = build_eval_summary(eval_step=int(step_index), stats=stats)
-                print(f"[ok] {dataset.key}/{scene} {summary}", flush=True)
+                try:
+                    cfg_dict = _read_cfg_snapshot(scene_out_dir)
+                    data_factor = None
+                    test_every = 8
+                    benchmark_train_split = True
+                    normalize_world_space = True
+                    align_world_axes = True
+                    default_optim = OptimConfig()
+                    default_strategy = StrategyConfig()
+                    sh_degree = int(default_optim.sh_degree)
+                    sh_degree_interval = int(default_optim.sh_degree_interval)
+                    packed = bool(default_optim.packed)
+                    sparse_grad = bool(default_optim.sparse_grad)
+                    antialiased = bool(default_optim.antialiased)
+                    absgrad = bool(default_strategy.absgrad)
+                    if cfg_dict is not None:
+                        data_cfg = cfg_dict.get("data") or {}
+                        if isinstance(data_cfg, dict):
+                            data_factor = data_cfg.get("data_factor")
+                            test_every = int(data_cfg.get("test_every", test_every))
+                            benchmark_train_split = bool(
+                                data_cfg.get("benchmark_train_split", benchmark_train_split)
+                            )
+                            normalize_world_space = bool(
+                                data_cfg.get("normalize_world_space", normalize_world_space)
+                            )
+                            # Backward compatibility: older configs rotated by default.
+                            align_world_axes = bool(
+                                data_cfg.get(
+                                    "align_world_axes",
+                                    data_cfg.get("normalize_world_space_rotate", True),
+                                )
+                            )
+                        optim_cfg = cfg_dict.get("optim") or {}
+                        if isinstance(optim_cfg, dict):
+                            sh_degree = int(optim_cfg.get("sh_degree", sh_degree))
+                            sh_degree_interval = int(
+                                optim_cfg.get("sh_degree_interval", sh_degree_interval)
+                            )
+                            packed = bool(optim_cfg.get("packed", packed))
+                            sparse_grad = bool(optim_cfg.get("sparse_grad", sparse_grad))
+                            antialiased = bool(optim_cfg.get("antialiased", antialiased))
+                        strategy_cfg = cfg_dict.get("strategy") or {}
+                        if isinstance(strategy_cfg, dict):
+                            absgrad = bool(strategy_cfg.get("absgrad", absgrad))
 
-                row: dict[str, object] = {
-                    "dataset": dataset.key,
-                    "scene": scene,
-                    "strategy": str(args.strategy_impl),
-                    "step": int(ply_step),
-                    "data_factor": int(data_factor),
-                    "psnr": float(stats["psnr"]),
-                    "ssim": float(stats["ssim"]),
-                    "lpips": float(stats["lpips"]),
-                    "num_eval_images": int(stats["num_eval_images"]),
-                    "num_gaussians": int(num_gaussians),
-                    "train_time_s": float(train_time_s) if train_time_s is not None else None,
-                }
-                rows.append(row)
-            except Exception as e:
-                any_failed = True
-                print(f"[fail] {dataset.key}/{scene}: {e}", flush=True)
+                    if data_factor is None:
+                        inferred = _infer_data_factor_from_scene_dir(scene_data_dir)
+                        data_factor = int(inferred) if inferred is not None else 1
+                    data_factor = int(data_factor)
+
+                    if args.step is None:
+                        ply_path, ply_step = _find_latest_ply_path(scene_out_dir)
+                    else:
+                        ply_step = int(args.step)
+                        ply_path = _find_ply_path(scene_out_dir=scene_out_dir, step=int(ply_step))
+                    step_index = int(ply_step) - 1
+                    if step_index < 0:
+                        raise ValueError(f"--step must be > 0, got {ply_step}")
+                    train_time_s = _read_train_time_s(scene_out_dir)
+
+                    cam_space = "train" if bool(normalize_world_space) else "colmap"
+                    normalize_world_space_for_eval = (
+                        bool(normalize_world_space) and cam_space == "train"
+                    )
+
+                    dataparser = ColmapDataParser(
+                        data_dir=str(scene_data_dir),
+                        factor=int(data_factor),
+                        normalize_world_space=bool(normalize_world_space_for_eval),
+                        align_world_axes=bool(align_world_axes),
+                        test_every=int(test_every),
+                        benchmark_train_split=bool(benchmark_train_split),
+                        depth_dir_name=None,
+                        normal_dir_name=None,
+                        dynamic_mask_dir_name=None,
+                        sky_mask_dir_name=None,
+                    )
+                    parsed = dataparser.get_dataparser_outputs(split="test")
+                    dataset_test = InputDataset(parsed)
+
+                    preload = str(args.eval_preload)
+                    num_workers = 0 if preload == "cuda" else None
+                    eval_loader = DataLoader(
+                        dataset_test,
+                        batch_size=1,
+                        num_workers=num_workers,
+                        device=device,
+                        infinite_sampler=False,
+                        prefetch_to_gpu=False,
+                        preload=preload,  # type: ignore[arg-type]
+                        seed=42,
+                    )
+
+                    splats = _load_ply_splats(ply_path)
+                    num_gaussians = int(splats["means"].shape[0])
+                    if cam_space == "train" and bool(normalize_world_space):
+                        # Map geometry back into training coords to match the camera space (and SH basis).
+                        transform = (
+                            torch.from_numpy(dataparser.transform).float().to(device=device)
+                        )
+                        _apply_colmap_to_train_transform_inplace(
+                            splats=splats,
+                            transform_colmap_to_train=transform,
+                        )
+                    gaussian_model = _build_gaussian_model(splats=splats, device=device)
+                    if int(gaussian_model.num_gaussians) != int(num_gaussians):
+                        num_gaussians = int(gaussian_model.num_gaussians)
+
+                    eval_cfg = replace(
+                        EvalConfig(),
+                        lpips_net="vgg",
+                        metrics_backend=str(args.metrics_backend),
+                        max_images=int(args.max_images) if args.max_images is not None else None,
+                        compute_cc_metrics=False,
+                    )
+                    optim_cfg = replace(
+                        OptimConfig(),
+                        sh_degree=int(sh_degree),
+                        sh_degree_interval=int(sh_degree_interval),
+                        packed=bool(packed),
+                        sparse_grad=bool(sparse_grad),
+                        antialiased=bool(antialiased),
+                    )
+                    strategy_cfg = replace(StrategyConfig(), absgrad=bool(absgrad))
+                    eval_out = run_evaluation(
+                        cfg=_EvalCfg(
+                            eval=eval_cfg, optim=optim_cfg, strategy=strategy_cfg
+                        ),  # type: ignore[arg-type]
+                        step=int(step_index),
+                        eval_loader=eval_loader,
+                        gaussian_model=gaussian_model,
+                        bilateral_grid=None,
+                    )
+                    stats = dict(eval_out.stats)
+                    summary = build_eval_summary(eval_step=int(step_index), stats=stats)
+                    print(
+                        f"[ok] {dataset.key}/{scene} ({strategy_impl}) {summary}",
+                        flush=True,
+                    )
+
+                    row: dict[str, object] = {
+                        "dataset": dataset.key,
+                        "scene": scene,
+                        "strategy": str(strategy_impl),
+                        "step": int(ply_step),
+                        "data_factor": int(data_factor),
+                        "psnr": float(stats["psnr"]),
+                        "ssim": float(stats["ssim"]),
+                        "lpips": float(stats["lpips"]),
+                        "num_eval_images": int(stats["num_eval_images"]),
+                        "num_gaussians": int(num_gaussians),
+                        "train_time_s": float(train_time_s)
+                        if train_time_s is not None
+                        else None,
+                    }
+                    rows.append(row)
+                except Exception as e:
+                    any_failed = True
+                    print(
+                        f"[fail] {dataset.key}/{scene} ({strategy_impl}): {e}",
+                        flush=True,
+                    )
 
     if not rows:
         print("[warn] no evaluated scenes; nothing to write.", flush=True)
@@ -686,11 +726,79 @@ def main(argv: list[str]) -> int:
             return f"{x:.4f}"
         return str(x)
 
+    rows.sort(key=lambda r: (str(r.get("dataset")), str(r.get("scene")), str(r.get("strategy"))))
+
+    from collections import defaultdict
+
+    def _mean(values: list[float]) -> Optional[float]:
+        if not values:
+            return None
+        return float(sum(values) / len(values))
+
+    agg: dict[tuple[str, str], dict[str, object]] = {}
+    grouped: dict[tuple[str, str], list[dict[str, object]]] = defaultdict(list)
+    for row in rows:
+        key = (str(row["dataset"]), str(row["strategy"]))
+        grouped[key].append(row)
+    for (dataset_name, strategy_name), items in grouped.items():
+        agg[(dataset_name, strategy_name)] = {
+            "dataset": dataset_name,
+            "strategy": strategy_name,
+            "scenes": len({str(x["scene"]) for x in items}),
+            "psnr": _mean([float(x["psnr"]) for x in items]),
+            "ssim": _mean([float(x["ssim"]) for x in items]),
+            "lpips": _mean([float(x["lpips"]) for x in items]),
+            "num_gaussians": _mean([float(x["num_gaussians"]) for x in items]),
+            "train_time_s": _mean(
+                [float(x["train_time_s"]) for x in items if x.get("train_time_s") is not None]
+            ),
+        }
+
     with open(md_path, "w", encoding="utf-8") as f:
         f.write("| " + " | ".join(fieldnames) + " |\n")
         f.write("| " + " | ".join(["---"] * len(fieldnames)) + " |\n")
         for row in rows:
             f.write("| " + " | ".join(_fmt(row.get(k)) for k in fieldnames) + " |\n")
+        f.write("\n")
+        f.write("| dataset | strategy | scenes | psnr_mean | ssim_mean | lpips_mean | num_gaussians_mean | train_time_s_mean |\n")
+        f.write("| --- | --- | --- | --- | --- | --- | --- | --- |\n")
+        for dataset_name in sorted({k[0] for k in agg.keys()}):
+            for strategy_name in ("improved", "default", "mcmc"):
+                key = (dataset_name, strategy_name)
+                if key not in agg:
+                    continue
+                a = agg[key]
+                f.write(
+                    "| "
+                    + " | ".join(
+                        [
+                            str(a["dataset"]),
+                            str(a["strategy"]),
+                            str(a["scenes"]),
+                            _fmt(a["psnr"]),
+                            _fmt(a["ssim"]),
+                            _fmt(a["lpips"]),
+                            _fmt(a["num_gaussians"]),
+                            _fmt(a["train_time_s"]),
+                        ]
+                    )
+                    + " |\n"
+                )
+        f.write("\n")
+        for metric in ("psnr", "ssim", "lpips"):
+            f.write(f"| {metric}_mean | improved | default | mcmc |\n")
+            f.write("| --- | --- | --- | --- |\n")
+            for dataset_name in sorted({k[0] for k in agg.keys()}):
+                values = []
+                for strategy_name in ("improved", "default", "mcmc"):
+                    a = agg.get((dataset_name, strategy_name))
+                    values.append(_fmt(a.get(metric) if a is not None else None))
+                f.write(
+                    "| "
+                    + " | ".join([str(dataset_name)] + values)
+                    + " |\n"
+                )
+            f.write("\n")
 
     print(f"[write] {md_path}", flush=True)
     return 1 if any_failed else 0
