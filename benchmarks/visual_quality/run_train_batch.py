@@ -257,8 +257,11 @@ def main(argv: list[str]) -> int:
         "--strategy-impl",
         type=str,
         default="improved",
-        choices=("improved", "default", "mcmc"),
-        help="Strategy implementation to use for training.",
+        choices=("all", "improved", "default", "mcmc"),
+        help=(
+            "Strategy implementation(s) to use for training. "
+            "Use 'all' to run improved/default/mcmc sequentially for each scene."
+        ),
     )
     parser.add_argument(
         "--tb-every-n",
@@ -353,24 +356,6 @@ def main(argv: list[str]) -> int:
                 print(f"[skip] missing data_dir: {scene_data_dir}", flush=True)
                 continue
 
-            # Improved-GS-style layout: store outputs under the dataset directory.
-            # Example: <data-root>/Mip-NeRF360/benchmark/improved/bicycle/
-            scene_out_dir = dataset_dir / "benchmark" / str(args.strategy_impl) / scene
-
-            log_path: Optional[Path] = None
-            if not bool(args.dry_run):
-                if _is_done(result_dir=scene_out_dir, max_steps=int(args.max_steps)):
-                    print(f"[skip] done: {scene_out_dir}", flush=True)
-                    continue
-                if bool(args.skip_existing) and scene_out_dir.exists():
-                    print(f"[skip] exists: {scene_out_dir}", flush=True)
-                    continue
-
-                scene_out_dir.mkdir(parents=True, exist_ok=True)
-                log_dir = scene_out_dir / "logs"
-                log_dir.mkdir(parents=True, exist_ok=True)
-                log_path = log_dir / "train.log"
-
             # Resolve data_factor with the following precedence:
             # 1) Explicit per-scene override (--scene-data-factor)
             # 2) Auto-infer from on-disk image folders
@@ -389,211 +374,241 @@ def main(argv: list[str]) -> int:
                     f"data_factor must be > 0, got {data_factor} (scene={scene!r})."
                 )
 
-            cmd: list[str] = [
-                sys.executable,
-                str(trainer_py),
-                "--io.data-dir",
-                str(scene_data_dir),
-                "--io.result-dir",
-                str(scene_out_dir),
-                "--io.device",
-                str(args.device),
-                "--data.preload",
-                str(args.data_preload),
-                "--data.data-factor",
-                str(int(data_factor)),
-                "--optim.max-steps",
-                str(int(args.max_steps)),
-                "--strategy.impl",
-                str(args.strategy_impl),
-                "--viewer.disable-viewer",
-                "--data.benchmark-train-split",
-            ]
-            means_lr_final_override: Optional[str] = None
-
-            # Enforce preload='cuda' constraints (see validate_train_config / DataLoader assertions).
-            if str(args.data_preload) == "cuda":
-                cmd += [
-                    "--data.no-prefetch-to-gpu",
-                    "--data.num-workers",
-                    "0",
-                ]
-
-            if str(args.strategy_impl) == "improved":
-                # Improved-GS alignment: match key benchmark switches + optimizer hyperparameters.
-                cmd += ["--strategy.grow-grad2d", "0.0003"]
-                cmd += ["--optim.no-random-bkgd"]
-                if not bool(args.no_mu):
-                    cmd += ["--optim.mu-enable"]
-                cmd += [
-                    "--optim.optimizers.means.optimizer.lr",
-                    "4e-5",
-                    "--optim.optimizers.opacities.optimizer.lr",
-                    "0.025",
-                    "--optim.optimizers.sh0.optimizer.lr",
-                    "0.0025",
-                    "--optim.optimizers.shN.optimizer.lr",
-                    "0.00025",
-                    "--optim.optimizers.scales.optimizer.lr",
-                    "0.005",
-                    "--optim.optimizers.quats.optimizer.lr",
-                    "0.001",
-                ]
-                cmd += [
-                    "--strategy.refine-scale2d-stop-iter",
-                    "0",
-                    "--strategy.prune-scale3d",
-                    "999.0",
-                ]
-                means_lr_final_override = "2e-6"
-            elif str(args.strategy_impl) == "default":
-                # Gsplat DefaultStrategy baseline alignment (original 3DGS-style).
-                #
-                # Strategy defaults differ from FriendlySplat's shared defaults:
-                # - absgrad=False
-                # - refine_scale2d_stop_iter=0
-                # - prune_scale3d=0.1
-                cmd += [
-                    "--strategy.no-absgrad",
-                    "--strategy.verbose",
-                    "--strategy.refine-scale2d-stop-iter",
-                    "0",
-                    "--strategy.prune-scale3d",
-                    "0.1",
-                ]
-                # Optimizer hyperparameters (gsplat simple_trainer baseline).
-                cmd += ["--optim.no-random-bkgd"]
-                cmd += [
-                    "--optim.optimizers.means.optimizer.lr",
-                    "1.6e-4",
-                    "--optim.optimizers.opacities.optimizer.lr",
-                    "5e-2",
-                    "--optim.optimizers.sh0.optimizer.lr",
-                    "2.5e-3",
-                    "--optim.optimizers.shN.optimizer.lr",
-                    "1.25e-4",
-                    "--optim.optimizers.scales.optimizer.lr",
-                    "5e-3",
-                    "--optim.optimizers.quats.optimizer.lr",
-                    "1e-3",
-                ]
-                # Keep the gsplat baseline behavior: means LR decays to 0.01x by the end.
-                means_lr_final_override = "1.6e-6"
-            elif str(args.strategy_impl) == "mcmc":
-                # Gsplat MCMCStrategy baseline alignment (see /home/joker/learning/gsplat/examples/simple_trainer.py).
-                #
-                # Notable MCMC preset differences:
-                # - init_opacity=0.5, init_scale=0.1
-                # - opacity_reg=0.01, scale_reg=0.01
-                # - refine_stop_iter=25_000
-                cmd += [
-                    "--init.init-opacity",
-                    "0.5",
-                    "--init.init-scale",
-                    "0.1",
-                ]
-                cmd += [
-                    "--reg.opacity-reg-weight",
-                    "0.01",
-                    "--reg.scale-l1-reg-weight",
-                    "0.01",
-                ]
-                cmd += [
-                    "--strategy.refine-stop-iter",
-                    "25000",
-                    "--strategy.mcmc-noise-lr",
-                    "5e5",
-                    "--strategy.mcmc-noise-injection-stop-iter",
-                    "-1",
-                    "--strategy.mcmc-min-opacity",
-                    "0.005",
-                    "--strategy.verbose",
-                ]
-                # Optimizer hyperparameters (gsplat simple_trainer mcmc preset shares baseline LRs).
-                cmd += ["--optim.no-random-bkgd"]
-                cmd += [
-                    "--optim.optimizers.means.optimizer.lr",
-                    "1.6e-4",
-                    "--optim.optimizers.opacities.optimizer.lr",
-                    "5e-2",
-                    "--optim.optimizers.sh0.optimizer.lr",
-                    "2.5e-3",
-                    "--optim.optimizers.shN.optimizer.lr",
-                    "1.25e-4",
-                    "--optim.optimizers.scales.optimizer.lr",
-                    "5e-3",
-                    "--optim.optimizers.quats.optimizer.lr",
-                    "1e-3",
-                ]
-                means_lr_final_override = "1.6e-6"
-
-            # Apply Improved-GS per-scene budgets.
-            #
-            # - ImprovedStrategy: maps to densification_budget.
-            # - MCMCStrategy: maps to cap_max.
-            if budgets and str(args.strategy_impl) in ("improved", "mcmc"):
-                if scene not in budgets:
-                    raise KeyError(
-                        f"Budget missing for scene {scene!r} (budget_profile={args.budget_profile})."
-                    )
-                if str(args.strategy_impl) == "improved":
-                    cmd += [
-                        "--strategy.densification-budget",
-                        str(int(budgets[scene])),
-                    ]
-                elif str(args.strategy_impl) == "mcmc":
-                    cmd += [
-                        "--strategy.mcmc-cap-max",
-                        str(int(budgets[scene])),
-                    ]
-
-            cmd += [
-                "--io.export-ply",
-                "--io.ply-steps",
-                str(int(args.max_steps)),
-            ]
-
-            cmd += ["--tb.enable"]
-            cmd += ["--tb.every-n", str(int(args.tb_every_n))]
-            cmd += ["--tb.flush-every-n", str(int(args.tb_flush_every_n))]
-
-            if extra_args:
-                cmd += extra_args
-
-            if means_lr_final_override is not None:
-                # Tyro models Optional[...] dataclasses as a subcommand. To override
-                # `means.scheduler.lr-final`, we must select the scheduler branch and place the
-                # scheduler override at the *very end* (otherwise later global flags would be
-                # rejected as "misplaced").
-                cmd += [
-                    "optim.optimizers.means.scheduler:exponential-decay-scheduler-config",
-                    "--optim.optimizers.means.scheduler.lr-final",
-                    str(means_lr_final_override),
-                ]
-
-            tag = "dry-run" if bool(args.dry_run) else "run"
-            print(f"[{tag}] {dataset.key}/{scene}", flush=True)
-            print(f"[cmd] {_format_cmd(cmd)}", flush=True)
-            if bool(args.dry_run):
-                continue
-
-            env = dict(os.environ)
-            env["PYTHONUNBUFFERED"] = "1"
-            if log_path is None:
-                raise AssertionError("log_path is None in non-dry-run mode.")
-            with open(log_path, "w", encoding="utf-8") as f:
-                proc = subprocess.run(
-                    cmd,
-                    cwd=str(repo_root),
-                    stdout=f,
-                    stderr=subprocess.STDOUT,
-                    env=env,
-                )
-            if proc.returncode != 0:
-                any_failed = True
-                print(f"[fail] {dataset.key}/{scene} (see {log_path})", flush=True)
+            strategy_impl_raw = str(args.strategy_impl)
+            if strategy_impl_raw == "all":
+                strategy_impls = ("improved", "default", "mcmc")
             else:
-                print(f"[ok] {dataset.key}/{scene}", flush=True)
+                strategy_impls = (strategy_impl_raw,)
+
+            for strategy_impl in strategy_impls:
+                # Improved-GS-style layout: store outputs under the dataset directory.
+                # Example: <data-root>/Mip-NeRF360/benchmark/improved/bicycle/
+                scene_out_dir = dataset_dir / "benchmark" / str(strategy_impl) / scene
+
+                log_path: Optional[Path] = None
+                if not bool(args.dry_run):
+                    if _is_done(result_dir=scene_out_dir, max_steps=int(args.max_steps)):
+                        print(f"[skip] done: {scene_out_dir}", flush=True)
+                        continue
+                    if bool(args.skip_existing) and scene_out_dir.exists():
+                        print(f"[skip] exists: {scene_out_dir}", flush=True)
+                        continue
+
+                    scene_out_dir.mkdir(parents=True, exist_ok=True)
+                    log_dir = scene_out_dir / "logs"
+                    log_dir.mkdir(parents=True, exist_ok=True)
+                    log_path = log_dir / "train.log"
+
+                cmd: list[str] = [
+                    sys.executable,
+                    str(trainer_py),
+                    "--io.data-dir",
+                    str(scene_data_dir),
+                    "--io.result-dir",
+                    str(scene_out_dir),
+                    "--io.device",
+                    str(args.device),
+                    "--data.preload",
+                    str(args.data_preload),
+                    "--data.data-factor",
+                    str(int(data_factor)),
+                    "--optim.max-steps",
+                    str(int(args.max_steps)),
+                    "--strategy.impl",
+                    str(strategy_impl),
+                    "--viewer.disable-viewer",
+                    "--data.benchmark-train-split",
+                ]
+                means_lr_final_override: Optional[str] = None
+
+                # Enforce preload='cuda' constraints (see validate_train_config / DataLoader assertions).
+                if str(args.data_preload) == "cuda":
+                    cmd += [
+                        "--data.no-prefetch-to-gpu",
+                        "--data.num-workers",
+                        "0",
+                    ]
+
+                if str(strategy_impl) == "improved":
+                    # Improved-GS alignment: match key benchmark switches + optimizer hyperparameters.
+                    cmd += ["--strategy.grow-grad2d", "0.0002"]
+                    cmd += ["--optim.no-random-bkgd"]
+                    if not bool(args.no_mu):
+                        cmd += ["--optim.mu-enable"]
+                    cmd += [
+                        "--optim.optimizers.means.optimizer.lr",
+                        "4e-5",
+                        "--optim.optimizers.opacities.optimizer.lr",
+                        "5e-2",
+                        "--optim.optimizers.sh0.optimizer.lr",
+                        "2.5e-3",
+                        "--optim.optimizers.shN.optimizer.lr",
+                        "1.25e-4",
+                        "--optim.optimizers.scales.optimizer.lr",
+                        "5e-3",
+                        "--optim.optimizers.quats.optimizer.lr",
+                        "1e-3",
+                    ]
+                    cmd += [
+                        "--strategy.refine-scale2d-stop-iter",
+                        "0",
+                        "--strategy.prune-scale3d",
+                        "999.0",
+                    ]
+                    means_lr_final_override = "2e-6"
+                elif str(strategy_impl) == "default":
+                    # Gsplat DefaultStrategy baseline alignment (original 3DGS-style).
+                    #
+                    # Strategy defaults differ from FriendlySplat's shared defaults:
+                    # - absgrad=False
+                    # - refine_scale2d_stop_iter=0
+                    # - prune_scale3d=0.1
+                    cmd += [
+                        "--strategy.no-absgrad",
+                        "--strategy.verbose",
+                        "--strategy.refine-scale2d-stop-iter",
+                        "0",
+                        "--strategy.prune-scale3d",
+                        "0.1",
+                    ]
+                    # Optimizer hyperparameters (gsplat simple_trainer baseline).
+                    cmd += ["--optim.no-random-bkgd"]
+                    cmd += [
+                        "--optim.optimizers.means.optimizer.lr",
+                        "1.6e-4",
+                        "--optim.optimizers.opacities.optimizer.lr",
+                        "5e-2",
+                        "--optim.optimizers.sh0.optimizer.lr",
+                        "2.5e-3",
+                        "--optim.optimizers.shN.optimizer.lr",
+                        "1.25e-4",
+                        "--optim.optimizers.scales.optimizer.lr",
+                        "5e-3",
+                        "--optim.optimizers.quats.optimizer.lr",
+                        "1e-3",
+                    ]
+                    # Keep the gsplat baseline behavior: means LR decays to 0.01x by the end.
+                    means_lr_final_override = "1.6e-6"
+                elif str(strategy_impl) == "mcmc":
+                    # Gsplat MCMCStrategy baseline alignment (see /home/joker/learning/gsplat/examples/simple_trainer.py).
+                    #
+                    # Notable MCMC preset differences:
+                    # - init_opacity=0.5, init_scale=0.1
+                    # - opacity_reg=0.01, scale_reg=0.01
+                    # - refine_stop_iter=25_000
+                    cmd += [
+                        "--init.init-opacity",
+                        "0.5",
+                        "--init.init-scale",
+                        "0.1",
+                    ]
+                    cmd += [
+                        "--reg.opacity-reg-weight",
+                        "0.01",
+                        "--reg.scale-l1-reg-weight",
+                        "0.01",
+                    ]
+                    cmd += [
+                        "--strategy.refine-stop-iter",
+                        "25000",
+                        "--strategy.mcmc-noise-lr",
+                        "5e5",
+                        "--strategy.mcmc-noise-injection-stop-iter",
+                        "-1",
+                        "--strategy.mcmc-min-opacity",
+                        "0.005",
+                        "--strategy.verbose",
+                    ]
+                    # Optimizer hyperparameters (gsplat simple_trainer mcmc preset shares baseline LRs).
+                    cmd += ["--optim.no-random-bkgd"]
+                    cmd += [
+                        "--optim.optimizers.means.optimizer.lr",
+                        "1.6e-4",
+                        "--optim.optimizers.opacities.optimizer.lr",
+                        "5e-2",
+                        "--optim.optimizers.sh0.optimizer.lr",
+                        "2.5e-3",
+                        "--optim.optimizers.shN.optimizer.lr",
+                        "1.25e-4",
+                        "--optim.optimizers.scales.optimizer.lr",
+                        "5e-3",
+                        "--optim.optimizers.quats.optimizer.lr",
+                        "1e-3",
+                    ]
+                    means_lr_final_override = "1.6e-6"
+                else:
+                    raise AssertionError(f"Unhandled strategy_impl={strategy_impl!r}")
+
+                # Apply Improved-GS per-scene budgets.
+                #
+                # - ImprovedStrategy: maps to densification_budget.
+                # - MCMCStrategy: maps to cap_max.
+                if budgets and str(strategy_impl) in ("improved", "mcmc"):
+                    if scene not in budgets:
+                        raise KeyError(
+                            f"Budget missing for scene {scene!r} (budget_profile={args.budget_profile})."
+                        )
+                    if str(strategy_impl) == "improved":
+                        cmd += [
+                            "--strategy.densification-budget",
+                            str(int(budgets[scene])),
+                        ]
+                    elif str(strategy_impl) == "mcmc":
+                        cmd += [
+                            "--strategy.mcmc-cap-max",
+                            str(int(budgets[scene])),
+                        ]
+
+                cmd += [
+                    "--io.export-ply",
+                    "--io.ply-steps",
+                    str(int(args.max_steps)),
+                ]
+
+                cmd += ["--tb.enable"]
+                cmd += ["--tb.every-n", str(int(args.tb_every_n))]
+                cmd += ["--tb.flush-every-n", str(int(args.tb_flush_every_n))]
+
+                if extra_args:
+                    cmd += extra_args
+
+                if means_lr_final_override is not None:
+                    # Tyro models Optional[...] dataclasses as a subcommand. To override
+                    # `means.scheduler.lr-final`, we must select the scheduler branch and place the
+                    # scheduler override at the *very end* (otherwise later global flags would be
+                    # rejected as "misplaced").
+                    cmd += [
+                        "optim.optimizers.means.scheduler:exponential-decay-scheduler-config",
+                        "--optim.optimizers.means.scheduler.lr-final",
+                        str(means_lr_final_override),
+                    ]
+
+                tag = "dry-run" if bool(args.dry_run) else "run"
+                print(f"[{tag}] {dataset.key}/{scene} ({strategy_impl})", flush=True)
+                print(f"[cmd] {_format_cmd(cmd)}", flush=True)
+                if bool(args.dry_run):
+                    continue
+
+                env = dict(os.environ)
+                env["PYTHONUNBUFFERED"] = "1"
+                if log_path is None:
+                    raise AssertionError("log_path is None in non-dry-run mode.")
+                with open(log_path, "w", encoding="utf-8") as f:
+                    proc = subprocess.run(
+                        cmd,
+                        cwd=str(repo_root),
+                        stdout=f,
+                        stderr=subprocess.STDOUT,
+                        env=env,
+                    )
+                if proc.returncode != 0:
+                    any_failed = True
+                    print(
+                        f"[fail] {dataset.key}/{scene} ({strategy_impl}) (see {log_path})",
+                        flush=True,
+                    )
+                else:
+                    print(f"[ok] {dataset.key}/{scene} ({strategy_impl})", flush=True)
 
     return 1 if any_failed else 0
 
