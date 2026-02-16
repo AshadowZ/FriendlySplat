@@ -22,7 +22,7 @@ from friendly_splat.trainer.eval_runtime import (
 )
 from friendly_splat.trainer.losses import LossOutput, compute_losses
 from friendly_splat.trainer.step_schedule import StepSchedule, compute_step_schedule
-from gsplat.strategy.natural_selection import NaturalSelectionPolicy
+from friendly_splat.trainer.gns_pruning import NaturalSelectionPolicy
 
 
 def build_step_schedule_from_prepared_batch(
@@ -178,7 +178,7 @@ def compute_losses_from_prepared_batch_and_render(
     # Active only during the configured GNS pruning window.
     # It pushes opacities down over time so low-contribution Gaussians can be pruned.
     if gns is not None:
-        reg = gns.compute_regularizer(step=step, params=gaussian_model.splats)
+        reg = gns.compute_regularizer(step=step, gaussian_model=gaussian_model)
         if reg is not None:
             total = total + reg
             items["gns"] = reg.detach()

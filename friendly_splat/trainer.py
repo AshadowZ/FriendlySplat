@@ -219,7 +219,7 @@ class Trainer:
             if gns is not None:
                 gns.step_post_update(
                     step=step,
-                    params=gaussian_model.splats,
+                    gaussian_model=gaussian_model,
                     optimizers=optimizer_coordinator.splat_optimizers,
                     strategy_state=strategy_state,
                 )

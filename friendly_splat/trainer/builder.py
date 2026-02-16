@@ -21,11 +21,11 @@ from friendly_splat.trainer.optimizer_coordinator import (
     OptimizerBundle,
     OptimizerCoordinator,
 )
-from gsplat.strategy import DefaultStrategy, ImprovedStrategy, MCMCStrategy, Strategy
-from gsplat.strategy.natural_selection import (
+from friendly_splat.trainer.gns_pruning import (
     NaturalSelectionPolicy,
     auto_gns_reg_interval,
 )
+from gsplat.strategy import DefaultStrategy, ImprovedStrategy, MCMCStrategy, Strategy
 
 
 @dataclass
@@ -188,13 +188,9 @@ def build_training_context(cfg: TrainConfig) -> TrainingContext:
         # GNS regularizes opacity and influences which Gaussians survive/densify.
         gns_reg_interval = auto_gns_reg_interval(num_train_images=len(dataset))
         natural_selection_policy = NaturalSelectionPolicy(
-            enable=True,
+            cfg=cfg.gns,
             densify_stop_step=int(cfg.strategy.refine_stop_iter),
-            reg_start=int(cfg.gns.reg_start),
-            reg_end=int(cfg.gns.reg_end),
             reg_interval=int(gns_reg_interval),
-            final_budget=int(cfg.gns.final_budget),
-            opacity_reg_weight=float(cfg.gns.opacity_reg_weight),
             verbose=bool(cfg.strategy.verbose),
         )
 
