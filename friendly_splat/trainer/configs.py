@@ -352,6 +352,41 @@ class GNSConfig:
 
 
 @dataclass(frozen=True)
+class HardPruneConfig:
+    """Speedy-Splat-style hard pruning (post-densification only).
+
+    This performs periodic, score-based *budget pruning* after densification finishes.
+    When the current Gaussian count exceeds `final_budget`, the lowest-score Gaussians
+    are removed until the budget is met.
+
+    Notes:
+      - Cadences use **1-based** train step numbers (like eval/tensorboard).
+      - This is independent from (and can be combined with) strategy pruning (e.g. prune_opa)
+        and GNS pruning.
+    """
+
+    # Enable post-densification hard pruning.
+    enable: bool = False
+    # First (1-based) training step at which hard pruning is allowed.
+    # This must be strictly greater than `strategy.refine_stop_iter` (which is expressed
+    # in 0-based trainer `step` units) to guarantee pruning starts after densification.
+    start_step: int = 15_001
+    # Target Gaussian budget. When current count exceeds this value, hard pruning
+    # removes the lowest-score Gaussians until the budget is met.
+    final_budget: int = 1_000_000
+    # Run hard pruning every N (1-based) training steps.
+    every_n: int = 2500
+    # Last (1-based) training step to allow pruning (inclusive).
+    stop_step: int = 25000
+
+    # Scoring controls (trade accuracy for speed).
+    # Use at most this many training views per pruning event (None means use all train views).
+    score_num_views: Optional[int] = None
+    # Accumulate squared gradient magnitude (more Speedy-Splat-like). When False, use abs-grad.
+    score_use_sqgrad: bool = True
+
+
+@dataclass(frozen=True)
 class StrategyConfig:
     """Densification strategy config.
 
@@ -441,6 +476,8 @@ class TrainConfig:
     strategy: StrategyConfig = field(default_factory=StrategyConfig)
     # Natural Selection (GNS) configuration.
     gns: GNSConfig = field(default_factory=GNSConfig)
+    # Speedy-Splat-style hard pruning (post-densification only).
+    hard_prune: HardPruneConfig = field(default_factory=HardPruneConfig)
     # Pose optimization / noise configuration.
     pose: PoseConfig = field(default_factory=PoseConfig)
     # Post-processing configuration (photometric adapters).
@@ -518,6 +555,62 @@ def validate_train_config(cfg: TrainConfig) -> None:
         raise ValueError(
             "optim.sparse_grad=True requires optim.packed=True (packed rasterization)."
         )
+
+    # GNS config validation (pruning window + budget).
+    if bool(cfg.gns.gns_enable):
+        if int(cfg.gns.reg_start) < 0:
+            raise ValueError(f"gns.reg_start must be >= 0, got {cfg.gns.reg_start}")
+        if int(cfg.gns.reg_end) < int(cfg.gns.reg_start):
+            raise ValueError(
+                f"gns.reg_end must be >= gns.reg_start, got {cfg.gns.reg_end} < {cfg.gns.reg_start}"
+            )
+        if int(cfg.gns.final_budget) <= 0:
+            raise ValueError(
+                f"gns.final_budget must be > 0, got {cfg.gns.final_budget}"
+            )
+        if float(cfg.gns.opacity_reg_weight) <= 0.0:
+            raise ValueError(
+                f"gns.opacity_reg_weight must be > 0, got {cfg.gns.opacity_reg_weight}"
+            )
+        densify_stop_step = int(cfg.strategy.refine_stop_iter)
+        if int(cfg.gns.reg_start) < densify_stop_step:
+            raise ValueError(
+                "gns.reg_start must be after densification finishes. "
+                f"Got gns.reg_start={int(cfg.gns.reg_start)} < strategy.refine_stop_iter={densify_stop_step}."
+            )
+
+    # Hard prune config (post-densification Speedy-Splat-style pruning).
+    hp = cfg.hard_prune
+    if bool(hp.enable):
+        if int(hp.start_step) <= 0:
+            raise ValueError(
+                f"hard_prune.start_step must be > 0, got {hp.start_step}"
+            )
+        # `strategy.refine_stop_iter` uses 0-based `step` units. Hard prune uses 1-based
+        # training steps, so the strict "after densification" condition is:
+        #   start_step >= refine_stop_iter + 1  <=>  start_step > refine_stop_iter
+        if int(hp.start_step) <= int(cfg.strategy.refine_stop_iter):
+            raise ValueError(
+                "hard_prune.start_step must be strictly after densification. "
+                f"Got hard_prune.start_step={int(hp.start_step)} (1-based) and "
+                f"strategy.refine_stop_iter={int(cfg.strategy.refine_stop_iter)} (0-based)."
+            )
+        if int(hp.final_budget) <= 0:
+            raise ValueError(
+                f"hard_prune.final_budget must be > 0, got {hp.final_budget}"
+            )
+        if int(hp.every_n) <= 0:
+            raise ValueError(f"hard_prune.every_n must be > 0, got {hp.every_n}")
+        if int(hp.stop_step) <= 0:
+            raise ValueError(f"hard_prune.stop_step must be > 0, got {hp.stop_step}")
+        if int(hp.stop_step) < int(hp.start_step):
+            raise ValueError(
+                f"hard_prune.stop_step must be >= hard_prune.start_step, got stop_step={hp.stop_step}, start_step={hp.start_step}"
+            )
+        if hp.score_num_views is not None and int(hp.score_num_views) <= 0:
+            raise ValueError(
+                f"hard_prune.score_num_views must be > 0 or None, got {hp.score_num_views}"
+            )
     if cfg.strategy.key_for_gradient not in ("means2d", "gradient_2dgs"):
         raise ValueError(
             "strategy.key_for_gradient must be 'means2d' (3DGS) or 'gradient_2dgs' (2DGS), "

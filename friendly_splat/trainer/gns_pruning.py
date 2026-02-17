@@ -178,7 +178,7 @@ class NaturalSelectionPolicy:
         return (3.0 * w * ((mean_val + 20.0) ** 2)).to(opacities_logits.dtype)
 
     @torch.no_grad()
-    def step_post_update(
+    def maybe_prune_after_update(
         self,
         *,
         step: int,
