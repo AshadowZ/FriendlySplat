@@ -84,6 +84,10 @@ class ColmapDataParser(DataParser):
         Ks_per_image = np.stack(
             [Ks_dict[camera_id].astype(np.float32) for camera_id in camera_ids], axis=0
         )
+        image_sizes = np.array(
+            [imsize_dict[int(camera_id)] for camera_id in camera_ids],
+            dtype=np.int32,
+        )
 
         self.transform = transform
         self.scale = scale
@@ -94,6 +98,9 @@ class ColmapDataParser(DataParser):
         self.image_paths = image_paths
         self.camtoworlds = camtoworlds.astype(np.float32)
         self.Ks = Ks_per_image
+        # Per-image (width, height) aligned with sorted `image_names`.
+        # This avoids scoring-time image I/O when the trainer needs resolution info.
+        self.image_sizes = image_sizes
 
         if int(self.factor) > 1:
             configured_priors = [
@@ -504,4 +511,9 @@ class ColmapDataParser(DataParser):
             normal_paths=self.normal_paths,
             dynamic_mask_paths=self.dynamic_mask_paths,
             sky_mask_paths=self.sky_mask_paths,
+            metadata={
+                # Per-image (width, height) for the full image set.
+                # Indexable by global image index.
+                "image_sizes": self.image_sizes,
+            },
         )

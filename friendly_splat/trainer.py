@@ -13,9 +13,7 @@ This file intentionally stays thin and mostly orchestrates:
 import sys
 from pathlib import Path
 
-# When invoked as a script (`python friendly_splat/trainer.py`), Python sets sys.path[0] to
-# `<repo>/friendly_splat/`, which prevents `import friendly_splat...` from resolving.
-# Ensure the repository root is on sys.path for script-style execution.
+# Script-mode convenience: ensure repo root is on sys.path so `import friendly_splat...` works.
 if __name__ == "__main__" and __package__ is None:
     repo_root = Path(__file__).resolve().parents[1]
     repo_root_str = str(repo_root)
@@ -49,10 +47,11 @@ from friendly_splat.trainer.io_utils import (
     save_train_config_snapshot,
     maybe_save_outputs,
 )
+from friendly_splat.trainer.speedy_pruning import maybe_hard_prune_after_densify
 
 
 def set_seed(seed: int) -> None:
-    # Local, explicit seeding (kept in trainer to avoid a shared utils module).
+    # Local, explicit seeding (kept here to avoid a shared utils module).
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -133,13 +132,13 @@ class Trainer:
         wall_start_s = float(time.perf_counter())
 
         for step in pbar:
-            # Viewer sync (pause/step-lock).
+            # Viewer sync (pause / step-lock).
             tic = viewer_runtime.before_step() if viewer_runtime is not None else None
 
-            # Per-step policy hooks (LR updates, etc.).
+            # Per-step hooks (LR updates, etc.).
             optimizer_coordinator.prepare_step(step=int(step))
 
-            # Data.
+            # Data batch.
             prepared_batch = next(loader_iter)
 
             # Optional pose optimization (applies to this batch only).
@@ -185,7 +184,7 @@ class Trainer:
             )
             loss = loss_output.total
 
-            # Strategy hooks may modify params/optimizers (e.g., densification).
+            # Strategy pre-backward hook (may mutate params/optimizers, e.g. densification).
             strategy.step_pre_backward(
                 gaussian_model.splats,
                 optimizer_coordinator.splat_optimizers,
@@ -216,8 +215,9 @@ class Trainer:
                 lr=lr_means,  # MCMC only
             )
 
+            # Lightweight pruning policy (opacity/budget-based).
             if gns is not None:
-                gns.step_post_update(
+                gns.maybe_prune_after_update(
                     step=step,
                     gaussian_model=gaussian_model,
                     optimizers=optimizer_coordinator.splat_optimizers,
@@ -225,6 +225,7 @@ class Trainer:
                 )
 
             # Prepare for the next backward pass.
+            # Clear grads before hard-prune scoring to reduce peak memory.
             optimizer_coordinator.zero_grad(step=int(step))
 
             # Update viewer stats + release step lock.
@@ -237,6 +238,19 @@ class Trainer:
                     width=int(prepared_batch.width),
                     meta=meta,
                 )
+
+            # Optional Speedy-Splat-style hard pruning (post-densification only).
+            # Runs after `viewer_runtime.after_step()` so the viewer lock isn't held during scoring.
+            maybe_hard_prune_after_densify(
+                step=int(step),
+                hard_prune_cfg=cfg.hard_prune,
+                io_seed=int(cfg.io.seed),
+                active_sh_degree=int(active_sh_degree),
+                train_dataset=self.dataset,
+                gaussian_model=gaussian_model,
+                splat_optimizers=optimizer_coordinator.splat_optimizers,
+                strategy_state=strategy_state,
+            )
 
             # Periodic evaluation.
             eval_output = maybe_run_evaluation_for_step(
