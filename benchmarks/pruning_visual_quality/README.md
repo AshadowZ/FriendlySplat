@@ -6,6 +6,7 @@ under different **post-densification pruning** methods.
 The benchmark runs the same densification preset and then prunes down to a target
 `final_budget` using either:
 
+- Pure densification baseline (`pure_densify`): cap densification to `final_budget` (no pruning).
 - GNS pruning (`gns.gns_enable=True`)
 - Speedy-style hard pruning (`hard_prune.enable=True`)
 
@@ -29,7 +30,7 @@ python3 benchmarks/pruning_visual_quality/run_train_batch.py \
 By default, the script:
 
 - Uses `strategy.impl=improved`.
-- Sets `strategy.densification_budget = 3 * final_budget`.
+- Sets `strategy.densification_budget = 3 * final_budget` for pruning runs (and `final_budget` for `pure_densify` baseline).
 - Forces pruning to start strictly after densification (`strategy.refine_stop_iter`).
 - Exports the final PLY (`ply/splats_stepXXXXXX.ply`) and enables TensorBoard logging.
 

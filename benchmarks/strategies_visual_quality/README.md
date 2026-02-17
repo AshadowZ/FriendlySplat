@@ -17,14 +17,20 @@ python3 benchmarks/strategies_visual_quality/run_train_batch.py \
   --max-steps 30000
 ```
 
-By default, outputs are written under each dataset directory:
+By default, outputs are written under:
 
-- `<data-root>/Mip-NeRF360/benchmark/improved/<scene>/`
-- `<data-root>/Tanks&Temples-Vis/benchmark/improved/<scene>/`
-- `<data-root>/DeepBlending/benchmark/improved/<scene>/`
+- `<data-root>/strategy_benchmark/<dataset>/<scene>/<strategy>/`
+
+For example:
+
+- `<data-root>/strategy_benchmark/mipnerf360/bicycle/improved/`
+- `<data-root>/strategy_benchmark/tanksandtemples_vis/truck/mcmc/`
+- `<data-root>/strategy_benchmark/deepblending/drjohnson/default/`
 
 This benchmark runner is designed to benchmark different densification strategies.
 It always exports the final PLY and enables TensorBoard logging.
+
+By default, it runs all three strategies (`--strategy-impl all`): improved, default, and mcmc.
 
 For `--strategy-impl improved`, it also applies an Improved-GS-style alignment:
 
@@ -102,13 +108,13 @@ python3 benchmarks/strategies_visual_quality/run_eval_batch.py \
   --data-root /media/joker/HV/3DGS/PublicDataset \
   --datasets mipnerf360 \
   --scenes garden \
-  --strategy-impl improved \
   --device cuda:0
 ```
 
-Outputs are written under the dataset benchmark folder by default:
+Outputs are written under:
 
-- `<data-root>/<dataset>/benchmark/summary.md`
+- `<data-root>/strategy_benchmark/summary.md` (single strategy)
+- `<data-root>/strategy_benchmark/summary_all.md` (all strategies)
 
 This evaluator automatically picks the latest `ply/splats_step*.ply` under each scene output directory.
 Use `--step` to evaluate a specific training step.

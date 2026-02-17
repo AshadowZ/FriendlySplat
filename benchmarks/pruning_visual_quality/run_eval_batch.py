@@ -414,7 +414,7 @@ def main(argv: list[str]) -> int:
         "--pruners",
         type=str,
         default="all",
-        help="Comma-separated pruning methods to evaluate: gns,speedy (or 'all').",
+        help="Comma-separated methods to evaluate: pure_densify,gns,speedy (or 'all').",
     )
     parser.add_argument(
         "--out-name",
@@ -484,13 +484,31 @@ def main(argv: list[str]) -> int:
 
     pruners_raw = str(args.pruners).strip().lower()
     if pruners_raw == "all":
-        pruners = ("gns", "speedy")
+        pruners = ("pure_densify", "gns", "speedy")
     else:
-        pruners = tuple(x.strip() for x in _split_csv(pruners_raw))
-        unknown = sorted(set(pruners) - {"gns", "speedy"})
+        aliases = {
+            "pure_densify": "pure_densify",
+            "pure-densify": "pure_densify",
+            "dense": "pure_densify",
+            "densify": "pure_densify",
+            "no_prune": "pure_densify",
+            "baseline": "pure_densify",
+            "gns": "gns",
+            "speedy": "speedy",
+        }
+        pruners_norm = []
+        for x in _split_csv(pruners_raw):
+            k = aliases.get(x.strip().lower().replace("-", "_"))
+            if k is None:
+                pruners_norm.append(x.strip())
+            else:
+                if k not in pruners_norm:
+                    pruners_norm.append(k)
+        pruners = tuple(pruners_norm)
+        unknown = sorted(set(pruners) - {"pure_densify", "gns", "speedy"})
         if unknown:
             raise KeyError(
-                f"Unknown pruners: {unknown}. Expected: gns,speedy,all."
+                f"Unknown pruners: {unknown}. Expected: pure_densify,gns,speedy,all."
             )
 
     out_dir = data_root / "pruning_benchmark"
@@ -522,6 +540,11 @@ def main(argv: list[str]) -> int:
 
             for pruner in pruners:
                 scene_out_dir = out_dir / dataset.key / scene / str(pruner)
+                if not scene_out_dir.exists() and str(pruner) == "pure_densify":
+                    # Backward-compat: older runs used 'dense' as the baseline folder name.
+                    legacy = out_dir / dataset.key / scene / "dense"
+                    if legacy.exists():
+                        scene_out_dir = legacy
                 if not scene_out_dir.exists():
                     print(
                         f"[skip] missing outputs: {dataset.key}/{scene} (pruner={pruner})",
@@ -763,7 +786,7 @@ def main(argv: list[str]) -> int:
         )
         f.write("| --- | --- | --- | --- | --- | --- | --- | --- |\n")
         for dataset_name in sorted({k[0] for k in agg.keys()}):
-            for pruner_name in ("gns", "speedy"):
+            for pruner_name in ("pure_densify", "gns", "speedy"):
                 key = (dataset_name, pruner_name)
                 if key not in agg:
                     continue

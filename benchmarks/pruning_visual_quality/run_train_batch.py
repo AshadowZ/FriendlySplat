@@ -79,6 +79,15 @@ _GNS_FINAL_BUDGETS_NORMAL: dict[str, int] = {
 
 _PRUNER_ALIASES: dict[str, str] = {
     "all": "all",
+    "pure_densify": "pure_densify",
+    "pure-densify": "pure_densify",
+    "dense": "pure_densify",
+    "densify": "pure_densify",
+    "densify_only": "pure_densify",
+    "densifyonly": "pure_densify",
+    "no_prune": "pure_densify",
+    "noprune": "pure_densify",
+    "baseline": "pure_densify",
     "gns": "gns",
     "natural_selection": "gns",
     "naturalselection": "gns",
@@ -226,7 +235,7 @@ def main(argv: list[str]) -> int:
         "--pruners",
         type=str,
         default="all",
-        help="Comma-separated pruning methods to run: gns,speedy (or 'all').",
+        help="Comma-separated methods to run: pure_densify,gns,speedy (or 'all').",
     )
     parser.add_argument(
         "--datasets",
@@ -371,7 +380,7 @@ def main(argv: list[str]) -> int:
 
     pruners_raw = str(args.pruners).strip().lower()
     if pruners_raw == "all":
-        pruners = ("gns", "speedy")
+        pruners = ("pure_densify", "gns", "speedy")
     else:
         pruners_norm: list[str] = []
         for part in _split_csv(pruners_raw):
@@ -379,7 +388,7 @@ def main(argv: list[str]) -> int:
             k = _PRUNER_ALIASES.get(k)
             if k is None:
                 raise KeyError(
-                    f"Unknown pruner {part!r}. Expected one of: gns,speedy,all."
+                    f"Unknown pruner {part!r}. Expected one of: pure_densify,gns,speedy,all."
                 )
             if k != "all" and k not in pruners_norm:
                 pruners_norm.append(k)
@@ -455,7 +464,7 @@ def main(argv: list[str]) -> int:
                 raise ValueError(
                     f"densify_multiplier must be > 0, got {densify_multiplier}"
                 )
-            densify_budget = int(final_budget) * int(densify_multiplier)
+            densify_budget_for_pruning = int(final_budget) * int(densify_multiplier)
             densify_stop_step = int(args.densify_stop_step)
             if densify_stop_step <= 0:
                 raise ValueError(
@@ -542,11 +551,17 @@ def main(argv: list[str]) -> int:
                     "--strategy.refine-stop-iter",
                     str(int(densify_stop_step)),
                     "--strategy.densification-budget",
-                    str(int(densify_budget)),
+                    str(
+                        int(final_budget)
+                        if str(pruner) == "pure_densify"
+                        else int(densify_budget_for_pruning)
+                    ),
                 ]
 
                 # Post-densification pruning method.
-                if str(pruner) == "gns":
+                if str(pruner) == "pure_densify":
+                    pass
+                elif str(pruner) == "gns":
                     reg_start = int(densify_stop_step) + 1
                     reg_end = int(min(int(args.gns_reg_end), int(args.max_steps)))
                     if reg_end < reg_start:
@@ -611,7 +626,8 @@ def main(argv: list[str]) -> int:
                 tag = "dry-run" if bool(args.dry_run) else "run"
                 print(
                     f"[{tag}] {dataset.key}/{scene} (pruner={pruner}) "
-                    f"final_budget={final_budget} densify_budget={densify_budget}",
+                    f"final_budget={final_budget} densify_budget="
+                    f"{final_budget if str(pruner) == 'pure_densify' else densify_budget_for_pruning}",
                     flush=True,
                 )
                 print(f"[cmd] {_format_cmd(cmd)}", flush=True)

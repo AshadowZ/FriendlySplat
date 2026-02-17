@@ -256,7 +256,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--strategy-impl",
         type=str,
-        default="improved",
+        default="all",
         choices=("all", "improved", "default", "mcmc"),
         help=(
             "Strategy implementation(s) to use for training. "
@@ -380,10 +380,12 @@ def main(argv: list[str]) -> int:
             else:
                 strategy_impls = (strategy_impl_raw,)
 
+            # All outputs go under <data-root>/strategy_benchmark/<dataset>/<scene>/<strategy>/...
+            out_root = data_root / "strategy_benchmark"
+
             for strategy_impl in strategy_impls:
-                # Improved-GS-style layout: store outputs under the dataset directory.
-                # Example: <data-root>/Mip-NeRF360/benchmark/improved/bicycle/
-                scene_out_dir = dataset_dir / "benchmark" / str(strategy_impl) / scene
+                # Layout: <data-root>/strategy_benchmark/<dataset>/<scene>/<strategy>/
+                scene_out_dir = out_root / dataset.key / scene / str(strategy_impl)
 
                 log_path: Optional[Path] = None
                 if not bool(args.dry_run):

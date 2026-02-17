@@ -413,10 +413,10 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--strategy-impl",
         type=str,
-        default="improved",
+        default="all",
         choices=("all", "improved", "default", "mcmc"),
         help=(
-            "Which benchmark output folder(s) to evaluate (under benchmark/<strategy>/...). "
+            "Which benchmark output folder(s) to evaluate (under strategy_benchmark/<dataset>/<scene>/<strategy>/...). "
             "Use 'all' to evaluate improved/default/mcmc sequentially."
         ),
     )
@@ -425,7 +425,7 @@ def main(argv: list[str]) -> int:
         type=str,
         default=None,
         help=(
-            "Output markdown filename under the benchmark folder. "
+            "Output markdown filename under <data-root>/strategy_benchmark/. "
             "Defaults to 'summary.md' (single strategy) or 'summary_all.md' (all strategies)."
         ),
     )
@@ -486,12 +486,8 @@ def main(argv: list[str]) -> int:
     else:
         dataset_keys = [x.strip() for x in _split_csv(datasets_raw)]
 
-    # Write summaries next to benchmark outputs (under the dataset root), not inside the repo.
-    if len(dataset_keys) == 1 and dataset_keys[0] in _DATASETS:
-        only = _DATASETS[dataset_keys[0]]
-        out_dir = data_root / only.dir_name / "benchmark"
-    else:
-        out_dir = data_root / "benchmark"
+    # All benchmark outputs and summaries live under <data-root>/strategy_benchmark/...
+    out_dir = data_root / "strategy_benchmark"
     out_dir.mkdir(parents=True, exist_ok=True)
     strategy_impl_raw = str(args.strategy_impl)
     if args.out_name is not None:
@@ -529,7 +525,12 @@ def main(argv: list[str]) -> int:
                 continue
 
             for strategy_impl in strategy_impls:
-                scene_out_dir = dataset_dir / "benchmark" / str(strategy_impl) / scene
+                scene_out_dir = out_dir / dataset.key / scene / str(strategy_impl)
+                if not scene_out_dir.exists():
+                    # Backward-compat: older runs wrote outputs under the dataset folder.
+                    legacy = dataset_dir / "benchmark" / str(strategy_impl) / scene
+                    if legacy.exists():
+                        scene_out_dir = legacy
                 if not scene_out_dir.exists():
                     print(
                         f"[skip] missing outputs: {dataset.key}/{scene} ({strategy_impl})",
