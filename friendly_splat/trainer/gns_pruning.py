@@ -54,8 +54,8 @@ class NaturalSelectionPolicy:
 
     # Mirror legacy attribute names used by trainer code.
     enable: bool = field(init=False)
-    reg_start: int = field(init=False)
-    reg_end: int = field(init=False)
+    reg_start: int = field(init=False)  # 1-based train step (inclusive)
+    reg_end: int = field(init=False)  # 1-based train step (inclusive)
     final_budget: int = field(init=False)
     opacity_reg_weight: float = field(init=False)
 
@@ -70,10 +70,19 @@ class NaturalSelectionPolicy:
         if self.enable and self.verbose:
             print(
                 f"[GNS] Enabled: densify_stop_step={int(self.densify_stop_step)}, "
-                f"reg_start={int(self.reg_start)}, reg_end={int(self.reg_end)}, reg_interval={int(self.reg_interval)}, "
+                f"reg_start={int(self.reg_start)} (1-based), reg_end={int(self.reg_end)} (1-based), reg_interval={int(self.reg_interval)}, "
                 f"final_budget={int(self.final_budget)}, opacity_reg_weight={float(self.opacity_reg_weight)}",
                 flush=True,
             )
+
+    def _train_step(self, *, step: int) -> int:
+        return int(step) + 1
+
+    def window_active(self, *, step: int) -> bool:
+        if not self.enable or self.state.finished:
+            return False
+        train_step = int(self._train_step(step=int(step)))
+        return int(self.reg_start) <= int(train_step) <= int(self.reg_end)
 
     @staticmethod
     def _num_gaussians(gaussian_model: GaussianModel) -> int:
@@ -85,13 +94,14 @@ class NaturalSelectionPolicy:
         st = self.state
         if not self.enable or st.finished:
             return
-        if int(step) != int(self.reg_start) or bool(st.opacity_lr_scaled):
+        train_step = int(self._train_step(step=int(step)))
+        if int(train_step) != int(self.reg_start) or bool(st.opacity_lr_scaled):
             return
         if "opacities" not in optimizers:
             raise KeyError("GNS requires optimizers['opacities'] to scale opacity LR.")
         if self.verbose:
             print(
-                f"[GNS] Starting Natural Selection: Scaling Opacity LR by {float(self.opacity_lr_scale)}x at step {int(step)}",
+                f"[GNS] Starting Natural Selection: Scaling Opacity LR by {float(self.opacity_lr_scale)}x at step {int(train_step)}",
                 flush=True,
             )
         for param_group in optimizers["opacities"].param_groups:
@@ -133,9 +143,10 @@ class NaturalSelectionPolicy:
         st = self.state
         if not self.enable or st.finished:
             return None
-        if not (int(self.reg_start) <= int(step) <= int(self.reg_end)):
+        train_step = int(self._train_step(step=int(step)))
+        if not (int(self.reg_start) <= int(train_step) <= int(self.reg_end)):
             return None
-        if (int(step) - 1) % int(self.reg_interval) != 0:
+        if (int(train_step) - 1) % int(self.reg_interval) != 0:
             return None
 
         params = gaussian_model.splats
@@ -144,7 +155,7 @@ class NaturalSelectionPolicy:
         opacities_logits = params["opacities"].flatten()
 
         # Dynamic opacity_reg_weight adjustment on reg_interval cadence.
-        if (int(step) - 1) % int(self.reg_interval) == 0:
+        if (int(train_step) - 1) % int(self.reg_interval) == 0:
             current_count = int(opacities_logits.shape[0])
             if st.start_count is None:
                 st.start_count = current_count
@@ -152,7 +163,7 @@ class NaturalSelectionPolicy:
                     st.start_count = int(self.final_budget) + 1000
 
             den = float(int(self.reg_end) - int(self.reg_start)) or 1.0
-            progress = float(int(step) - int(self.reg_start)) / den
+            progress = float(int(train_step) - int(self.reg_start)) / den
             progress = max(0.0, min(1.0, progress))
             expected_count = float(st.start_count) - (
                 float(int(st.start_count) - int(self.final_budget)) * progress
@@ -165,7 +176,7 @@ class NaturalSelectionPolicy:
             st.opacity_reg_weight = float(max(1e-7, min(st.opacity_reg_weight, 1e-2)))
 
         w = float(st.opacity_reg_weight)
-        if int(step) < int(self.reg_start) + 1000:
+        if int(train_step) < int(self.reg_start) + 1000:
             current_opacities = torch.sigmoid(opacities_logits)
             rate_l = torch.maximum(
                 torch.ones_like(current_opacities) * 0.05,
@@ -190,7 +201,8 @@ class NaturalSelectionPolicy:
         st = self.state
         if not self.enable or st.finished:
             return
-        if int(step) < int(self.reg_start) or int(step) > int(self.reg_end):
+        train_step = int(self._train_step(step=int(step)))
+        if int(train_step) < int(self.reg_start) or int(train_step) > int(self.reg_end):
             return
 
         params = gaussian_model.splats
@@ -200,15 +212,15 @@ class NaturalSelectionPolicy:
         current_gs_count = int(params["opacities"].numel())
 
         # Early stop: if we're already close to the budget, force a final prune and finish.
-        if int(step) > int(self.reg_start) and current_gs_count < float(self.final_budget) * 1.05:
+        if int(train_step) > int(self.reg_start) and current_gs_count < float(self.final_budget) * 1.05:
             if self.verbose:
                 print(
                     f"[GNS] Count {current_gs_count} < 1.05 * Budget. "
-                    f"Stopping Natural Selection early at step {int(step)}.",
+                    f"Stopping Natural Selection early at step {int(train_step)}.",
                     flush=True,
                 )
                 print(
-                    f"[GNS] Step {int(step)}: Running Final Budget Prune to {int(self.final_budget)}...",
+                    f"[GNS] Step {int(train_step)}: Running Final Budget Prune to {int(self.final_budget)}...",
                     flush=True,
                 )
             n_pruned = self._final_prune(
@@ -227,7 +239,11 @@ class NaturalSelectionPolicy:
             return
 
         # Window pruning: periodically remove very transparent Gaussians.
-        if int(step) < int(self.reg_end) and int(step) % int(self.reg_interval) == 0:
+        if (
+            int(train_step) < int(self.reg_end)
+            and int(train_step) % int(self.reg_interval) == 0
+            and int(train_step) >= int(self.reg_start) + 1000
+        ):
             n_pruned = 0
             if current_gs_count > int(self.final_budget):
                 n_pruned = self._opacity_prune(
@@ -240,16 +256,16 @@ class NaturalSelectionPolicy:
                 # Always print on the pruning cadence, even when no Gaussians were pruned,
                 # to make it easy to verify that the policy is active.
                 print(
-                    f"[GNS] Step {int(step)}: Removed {n_pruned} GSs "
+                    f"[GNS] Step {int(train_step)}: Removed {n_pruned} GSs "
                     f"below opacity threshold. Now having {self._num_gaussians(gaussian_model)} GSs.",
                     flush=True,
                 )
 
         # Final prune at reg_end: enforce the budget via probabilistic survival.
-        if int(step) == int(self.reg_end):
+        if int(train_step) == int(self.reg_end):
             if self.verbose:
                 print(
-                    f"[GNS] Step {int(step)}: Running Final Budget Prune to {int(self.final_budget)}...",
+                    f"[GNS] Step {int(train_step)}: Running Final Budget Prune to {int(self.final_budget)}...",
                     flush=True,
                 )
             n_pruned = self._final_prune(

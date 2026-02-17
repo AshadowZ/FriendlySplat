@@ -297,12 +297,7 @@ class OptimizerCoordinator:
                 reduce_dims = tuple(range(vis.dim() - 1))
                 visibility = vis.any(dim=reduce_dims)
 
-        gns_window_active = (
-            gns is not None
-            and gns.enable
-            and (not gns.state.finished)
-            and int(gns.reg_start) <= int(step) <= int(gns.reg_end)
-        )
+        gns_window_active = gns is not None and gns.window_active(step=int(step))
 
         if step_splats:
             # Step splat optimizers.

@@ -341,9 +341,9 @@ class GNSConfig:
 
     # Whether to enable the Natural Selection pruning phase.
     gns_enable: bool = False
-    # Step to start Natural Selection (usually post-densification, e.g., after 15000).
-    reg_start: int = 15_000
-    # Step to end Natural Selection.
+    # Step (1-based) to start Natural Selection (post-densification).
+    reg_start: int = 15_001
+    # Step (1-based) to end Natural Selection (inclusive).
     reg_end: int = 23_000
     # Final target Gaussian count (budget).
     final_budget: int = 1_000_000
@@ -558,11 +558,13 @@ def validate_train_config(cfg: TrainConfig) -> None:
 
     # GNS config validation (pruning window + budget).
     if bool(cfg.gns.gns_enable):
-        if int(cfg.gns.reg_start) < 0:
-            raise ValueError(f"gns.reg_start must be >= 0, got {cfg.gns.reg_start}")
+        if int(cfg.gns.reg_start) <= 0:
+            raise ValueError(
+                f"gns.reg_start must be > 0 (1-based), got {cfg.gns.reg_start}"
+            )
         if int(cfg.gns.reg_end) < int(cfg.gns.reg_start):
             raise ValueError(
-                f"gns.reg_end must be >= gns.reg_start, got {cfg.gns.reg_end} < {cfg.gns.reg_start}"
+                f"gns.reg_end must be >= gns.reg_start (1-based), got {cfg.gns.reg_end} < {cfg.gns.reg_start}"
             )
         if int(cfg.gns.final_budget) <= 0:
             raise ValueError(
@@ -572,11 +574,19 @@ def validate_train_config(cfg: TrainConfig) -> None:
             raise ValueError(
                 f"gns.opacity_reg_weight must be > 0, got {cfg.gns.opacity_reg_weight}"
             )
-        densify_stop_step = int(cfg.strategy.refine_stop_iter)
-        if int(cfg.gns.reg_start) < densify_stop_step:
+        if cfg.optim.sparse_grad:
             raise ValueError(
-                "gns.reg_start must be after densification finishes. "
-                f"Got gns.reg_start={int(cfg.gns.reg_start)} < strategy.refine_stop_iter={densify_stop_step}."
+                "gns.gns_enable=True is incompatible with optim.sparse_grad=True "
+                "(packed+sparse mode). Disable either GNS or sparse_grad."
+            )
+        # `strategy.refine_stop_iter` uses 0-based `step` units. GNS uses 1-based
+        # training steps, so the strict "after densification" condition is:
+        #   reg_start >= refine_stop_iter + 1  <=>  reg_start > refine_stop_iter
+        if int(cfg.gns.reg_start) <= int(cfg.strategy.refine_stop_iter):
+            raise ValueError(
+                "gns.reg_start must be strictly after densification. "
+                f"Got gns.reg_start={int(cfg.gns.reg_start)} (1-based) and "
+                f"strategy.refine_stop_iter={int(cfg.strategy.refine_stop_iter)} (0-based)."
             )
 
     # Hard prune config (post-densification Speedy-Splat-style pruning).
@@ -677,31 +687,7 @@ def validate_train_config(cfg: TrainConfig) -> None:
                 f"ply_format must be 'ply' or 'ply_compressed', got {cfg.io.ply_format!r}"
             )
 
-    if cfg.gns.gns_enable:
-        if cfg.optim.sparse_grad:
-            raise ValueError(
-                "gns.gns_enable=True is incompatible with optim.sparse_grad=True "
-                "(packed+sparse mode). Disable either GNS or sparse_grad."
-            )
-        if cfg.gns.reg_start < cfg.strategy.refine_stop_iter:
-            raise ValueError(
-                "gns.gns_enable=True requires gns.reg_start >= strategy.refine_stop_iter, "
-                f"got gns.reg_start={cfg.gns.reg_start} < strategy.refine_stop_iter={cfg.strategy.refine_stop_iter}"
-            )
-        if cfg.gns.reg_end < cfg.gns.reg_start:
-            raise ValueError(
-                "gns.gns_enable=True requires gns.reg_end >= gns.reg_start, "
-                f"got gns.reg_end={cfg.gns.reg_end} < gns.reg_start={cfg.gns.reg_start}"
-            )
-        if cfg.gns.final_budget <= 0:
-            raise ValueError(
-                f"gns.gns_enable=True requires gns.final_budget > 0, got {cfg.gns.final_budget}"
-            )
-        if cfg.gns.opacity_reg_weight <= 0.0:
-            raise ValueError(
-                "gns.gns_enable=True requires gns.opacity_reg_weight > 0, "
-                f"got {cfg.gns.opacity_reg_weight}"
-            )
+    # (GNS validation handled above.)
 
     if cfg.eval.enable and int(cfg.eval.eval_every_n) <= 0:
         raise ValueError(

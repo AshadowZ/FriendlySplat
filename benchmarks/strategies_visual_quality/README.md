@@ -8,7 +8,7 @@ across common 3DGS datasets (Mip-NeRF360 / Tanks&Temples-Vis / DeepBlending).
 Single-GPU, sequential batch training (Improved-GS-style per-scene budgets):
 
 ```bash
-python3 benchmarks/visual_quality/run_train_batch.py \
+python3 benchmarks/strategies_visual_quality/run_train_batch.py \
   --data-root /media/joker/HV/3DGS/PublicDataset \
   --datasets mipnerf360,deepblending \
   --scenes bicycle,bonsai,drjohnson \
@@ -54,7 +54,7 @@ By default it also uses `preload='cuda'` for faster throughput (at the cost of G
 To disable preloading:
 
 ```bash
-python3 benchmarks/visual_quality/run_train_batch.py \
+python3 benchmarks/strategies_visual_quality/run_train_batch.py \
   --data-root /media/joker/HV/3DGS/PublicDataset \
   --datasets mipnerf360 \
   --scenes bicycle \
@@ -65,7 +65,7 @@ If a scene's `images/` are downsampled compared to the COLMAP intrinsics, set `d
 your `images_<factor>/` folder (e.g. `images_4/`):
 
 ```bash
-python3 benchmarks/visual_quality/run_train_batch.py \
+python3 benchmarks/strategies_visual_quality/run_train_batch.py \
   --data-root /media/joker/HV/3DGS/PublicDataset \
   --datasets mipnerf360 \
   --scenes garden \
@@ -78,7 +78,7 @@ If you have removed `images/` and only keep `images_<factor>/` on disk, the scri
 You can also specify per-scene factors with a repeatable flag:
 
 ```bash
-python3 benchmarks/visual_quality/run_train_batch.py \
+python3 benchmarks/strategies_visual_quality/run_train_batch.py \
   --data-root /media/joker/HV/3DGS/PublicDataset \
   --datasets mipnerf360 \
   --scenes garden,bicycle \
@@ -89,7 +89,7 @@ python3 benchmarks/visual_quality/run_train_batch.py \
 List available dataset keys/scenes:
 
 ```bash
-python3 benchmarks/visual_quality/run_train_batch.py --list --data-root .
+python3 benchmarks/strategies_visual_quality/run_train_batch.py --list --data-root .
 ```
 
 ## Batch evaluation
@@ -98,7 +98,7 @@ Evaluate visual quality metrics (PSNR/SSIM/LPIPS) from exported PLYs and write a
 that also includes final Gaussian count and training wall-clock time (from TensorBoard when available):
 
 ```bash
-python3 benchmarks/visual_quality/run_eval_batch.py \
+python3 benchmarks/strategies_visual_quality/run_eval_batch.py \
   --data-root /media/joker/HV/3DGS/PublicDataset \
   --datasets mipnerf360 \
   --scenes garden \
