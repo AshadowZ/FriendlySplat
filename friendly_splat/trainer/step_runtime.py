@@ -40,12 +40,17 @@ def build_step_schedule_from_prepared_batch(
         isinstance(prepared_batch.normal_prior, torch.Tensor)
         and prepared_batch.normal_prior.numel() > 0
     )
+    has_sky_mask = (
+        isinstance(prepared_batch.sky_mask, torch.Tensor)
+        and prepared_batch.sky_mask.numel() > 0
+    )
     return compute_step_schedule(
         step=step,
         optim_cfg=optim_cfg,
         reg_cfg=reg_cfg,
         has_depth_prior=has_depth_prior,
         has_normal_prior=has_normal_prior,
+        has_sky_mask=has_sky_mask,
     )
 
 
@@ -133,6 +138,7 @@ def compute_losses_from_prepared_batch_and_render(
     bilateral_grid_tv_weight: float = 0.0,
     gns: Optional[NaturalSelectionPolicy] = None,
 ) -> LossOutput:
+    do_sky_loss = bool(schedule.do_sky_loss)
     do_depth_reg = bool(schedule.do_depth_reg)
     do_render_normal_reg = bool(schedule.do_render_normal_reg)
     do_surf_normal_reg = bool(schedule.do_surf_normal_reg)
@@ -142,6 +148,7 @@ def compute_losses_from_prepared_batch_and_render(
 
     base = compute_losses(
         reg_cfg=reg_cfg,
+        do_sky_loss=do_sky_loss,
         do_depth_reg=do_depth_reg,
         do_render_normal_reg=do_render_normal_reg,
         do_surf_normal_reg=do_surf_normal_reg,

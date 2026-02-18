@@ -10,6 +10,7 @@ from friendly_splat.trainer.configs import OptimConfig, RegConfig
 class StepSchedule:
     """Per-step schedule for regularizations and required renderer outputs."""
 
+    do_sky_loss: bool
     do_depth_reg: bool
     do_render_normal_reg: bool
     do_surf_normal_reg: bool
@@ -27,6 +28,7 @@ def compute_step_schedule(
     reg_cfg: RegConfig,
     has_depth_prior: bool,
     has_normal_prior: bool,
+    has_sky_mask: bool,
 ) -> StepSchedule:
     """Decide which regularizations to apply this step and which renderer outputs are required."""
     max_sh_degree = int(optim_cfg.sh_degree)
@@ -41,6 +43,7 @@ def compute_step_schedule(
     depth_due = reg_cfg.depth_reg_every_n > 0 and (
         step % reg_cfg.depth_reg_every_n == 0
     )
+    sky_due = reg_cfg.sky_loss_every_n > 0 and (step % reg_cfg.sky_loss_every_n == 0)
     normal_due = reg_cfg.normal_reg_every_n > 0 and (
         step % reg_cfg.normal_reg_every_n == 0
     )
@@ -48,6 +51,7 @@ def compute_step_schedule(
         step % reg_cfg.scale_ratio_reg_every_n == 0
     )
 
+    do_sky_loss = has_sky_mask and reg_cfg.sky_loss_weight > 0.0 and sky_due
     do_depth_reg = (
         has_depth_prior
         and reg_cfg.depth_loss_weight > 0.0
@@ -88,6 +92,7 @@ def compute_step_schedule(
         render_mode = "RGB"
 
     return StepSchedule(
+        do_sky_loss=do_sky_loss,
         do_depth_reg=do_depth_reg,
         do_render_normal_reg=do_render_normal_reg,
         do_surf_normal_reg=do_surf_normal_reg,

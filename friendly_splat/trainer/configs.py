@@ -306,6 +306,8 @@ class RegConfig:
 
     # Weight for sky supervision loss (encourage transparency in sky pixels).
     sky_loss_weight: float = 0.05
+    # Apply sky supervision loss once every N steps.
+    sky_loss_every_n: int = 10
 
     # Apply depth regularization once every N steps.
     depth_reg_every_n: int = 4

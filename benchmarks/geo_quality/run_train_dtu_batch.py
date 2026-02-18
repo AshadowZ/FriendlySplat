@@ -188,14 +188,38 @@ def main(argv: list[str]) -> int:
         "--data-preload",
         type=str,
         choices=("none", "cuda"),
-        default="none",
-        help="DataLoader preload mode (default: none).",
+        default="cuda",
+        help="DataLoader preload mode (default: cuda).",
     )
     parser.add_argument(
         "--max-steps",
         type=int,
         default=30_000,
         help="Training steps for each scan.",
+    )
+    parser.add_argument(
+        "--strategy-impl",
+        type=str,
+        default="improved",
+        help="Strategy impl forwarded to trainer (default: improved).",
+    )
+    parser.add_argument(
+        "--densification-budget",
+        type=int,
+        default=1_000_000,
+        help="Per-scan densification budget (approx. max gaussians; default: 1000000).",
+    )
+    parser.add_argument(
+        "--prune-opa",
+        type=float,
+        default=0.05,
+        help="Strategy prune_opa forwarded to trainer (default: 0.05).",
+    )
+    parser.add_argument(
+        "--prune-scale3d",
+        type=float,
+        default=0.1,
+        help="Strategy prune_scale3d forwarded to trainer (default: 0.1).",
     )
     parser.add_argument(
         "--scans",
@@ -344,10 +368,17 @@ def main(argv: list[str]) -> int:
             "moge_normal",
             "--data.sky-mask-dir-name",
             str(args.invalid_mask_dir_name),
+            "--postprocess.use-bilateral-grid",
             "--optim.max-steps",
             str(int(args.max_steps)),
             "--strategy.impl",
-            "improved",
+            str(args.strategy_impl),
+            "--strategy.densification-budget",
+            str(int(args.densification_budget)),
+            "--strategy.prune-opa",
+            str(float(args.prune_opa)),
+            "--strategy.prune-scale3d",
+            str(float(args.prune_scale3d)),
             "--viewer.disable-viewer",
             "--io.export-ply",
             "--io.ply-steps",
@@ -361,8 +392,10 @@ def main(argv: list[str]) -> int:
                 "0",
             ]
 
-        # Reasonable defaults for benchmarks.
-        cmd += ["--optim.no-random-bkgd"]
+        # Benchmark defaults:
+        # - enable random backgrounds to discourage floaters / transparency artifacts
+        # - enable bilateral-grid post-processing to absorb cross-frame photometric drift
+        cmd += ["--optim.random-bkgd"]
 
         if extra_args:
             cmd += extra_args
@@ -394,4 +427,3 @@ def main(argv: list[str]) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))
-

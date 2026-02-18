@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import shlex
 import subprocess
 import sys
@@ -86,6 +87,9 @@ def _run_tsdf_mesh(
     sdf_trunc: float,
     depth_trunc: float,
     post_process_clusters: int,
+    tsdf_mask_dir_name: Optional[str],
+    tsdf_mask_threshold: float,
+    tsdf_mask_dilate: int,
     dry_run: bool,
 ) -> None:
     mesh_script = repo_root / "tools" / "mesh" / "tsdf_mesh_from_ply.py"
@@ -117,6 +121,17 @@ def _run_tsdf_mesh(
         "--output_dir",
         str(output_dir),
     ]
+    if tsdf_mask_dir_name is not None:
+        cmd.extend(
+            [
+                "--mask_dir",
+                str(tsdf_mask_dir_name),
+                "--mask_threshold",
+                str(float(tsdf_mask_threshold)),
+                "--mask_dilate",
+                str(int(tsdf_mask_dilate)),
+            ]
+        )
 
     print(f"[mesh] {_format_cmd(cmd)}", flush=True)
     if dry_run:
@@ -135,6 +150,7 @@ def _run_dtu_eval(
     dry_run: bool,
 ) -> None:
     scan_id = int(str(scan).replace("scan", ""))
+
     cmd = [
         sys.executable,
         str(eval_script),
@@ -152,12 +168,57 @@ def _run_dtu_eval(
     print(f"[eval] {_format_cmd(cmd)}", flush=True)
     if dry_run:
         return
-    subprocess.run(cmd, check=True)
+    subprocess.run(cmd, check=True, cwd=str(eval_script.parent))
 
 
 def _load_results_json(path: Path) -> dict:
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def _fmt_cell(value: Optional[float]) -> str:
+    if value is None:
+        return "N/A"
+    return f"{float(value):.4f}"
+
+
+def _write_summary_md(
+    *,
+    rows: list[_EvalRow],
+    summary_path: Path,
+    exp_name: str,
+    dtu_official_dir: Path,
+    eval_script: Path,
+    max_steps: int,
+) -> None:
+    rows_sorted = sorted(rows, key=lambda r: int(str(r.scan).replace("scan", "")))
+    valid_overall = [float(r.overall) for r in rows_sorted if r.overall is not None]
+    valid_d2s = [float(r.mean_d2s) for r in rows_sorted if r.mean_d2s is not None]
+    valid_s2d = [float(r.mean_s2d) for r in rows_sorted if r.mean_s2d is not None]
+
+    mean_overall = (sum(valid_overall) / len(valid_overall)) if valid_overall else None
+    mean_d2s = (sum(valid_d2s) / len(valid_d2s)) if valid_d2s else None
+    mean_s2d = (sum(valid_s2d) / len(valid_s2d)) if valid_s2d else None
+
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    lines: list[str] = []
+    lines.append(f"# DTU geo benchmark summary: `{exp_name}`")
+    lines.append("")
+    lines.append(f"- Eval script: `{eval_script}`")
+    lines.append(f"- DTU official dir: `{dtu_official_dir}`")
+    lines.append(f"- PLY step: `{int(max_steps)}`")
+    lines.append("")
+    lines.append("| Scan | mean_d2s | mean_s2d | overall |")
+    lines.append("|---:|---:|---:|---:|")
+    for r in rows_sorted:
+        lines.append(f"| {r.scan} | {_fmt_cell(r.mean_d2s)} | {_fmt_cell(r.mean_s2d)} | {_fmt_cell(r.overall)} |")
+    lines.append(
+        f"| **Mean** | **{_fmt_cell(mean_d2s)}** | **{_fmt_cell(mean_s2d)}** | **{_fmt_cell(mean_overall)}** |"
+    )
+    lines.append("")
+
+    with open(summary_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
 
 
 def main(argv: list[str]) -> int:
@@ -181,8 +242,13 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--dtu-official-dir",
         type=str,
-        required=True,
-        help="Path to the official DTU evaluation data (ObsMask/, Points/stl/, ...).",
+        required=False,
+        default=None,
+        help=(
+            "Path to the official DTU evaluation data (ObsMask/, Points/stl/, ...). "
+            "If omitted, the script will try to auto-detect it from common locations "
+            "under --data-root (e.g. <data-root>/DTU/eval_dtu)."
+        ),
     )
     parser.add_argument(
         "--eval-script",
@@ -202,6 +268,20 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--depth-trunc", type=float, default=3.0)
     parser.add_argument("--post-process-clusters", type=int, default=1)
     parser.add_argument(
+        "--tsdf-use-mask",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Apply per-frame object mask during TSDF fusion (default: on).",
+    )
+    parser.add_argument(
+        "--tsdf-mask-dir-name",
+        type=str,
+        default="mask",
+        help="Mask dir name under each DTU scan scene dir (e.g. scan24/mask).",
+    )
+    parser.add_argument("--tsdf-mask-threshold", type=float, default=0.5)
+    parser.add_argument("--tsdf-mask-dilate", type=int, default=0)
+    parser.add_argument(
         "--skip-existing-mesh",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -212,6 +292,12 @@ def main(argv: list[str]) -> int:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Skip eval if results.json already exists (default: on).",
+    )
+    parser.add_argument(
+        "--delete-mesh-cache",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Delete <result_dir>/mesh/cache after each successfully evaluated scan (default: on).",
     )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
@@ -234,9 +320,32 @@ def main(argv: list[str]) -> int:
     if not scans:
         raise ValueError("No scans selected.")
 
-    dtu_official_dir = Path(str(args.dtu_official_dir)).expanduser().resolve()
-    if not dtu_official_dir.exists():
-        raise FileNotFoundError(f"DTU official dir not found: {dtu_official_dir}")
+    dtu_official_dir: Optional[Path]
+    if args.dtu_official_dir is None:
+        candidates = [
+            dtu_dir / "eval_dtu",
+            data_root / "DTU_Official",
+            data_root / "Official_DTU_Dataset",
+            data_root / "Offical_DTU_Dataset",  # common misspelling in some repos
+        ]
+        dtu_official_dir = None
+        for cand in candidates:
+            if not cand.exists():
+                continue
+            if (cand / "ObsMask").exists() and (cand / "Points" / "stl").exists():
+                dtu_official_dir = cand
+                break
+        if dtu_official_dir is None:
+            tried = ", ".join(str(p) for p in candidates)
+            raise FileNotFoundError(
+                "DTU official eval data not found. Pass --dtu-official-dir explicitly. "
+                f"Tried: {tried}"
+            )
+        print(f"[auto] using dtu_official_dir={dtu_official_dir}", flush=True)
+    else:
+        dtu_official_dir = Path(str(args.dtu_official_dir)).expanduser().resolve()
+        if not dtu_official_dir.exists():
+            raise FileNotFoundError(f"DTU official dir not found: {dtu_official_dir}")
 
     eval_script = (
         Path(str(args.eval_script)).expanduser().resolve()
@@ -262,6 +371,13 @@ def main(argv: list[str]) -> int:
 
         mesh = _mesh_path(result_dir=result_dir)
         if not (bool(args.skip_existing_mesh) and mesh.exists()):
+            tsdf_mask_dir_name: Optional[str] = None
+            if bool(args.tsdf_use_mask):
+                cand = scene_dir / str(args.tsdf_mask_dir_name)
+                if cand.exists() and cand.is_dir():
+                    tsdf_mask_dir_name = str(args.tsdf_mask_dir_name)
+                else:
+                    print(f"[mask] disabled (missing dir): {cand}", flush=True)
             _run_tsdf_mesh(
                 repo_root=repo_root,
                 ply_path=ply,
@@ -273,6 +389,9 @@ def main(argv: list[str]) -> int:
                 sdf_trunc=float(args.sdf_trunc),
                 depth_trunc=float(args.depth_trunc),
                 post_process_clusters=int(args.post_process_clusters),
+                tsdf_mask_dir_name=tsdf_mask_dir_name,
+                tsdf_mask_threshold=float(args.tsdf_mask_threshold),
+                tsdf_mask_dilate=int(args.tsdf_mask_dilate),
                 dry_run=bool(args.dry_run),
             )
 
@@ -290,6 +409,11 @@ def main(argv: list[str]) -> int:
                 )
             )
             print(f"[done] {scan}: {results_json}", flush=True)
+            if bool(args.delete_mesh_cache) and not bool(args.dry_run):
+                cache_dir = result_dir / "mesh" / "cache"
+                if cache_dir.exists() and cache_dir.is_dir():
+                    shutil.rmtree(cache_dir)
+                    print(f"[cache] deleted {cache_dir}", flush=True)
             continue
 
         _run_dtu_eval(
@@ -319,23 +443,23 @@ def main(argv: list[str]) -> int:
             )
         )
         print(f"[ok] {scan}", flush=True)
+        if bool(args.delete_mesh_cache) and not bool(args.dry_run):
+            cache_dir = result_dir / "mesh" / "cache"
+            if cache_dir.exists() and cache_dir.is_dir():
+                shutil.rmtree(cache_dir)
+                print(f"[cache] deleted {cache_dir}", flush=True)
 
     # Summary.
-    summary_path = results_root / f"summary_{args.exp_name}.json"
+    summary_path = data_root / str(args.out_dir_name) / f"summary_{args.exp_name}.md"
     if rows and not bool(args.dry_run):
-        payload = [
-            {
-                "scan": r.scan,
-                "mean_d2s": r.mean_d2s,
-                "mean_s2d": r.mean_s2d,
-                "overall": r.overall,
-                "result_dir": r.result_dir,
-            }
-            for r in rows
-        ]
-        summary_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(summary_path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2)
+        _write_summary_md(
+            rows=rows,
+            summary_path=summary_path,
+            exp_name=str(args.exp_name),
+            dtu_official_dir=dtu_official_dir,
+            eval_script=eval_script,
+            max_steps=int(args.max_steps),
+        )
         print(f"[summary] wrote {summary_path}", flush=True)
 
     return 1 if any_failed else 0

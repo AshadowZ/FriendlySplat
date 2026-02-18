@@ -33,6 +33,15 @@ python3 benchmarks/geo_quality/run_train_dtu_batch.py \
   --scans default
 ```
 
+Defaults (can be overridden via CLI flags):
+
+- `--data-preload cuda`
+- `--postprocess.use-bilateral-grid` (requires `fused_bilagrid`)
+- `--strategy-impl improved`
+- `--densification-budget 1000000`
+- `--prune-opa 0.05`
+- `--prune-scale3d 0.1`
+
 This writes outputs under `<data-root>/geo_benchmark/DTU/scanXXX/<exp-name>/`.
 
 ## DTU mesh + geometry evaluation
@@ -46,7 +55,12 @@ python3 benchmarks/geo_quality/run_eval_dtu_batch.py \
   --dtu-official-dir /path/to/DTU_Official
 ```
 
+If you have the DTU official eval assets bundled under `<data-root>/DTU/eval_dtu/` (i.e. it contains `ObsMask/` and `Points/stl/`),
+you can omit `--dtu-official-dir` and the script will auto-detect it.
+
 By default, the script uses the eval code at `DTU/eval_dtu/evaluate_single_scene.py` under `--data-root`.
+By default, TSDF fusion applies the per-frame DTU object mask at `DTU/scanXXX/mask/` (PGSR-style: depth is set to 0 outside the mask).
+Use `--no-tsdf-use-mask` to disable or `--tsdf-mask-dir-name` to change the folder name.
 
 Expected dataset layout:
 
@@ -55,9 +69,11 @@ Expected dataset layout:
   DTU/
     scan24/
       images/
+      mask/
       sparse/
     scan105/
       images/
+      mask/
       sparse/
 ```
 
@@ -65,6 +81,11 @@ Outputs are written into each scan folder:
 
 - `DTU/scanXXX/moge_normal/` (PNG)
 - `DTU/scanXXX/moge_depth/` (NPY)
+
+Evaluation summary:
+
+- A Markdown summary table is written to `<data-root>/geo_benchmark/summary_<exp-name>.md`.
+- By default, per-scan TSDF cache files under `<result_dir>/mesh/cache/` are deleted after evaluation. Use `--no-delete-mesh-cache` to keep them.
 
 Notes:
 

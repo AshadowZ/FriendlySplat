@@ -3,11 +3,16 @@
 # SSIM loss acceleration used by `friendly_splat/trainer.py`.
 git+https://github.com/rahul-goel/fused-ssim@328dc9836f513d00c4b5bc38fe30478b4435cbb5
 
+# Fused bilateral-grid post-processing used when `--postprocess.use_bilateral_grid True`.
+git+https://github.com/harry7557558/fused-bilagrid@49f0ef06c9f81810fb9b5dd9027cf1844950cc16
+
 # KNN-based scale initialization used by `friendly_splat/trainer.py`.
 scikit-learn
 
 # Core array dependency used across data/model/viewer runtime paths.
-numpy
+# Note: Open3D 0.18 wheels are not compatible with NumPy 2.x in some environments
+# and may segfault during TSDF integration; keep NumPy on 1.x for DTU meshing/eval.
+numpy<2
 
 # CLI for `friendly_splat/trainer.py` (dataclass-based args).
 tyro>=0.8.8
@@ -20,6 +25,12 @@ tensorboard
 
 # Progress bar for training output.
 tqdm
+
+# Geometry / meshing utilities (TSDF mesh + DTU eval scripts).
+# Pinned for reproducibility and to match the DTU meshing/eval setup used by 2DGS.
+open3d==0.18.0
+scikit-image
+scipy
 
 # Evaluation metrics (PSNR/SSIM/LPIPS) implementation.
 torchmetrics

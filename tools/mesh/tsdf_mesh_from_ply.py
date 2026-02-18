@@ -33,6 +33,7 @@ class CameraFrame:
     K: np.ndarray  # [3,3]
     height: int
     width: int
+    image_path: str
 
 
 class DiskNpyArray:
@@ -230,6 +231,7 @@ def _iter_frames(
             K=K,
             height=int(h_default),
             width=int(w_default),
+            image_path=str(parsed_scene.image_paths[int(image_index)]),
         )
 
 
@@ -259,10 +261,15 @@ def _create_tsdf_mesh(
     voxel_length: Optional[float],
     sdf_trunc: Optional[float],
     depth_trunc: Optional[float],
+    mask_paths: Optional[list[str]],
+    mask_threshold: float,
+    mask_dilate: int,
 ):
     n = int(len(depths_np))
     if n <= 0:
         raise ValueError("No frames provided for TSDF integration.")
+    if mask_paths is not None and int(len(mask_paths)) != n:
+        raise ValueError(f"mask_paths length mismatch: got {len(mask_paths)}, expected {n}")
 
     med_dist = _estimate_med_camera_dist(camtoworlds)
     if voxel_length is None:
@@ -278,6 +285,18 @@ def _create_tsdf_mesh(
     )
 
     integration_depth_trunc = float(depth_trunc) if depth_trunc is not None else 10000.0
+    use_mask = mask_paths is not None
+    if use_mask:
+        import cv2  # noqa: WPS433
+
+        if float(mask_threshold) <= 0.0 or float(mask_threshold) >= 1.0:
+            raise ValueError(f"mask_threshold must be in (0, 1), got {mask_threshold}")
+        if int(mask_dilate) < 0:
+            raise ValueError(f"mask_dilate must be >= 0, got {mask_dilate}")
+        kernel = None
+        if int(mask_dilate) > 0:
+            k = int(mask_dilate) * 2 + 1
+            kernel = np.ones((k, k), dtype=np.uint8)
 
     for i in tqdm.tqdm(range(n), desc="TSDF Integration", unit="frame"):
         depth = depths_np[i].astype(np.float32)  # [H,W]
@@ -290,6 +309,21 @@ def _create_tsdf_mesh(
             raise ValueError(f"Cached depth shape mismatch: got {depth.shape}, expected {(h, w)}")
         if color.shape[0] != h or color.shape[1] != w:
             raise ValueError(f"Cached color shape mismatch: got {color.shape}, expected {(h, w, 3)}")
+
+        if use_mask:
+            mp = Path(str(mask_paths[i])).expanduser().resolve()
+            m = cv2.imread(str(mp), cv2.IMREAD_UNCHANGED)
+            if m is None:
+                raise FileNotFoundError(f"Failed to read mask: {mp}")
+            if m.ndim == 3:
+                m = m[:, :, 0]
+            if m.shape[0] != h or m.shape[1] != w:
+                m = cv2.resize(m, (w, h), interpolation=cv2.INTER_NEAREST)
+            if m.dtype != np.uint8:
+                m = np.clip(m.astype(np.float32), 0.0, 255.0).astype(np.uint8)
+            if kernel is not None:
+                m = cv2.dilate(m, kernel, iterations=1)
+            depth[m.astype(np.float32) / 255.0 < float(mask_threshold)] = 0.0
 
         o3d_depth = o3d.geometry.Image(depth)
         o3d_color = o3d.geometry.Image(color)
@@ -376,11 +410,50 @@ def main() -> None:
         help="Keep K largest connected components (0 disables).",
     )
     parser.add_argument("--cache_dir", type=str, default=None, help="Cache directory for RGB/depth .npy files.")
+    parser.add_argument(
+        "--delete_cache",
+        action="store_true",
+        help="Delete the cached RGB/depth .npy directory after mesh extraction.",
+    )
+    parser.add_argument(
+        "--mask_dir",
+        type=str,
+        default=None,
+        help=(
+            "Optional directory of per-frame object masks. When set, TSDF integration zeroes depth where mask<threshold. "
+            "If the path is relative, it is interpreted relative to --data_dir. "
+            "Masks are matched to images by integer filename id (e.g. 0000.png -> 000.png) or by exact stem."
+        ),
+    )
+    parser.add_argument(
+        "--mask_threshold",
+        type=float,
+        default=0.5,
+        help="Mask threshold in (0,1) (mask values are treated as 0..255).",
+    )
+    parser.add_argument(
+        "--mask_dilate",
+        type=int,
+        default=0,
+        help="Optional mask dilation radius in pixels (0 disables).",
+    )
     args = parser.parse_args()
 
     device = torch.device(str(args.device))
     if device.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA requested but torch.cuda.is_available() is False.")
+
+    # Open3D is a compiled extension; in some environments it can crash (SIGSEGV)
+    # during TSDF integration when used with NumPy 2.x. Prefer failing fast with a
+    # clear message over crashing inside native code.
+    numpy_major = int(str(np.__version__).split(".", maxsplit=1)[0])
+    if numpy_major >= 2:
+        raise RuntimeError(
+            "TSDF meshing requires NumPy 1.x in this setup (Open3D may segfault with NumPy 2.x). "
+            f"Detected numpy=={np.__version__}. "
+            "Fix: reinstall with `pip install 'numpy<2' --force-reinstall`, then reinstall Open3D "
+            "(e.g. `pip install open3d==0.18.0 --force-reinstall`)."
+        )
 
     # Import gsplat lazily so we can print early diagnostics before the first
     # run potentially triggers CUDA extension compilation.
@@ -413,6 +486,11 @@ def main() -> None:
     print(f"[cache] dir={cache_dir} (write_workers={int(args.write_workers)}, queue_size={int(args.queue_size)})")
 
     data_dir = str(args.data_dir)
+    mask_dir: Optional[Path] = None
+    if args.mask_dir is not None:
+        raw = Path(str(args.mask_dir)).expanduser()
+        mask_dir = (Path(data_dir).expanduser().resolve() / raw).resolve() if not raw.is_absolute() else raw.resolve()
+
     dataparser = ColmapDataParser(
         data_dir=data_dir,
         factor=int(args.data_factor),
@@ -429,6 +507,29 @@ def main() -> None:
     print(f"[data] loaded train cameras: {int(parsed_scene.indices.size)} (interval={int(args.interval)})")
     first_image_index = int(parsed_scene.indices[0])
     h0, w0 = _infer_hw_from_image(image_path=parsed_scene.image_paths[first_image_index])
+
+    mask_by_int: dict[int, Path] = {}
+    mask_by_stem: dict[str, Path] = {}
+    if mask_dir is not None:
+        if not mask_dir.exists():
+            raise FileNotFoundError(f"mask_dir not found: {mask_dir}")
+        for ext in ("*.png", "*.jpg", "*.jpeg"):
+            for p in sorted(mask_dir.glob(ext)):
+                if p.name.startswith("."):
+                    continue
+                stem = p.stem
+                if stem.isdigit():
+                    mask_by_int[int(stem)] = p
+                mask_by_stem[stem] = p
+        if not mask_by_int and not mask_by_stem:
+            raise FileNotFoundError(f"No mask images found under: {mask_dir}")
+
+        print(
+            f"[mask] enabled (dir={mask_dir}, threshold={float(args.mask_threshold):.3g}, dilate={int(args.mask_dilate)})",
+            flush=True,
+        )
+
+    mask_paths: Optional[list[str]] = [] if mask_dir is not None else None
 
     splats = _load_ply_splats(str(ply_path))
     print(f"[ply] loaded {int(splats['means'].shape[0])} splats from: {ply_path}")
@@ -507,6 +608,19 @@ def main() -> None:
             default_hw=(h0, w0),
             interval=int(args.interval),
         ):
+            if mask_paths is not None:
+                stem = Path(str(frame.image_path)).stem
+                mp: Optional[Path] = None
+                if stem.isdigit():
+                    mp = mask_by_int.get(int(stem))
+                if mp is None:
+                    mp = mask_by_stem.get(stem)
+                if mp is None:
+                    raise FileNotFoundError(
+                        f"Could not find mask for image={frame.image_path} (stem={stem!r}) under mask_dir={mask_dir}"
+                    )
+                mask_paths.append(str(mp))
+
             c2w = torch.from_numpy(frame.camtoworld).to(device=device, dtype=torch.float32)[None]
             K = torch.from_numpy(frame.K).to(device=device, dtype=torch.float32)[None]
 
@@ -639,12 +753,28 @@ def main() -> None:
         voxel_length=args.voxel_length,
         sdf_trunc=args.sdf_trunc,
         depth_trunc=args.depth_trunc,
+        mask_paths=mask_paths,
+        mask_threshold=float(args.mask_threshold),
+        mask_dilate=int(args.mask_dilate),
     )
     mesh = _post_process_mesh(mesh=mesh, cluster_to_keep=int(args.post_process_clusters))
 
     out_path = output_dir / "reconstructed_mesh.ply"
     o3d.io.write_triangle_mesh(str(out_path), mesh)
     print(f"Saved mesh: {out_path}")
+
+    if bool(args.delete_cache):
+        try:
+            inside_output = cache_dir.resolve().is_relative_to(output_dir.resolve())
+        except Exception:  # noqa: BLE001
+            inside_output = False
+        if not inside_output:
+            raise RuntimeError(
+                f"Refusing to delete cache_dir outside output_dir (cache_dir={cache_dir}, output_dir={output_dir})."
+            )
+        if cache_dir.exists() and cache_dir.is_dir():
+            shutil.rmtree(cache_dir)
+            print(f"[cache] deleted cache dir: {cache_dir}", flush=True)
 
 
 if __name__ == "__main__":
