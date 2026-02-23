@@ -64,6 +64,8 @@ If you have the DTU official eval assets bundled under `<data-root>/DTU/eval_dtu
 you can omit `--dtu-official-dir` and the script will auto-detect it.
 
 By default, the script uses FriendlySplat's internal DTU mesh culling implementation and runs `eval.py` directly.
+The DTU `eval.py` script is vendored under `benchmarks/geo_quality/dtu_eval/`. `--dtu-official-dir` must point to a
+directory containing `ObsMask/` and `Points/stl/`.
 
 The internal culling treats pixels with `alpha > 0.5` in `DTU/scanXXX/mask/*.png` as foreground.
 
@@ -105,3 +107,44 @@ Notes:
 - The script is sequential (one scan at a time).
 - Use `--dry-run` to print the commands first.
 - Use `--no-skip-existing` to regenerate outputs.
+
+## TnT (Tanks & Temples)
+
+Assumes each scene folder contains a COLMAP reconstruction and the official evaluation assets:
+
+```
+<data-root>/
+  Tanks&Temples-Geo/
+    Barn/
+      images/
+      sparse/
+      Barn_COLMAP_SfM.log
+      Barn_trans.txt
+      Barn.json
+      Barn.ply
+```
+
+### Train
+
+```bash
+python3 benchmarks/geo_quality/run_train_tnt_batch.py \
+  --data-root /path/to/data \
+  --scenes default
+```
+
+Outputs are written under `<data-root>/geo_benchmark/TnT/<Scene>/<exp-name>/`.
+
+### Mesh + F1 eval
+
+```bash
+python3 benchmarks/geo_quality/run_eval_tnt_batch.py \
+  --data-root /path/to/data \
+  --scenes default
+```
+
+This reconstructs a TSDF mesh from the exported splat PLY via `tools/mesh/tsdf_mesh_from_ply.py`,
+then runs a minimal TnT official toolbox evaluator under `benchmarks/geo_quality/tnt_eval/`.
+
+Summary:
+
+- A Markdown summary table is written to `<data-root>/geo_benchmark/summary_tnt_<exp-name>.md`.

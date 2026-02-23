@@ -576,11 +576,11 @@ def main(argv: list[str]) -> int:
 
     assert dtu_official_dir is not None
 
-    eval_py = dtu_dir / "eval_dtu" / "eval.py"
-    if not eval_py.exists():
-        raise FileNotFoundError(f"eval.py not found under DTU/eval_dtu: {eval_py}")
-
     repo_root = Path(__file__).resolve().parents[2]
+    # Always use the vendored DTU eval.py under this repo.
+    eval_py = repo_root / "benchmarks" / "geo_quality" / "dtu_eval" / "eval.py"
+    if not eval_py.exists():
+        raise FileNotFoundError(f"DTU eval.py not found: {eval_py}")
     results_root = data_root / str(args.out_dir_name) / "DTU"
 
     rows: list[_EvalRow] = []
