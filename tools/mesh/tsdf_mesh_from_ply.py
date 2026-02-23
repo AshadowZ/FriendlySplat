@@ -49,6 +49,26 @@ class DiskNpyArray:
         return np.load(self.paths[int(idx)])
 
 
+def _mask_to_alpha01(mask: np.ndarray) -> np.ndarray:
+    """Convert an arbitrary mask image array into float32 alpha in [0, 1]."""
+    m = np.asarray(mask)
+    if m.ndim == 3:
+        m = m[:, :, 0]
+    if np.issubdtype(m.dtype, np.integer):
+        denom = float(np.iinfo(m.dtype).max)
+        if denom <= 0:
+            return np.zeros(m.shape[:2], dtype=np.float32)
+        return (m.astype(np.float32) / denom).clip(0.0, 1.0)
+
+    mf = m.astype(np.float32, copy=False)
+    maxv = float(np.nanmax(mf)) if mf.size > 0 else 0.0
+    if maxv <= 1.0:
+        return mf.clip(0.0, 1.0)
+    if maxv <= 255.0:
+        return (mf / 255.0).clip(0.0, 1.0)
+    return (mf / maxv).clip(0.0, 1.0)
+
+
 @dataclass(frozen=True)
 class _WriteItem:
     done_event: Optional["torch.cuda.Event"]
@@ -262,7 +282,6 @@ def _create_tsdf_mesh(
     sdf_trunc: Optional[float],
     depth_trunc: Optional[float],
     mask_paths: Optional[list[str]],
-    mask_threshold: float,
     mask_dilate: int,
 ):
     n = int(len(depths_np))
@@ -289,8 +308,7 @@ def _create_tsdf_mesh(
     if use_mask:
         import cv2  # noqa: WPS433
 
-        if float(mask_threshold) <= 0.0 or float(mask_threshold) >= 1.0:
-            raise ValueError(f"mask_threshold must be in (0, 1), got {mask_threshold}")
+        mask_threshold = 0.5
         if int(mask_dilate) < 0:
             raise ValueError(f"mask_dilate must be >= 0, got {mask_dilate}")
         kernel = None
@@ -315,15 +333,14 @@ def _create_tsdf_mesh(
             m = cv2.imread(str(mp), cv2.IMREAD_UNCHANGED)
             if m is None:
                 raise FileNotFoundError(f"Failed to read mask: {mp}")
-            if m.ndim == 3:
-                m = m[:, :, 0]
             if m.shape[0] != h or m.shape[1] != w:
                 m = cv2.resize(m, (w, h), interpolation=cv2.INTER_NEAREST)
-            if m.dtype != np.uint8:
-                m = np.clip(m.astype(np.float32), 0.0, 255.0).astype(np.uint8)
+            alpha01 = _mask_to_alpha01(m)
             if kernel is not None:
-                m = cv2.dilate(m, kernel, iterations=1)
-            depth[m.astype(np.float32) / 255.0 < float(mask_threshold)] = 0.0
+                m_u8 = (alpha01 * 255.0).round().clip(0.0, 255.0).astype(np.uint8)
+                m_u8 = cv2.dilate(m_u8, kernel, iterations=1)
+                alpha01 = (m_u8.astype(np.float32) / 255.0).clip(0.0, 1.0)
+            depth[alpha01 < float(mask_threshold)] = 0.0
 
         o3d_depth = o3d.geometry.Image(depth)
         o3d_color = o3d.geometry.Image(color)
@@ -420,16 +437,10 @@ def main() -> None:
         type=str,
         default=None,
         help=(
-            "Optional directory of per-frame object masks. When set, TSDF integration zeroes depth where mask<threshold. "
+            "Optional directory of per-frame object masks. When set, TSDF integration zeroes depth where mask<0.5. "
             "If the path is relative, it is interpreted relative to --data_dir. "
             "Masks are matched to images by integer filename id (e.g. 0000.png -> 000.png) or by exact stem."
         ),
-    )
-    parser.add_argument(
-        "--mask_threshold",
-        type=float,
-        default=0.5,
-        help="Mask threshold in (0,1) (mask values are treated as 0..255).",
     )
     parser.add_argument(
         "--mask_dilate",
@@ -525,7 +536,7 @@ def main() -> None:
             raise FileNotFoundError(f"No mask images found under: {mask_dir}")
 
         print(
-            f"[mask] enabled (dir={mask_dir}, threshold={float(args.mask_threshold):.3g}, dilate={int(args.mask_dilate)})",
+            f"[mask] enabled (dir={mask_dir}, threshold=0.5, dilate={int(args.mask_dilate)})",
             flush=True,
         )
 
@@ -754,7 +765,6 @@ def main() -> None:
         sdf_trunc=args.sdf_trunc,
         depth_trunc=args.depth_trunc,
         mask_paths=mask_paths,
-        mask_threshold=float(args.mask_threshold),
         mask_dilate=int(args.mask_dilate),
     )
     mesh = _post_process_mesh(mesh=mesh, cluster_to_keep=int(args.post_process_clusters))

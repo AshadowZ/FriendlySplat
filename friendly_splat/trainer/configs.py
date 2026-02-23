@@ -249,7 +249,7 @@ class OptimConfig:
     sh_degree_interval: int = 1000
 
     # Use random backgrounds during training to discourage transparency.
-    random_bkgd: bool = True
+    random_bkgd: bool = False
     # Use packed rasterization mode (lower memory, slightly slower).
     packed: bool = False
     # Enable anti-aliasing in rasterization (may affect quantitative metrics).

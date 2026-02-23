@@ -3,14 +3,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import shutil
 import shlex
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 
 _DTU_SCANS_DEFAULT: tuple[str, ...] = (
@@ -74,6 +73,239 @@ def _ply_path(*, result_dir: Path, max_steps: int) -> Path:
 def _mesh_path(*, result_dir: Path) -> Path:
     return result_dir / "mesh" / "reconstructed_mesh.ply"
 
+def _load_K_Rt_from_P(*, P) -> Tuple["object", "object"]:
+    """Decompose a 3x4 projection matrix to intrinsics (4x4) and pose (4x4).
+
+    Matches the convention used by common DTU eval scripts (cv2.decomposeProjectionMatrix).
+    Returns:
+      intrinsics: 4x4 with K in the top-left.
+      pose: 4x4 camera-to-world transform.
+    """
+    import numpy as np
+
+    try:
+        import cv2
+    except ModuleNotFoundError as e:  # pragma: no cover
+        raise ModuleNotFoundError(
+            "Missing dependency 'opencv-python' (cv2). Required for DTU mesh culling."
+        ) from e
+
+    P = np.asarray(P, dtype=np.float32)
+    if P.shape != (3, 4):
+        raise ValueError(f"Expected P shape (3,4), got {tuple(P.shape)}")
+
+    K, R, t, *_rest = cv2.decomposeProjectionMatrix(P)
+    K = K / max(float(K[2, 2]), 1e-8)
+
+    intrinsics = np.eye(4, dtype=np.float32)
+    intrinsics[:3, :3] = K.astype(np.float32)
+
+    pose = np.eye(4, dtype=np.float32)
+    pose[:3, :3] = R.transpose().astype(np.float32)
+    tt = (t[:3] / t[3])[:, 0].astype(np.float32)
+    pose[:3, 3] = tt
+    return intrinsics, pose
+
+
+def _list_images(*, image_dir: Path) -> list[Path]:
+    image_paths: list[Path] = []
+    for ext in ("*.png", "*.jpg", "*.jpeg"):
+        image_paths.extend(sorted(image_dir.glob(ext)))
+    return sorted(image_paths)
+
+
+def _build_mask_map(*, mask_dir: Path) -> dict[int, Path]:
+    """Map integer frame id -> mask path.
+
+    Filters out common junk like macOS resource forks (e.g. ._000.png) and other hidden files.
+    """
+    mask_by_id: dict[int, Path] = {}
+    for p in sorted(mask_dir.glob("*.png")):
+        if p.name.startswith("."):
+            continue
+        stem = p.stem
+        if not stem.isdigit():
+            continue
+        mask_by_id[int(stem)] = p
+    return mask_by_id
+
+
+def _cull_dtu_mesh(
+    *,
+    scan_id: int,
+    mesh_path: Path,
+    result_mesh_path: Path,
+    mask_root: Path,
+    mask_dilate: int,
+    prefer_cuda: bool,
+) -> None:
+    """Cull mesh using DTU preprocessed masks and camera parameters.
+
+    Expected layout:
+      <mask_root>/scanXX/
+        images/
+        mask/
+        cameras.npz
+    """
+    try:
+        import cv2
+        import numpy as np
+        import torch
+        import torch.nn.functional as F
+        import trimesh
+        from skimage.morphology import binary_dilation, disk
+    except ModuleNotFoundError as e:  # pragma: no cover
+        raise ModuleNotFoundError(
+            "Missing dependencies for DTU mesh culling. "
+            "Need cv2, numpy, torch, trimesh, scikit-image."
+        ) from e
+
+    instance_dir = mask_root / f"scan{int(scan_id):d}"
+    if not instance_dir.exists():
+        raise FileNotFoundError(f"Missing scan dir: {instance_dir}")
+
+    image_dir = instance_dir / "images"
+    if not image_dir.exists():
+        raise FileNotFoundError(f"Missing images dir: {image_dir}")
+    image_paths = _list_images(image_dir=image_dir)
+    if not image_paths:
+        raise FileNotFoundError(f"No images found under: {image_dir}")
+    n_images = int(len(image_paths))
+
+    cameras_npz = instance_dir / "cameras.npz"
+    if not cameras_npz.exists():
+        raise FileNotFoundError(f"Missing cameras.npz: {cameras_npz}")
+
+    cam_dict = np.load(str(cameras_npz))
+    scale_mats = [cam_dict[f"scale_mat_{idx}"].astype(np.float32) for idx in range(n_images)]
+    world_mats = [cam_dict[f"world_mat_{idx}"].astype(np.float32) for idx in range(n_images)]
+    intrinsics_all: list["torch.Tensor"] = []
+    pose_all: list["torch.Tensor"] = []
+    for scale_mat, world_mat in zip(scale_mats, world_mats):
+        P = (world_mat @ scale_mat)[:3, :4].astype(np.float32)
+        intrinsics, pose = _load_K_Rt_from_P(P=P)
+        intrinsics_all.append(torch.from_numpy(intrinsics).float())
+        pose_all.append(torch.from_numpy(pose).float())
+
+    mask_dir = instance_dir / "mask"
+    if not mask_dir.exists():
+        raise FileNotFoundError(f"Missing mask dir: {mask_dir}")
+    mask_by_id = _build_mask_map(mask_dir=mask_dir)
+
+    image_ids: list[int] = []
+    for p in image_paths:
+        if not p.stem.isdigit():
+            raise ValueError(f"Image filename is not an integer id: {p.name}")
+        image_ids.append(int(p.stem))
+
+    mask_paths: list[Path] = []
+    missing: list[int] = []
+    for img_id in image_ids:
+        mp = mask_by_id.get(int(img_id))
+        if mp is None:
+            missing.append(int(img_id))
+            continue
+        mask_paths.append(mp)
+    if missing:
+        raise FileNotFoundError(
+            f"Missing {len(missing)} masks in {mask_dir} for image ids: {missing[:10]}"
+            + (" ..." if len(missing) > 10 else "")
+        )
+
+    masks: list[np.ndarray] = []
+    for p in mask_paths:
+        m = cv2.imread(str(p), cv2.IMREAD_UNCHANGED)
+        if m is None:
+            raise FileNotFoundError(f"Failed to read mask: {p}")
+        masks.append(m)
+
+    H, W = int(masks[0].shape[0]), int(masks[0].shape[1])
+
+    mesh = trimesh.load(str(mesh_path))
+    vertices = mesh.vertices
+    if vertices is None or len(vertices) == 0:
+        raise ValueError(f"Mesh has no vertices: {mesh_path}")
+
+    use_cuda = bool(prefer_cuda) and torch.cuda.is_available()
+    device = torch.device("cuda" if use_cuda else "cpu")
+
+    v = torch.from_numpy(vertices.astype(np.float32)).to(device=device)
+    v = torch.cat((v, torch.ones_like(v[:, :1])), dim=-1)  # [N,4]
+    v = v.permute(1, 0).contiguous()  # [4,N]
+
+    dilate_radius = int(mask_dilate)
+    if dilate_radius < 0:
+        raise ValueError(f"mask_dilate must be >= 0, got {dilate_radius}")
+    selem = disk(dilate_radius) if dilate_radius > 0 else None
+
+    # Soft consistency across views: keep a vertex if at least `vote_threshold` fraction of
+    # *in-view* cameras classify it as foreground.
+    vote_threshold = 0.9
+    vote_count = torch.zeros((v.shape[1],), device=device, dtype=torch.int32)
+    view_count = torch.zeros((v.shape[1],), device=device, dtype=torch.int32)
+    for i in range(n_images):
+        pose = pose_all[i].to(device=device)
+        w2c = torch.inverse(pose)
+        intrinsic = intrinsics_all[i].to(device=device)
+
+        cam_points = intrinsic @ w2c @ v
+        pix = cam_points[:2, :] / (cam_points[2:3, :] + 1e-6)
+        pix = pix.permute(1, 0)
+        pix[..., 0] /= float(W - 1)
+        pix[..., 1] /= float(H - 1)
+        pix = (pix - 0.5) * 2.0
+        in_bounds = ((pix > -1.0) & (pix < 1.0)).all(dim=-1)
+        in_front = cam_points[2, :] > 1e-6
+        in_view = in_bounds & in_front
+
+        maski = masks[i]
+        if maski.ndim == 3:
+            maski = maski[:, :, 0]
+        # Interpret mask intensity as alpha in [0,1] and keep pixels with alpha>threshold.
+        if np.issubdtype(maski.dtype, np.integer):
+            denom = float(np.iinfo(maski.dtype).max)
+            alpha01 = (maski.astype(np.float32) / max(denom, 1.0)).clip(0.0, 1.0)
+        else:
+            mf = maski.astype(np.float32, copy=False)
+            maxv = float(np.nanmax(mf)) if mf.size > 0 else 0.0
+            if maxv <= 1.0:
+                alpha01 = mf.clip(0.0, 1.0)
+            elif maxv <= 255.0:
+                alpha01 = (mf / 255.0).clip(0.0, 1.0)
+            else:
+                alpha01 = (mf / maxv).clip(0.0, 1.0)
+
+        mask_bin = alpha01 > 0.5
+        if selem is not None:
+            mask_bin = binary_dilation(mask_bin, selem)
+        mask_t = torch.from_numpy(mask_bin.astype(np.float32))[None, None].to(device=device)
+
+        sampled = F.grid_sample(
+            mask_t,
+            pix[None, None],
+            mode="nearest",
+            padding_mode="zeros",
+            align_corners=True,
+        )[0, 0, 0]
+        fg = sampled > 0.5
+        if in_view.any():
+            vote_count += (fg & in_view).to(torch.int32)
+            view_count += in_view.to(torch.int32)
+
+    # Only consider views where the vertex projects in-bounds and is in front of the camera.
+    # Vertices seen by zero cameras are culled (keep=False).
+    ratio = vote_count.to(torch.float32) / view_count.clamp(min=1).to(torch.float32)
+    keep = ((view_count > 0) & (ratio >= float(vote_threshold))).detach().cpu().numpy()
+    face_keep = keep[mesh.faces].all(axis=1)
+    mesh.update_vertices(keep)
+    mesh.update_faces(face_keep)
+
+    scale_mat0 = cam_dict["scale_mat_0"].astype(np.float32)
+    mesh.vertices = mesh.vertices * float(scale_mat0[0, 0]) + scale_mat0[:3, 3][None]
+
+    result_mesh_path.parent.mkdir(parents=True, exist_ok=True)
+    mesh.export(str(result_mesh_path))
+
 
 def _run_tsdf_mesh(
     *,
@@ -88,7 +320,6 @@ def _run_tsdf_mesh(
     depth_trunc: float,
     post_process_clusters: int,
     tsdf_mask_dir_name: Optional[str],
-    tsdf_mask_threshold: float,
     tsdf_mask_dilate: int,
     dry_run: bool,
 ) -> None:
@@ -126,8 +357,6 @@ def _run_tsdf_mesh(
             [
                 "--mask_dir",
                 str(tsdf_mask_dir_name),
-                "--mask_threshold",
-                str(float(tsdf_mask_threshold)),
                 "--mask_dilate",
                 str(int(tsdf_mask_dilate)),
             ]
@@ -139,36 +368,34 @@ def _run_tsdf_mesh(
     subprocess.run(cmd, check=True, cwd=str(repo_root))
 
 
-def _run_dtu_eval(
+def _run_dtu_eval_py(
     *,
-    eval_script: Path,
+    eval_py: Path,
     dtu_official_dir: Path,
-    dtu_mask_root: Path,
     scan: str,
     mesh_path: Path,
     out_dir: Path,
     dry_run: bool,
 ) -> None:
     scan_id = int(str(scan).replace("scan", ""))
-
     cmd = [
         sys.executable,
-        str(eval_script),
-        "--input_mesh",
+        str(eval_py),
+        "--data",
         str(mesh_path),
-        "--scan_id",
+        "--scan",
         str(int(scan_id)),
-        "--output_dir",
-        str(out_dir),
-        "--mask_dir",
-        str(dtu_mask_root),
-        "--DTU",
+        "--mode",
+        "mesh",
+        "--dataset_dir",
         str(dtu_official_dir),
+        "--vis_out_dir",
+        str(out_dir),
     ]
-    print(f"[eval] {_format_cmd(cmd)}", flush=True)
+    print(f"[eval.py] {_format_cmd(cmd)}", flush=True)
     if dry_run:
         return
-    subprocess.run(cmd, check=True, cwd=str(eval_script.parent))
+    subprocess.run(cmd, check=True, cwd=str(eval_py.parent))
 
 
 def _load_results_json(path: Path) -> dict:
@@ -188,7 +415,7 @@ def _write_summary_md(
     summary_path: Path,
     exp_name: str,
     dtu_official_dir: Path,
-    eval_script: Path,
+    eval_py: Path,
     max_steps: int,
 ) -> None:
     rows_sorted = sorted(rows, key=lambda r: int(str(r.scan).replace("scan", "")))
@@ -204,7 +431,7 @@ def _write_summary_md(
     lines: list[str] = []
     lines.append(f"# DTU geo benchmark summary: `{exp_name}`")
     lines.append("")
-    lines.append(f"- Eval script: `{eval_script}`")
+    lines.append(f"- Eval py: `{eval_py}`")
     lines.append(f"- DTU official dir: `{dtu_official_dir}`")
     lines.append(f"- PLY step: `{int(max_steps)}`")
     lines.append("")
@@ -237,7 +464,6 @@ def main(argv: list[str]) -> int:
         default="default",
         help="default|all|csv of scan ids/names",
     )
-    parser.add_argument("--exclude-scans", type=str, default=None)
 
     parser.add_argument(
         "--dtu-official-dir",
@@ -247,26 +473,31 @@ def main(argv: list[str]) -> int:
         help=(
             "Path to the official DTU evaluation data (ObsMask/, Points/stl/, ...). "
             "If omitted, the script will try to auto-detect it from common locations "
-            "under --data-root (e.g. <data-root>/DTU/eval_dtu)."
+            "under --data-root."
         ),
     )
     parser.add_argument(
-        "--eval-script",
-        type=str,
-        default=None,
-        help=(
-            "Path to eval_dtu/evaluate_single_scene.py "
-            "(default: <data-root>/DTU/eval_dtu/evaluate_single_scene.py)."
-        ),
+        "--cull-mask-dilate",
+        type=int,
+        default=24,
+        help="Mask dilation radius (pixels) for internal DTU mesh culling.",
+    )
+    parser.add_argument(
+        "--cull-prefer-cuda",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Prefer CUDA for internal DTU mesh culling when available.",
     )
 
     # Mesh extraction params.
     parser.add_argument("--device", type=str, default="cuda:0")
     parser.add_argument("--interval", type=int, default=1)
-    parser.add_argument("--voxel-length", type=float, default=0.004)
-    parser.add_argument("--sdf-trunc", type=float, default=0.016)
-    parser.add_argument("--depth-trunc", type=float, default=3.0)
-    parser.add_argument("--post-process-clusters", type=int, default=1)
+    # Defaults aligned with PGSR DTU TSDF fusion:
+    # - voxel_size=0.002, sdf_trunc=4*voxel_size, max_depth=5.0
+    parser.add_argument("--voxel-length", type=float, default=0.002)
+    parser.add_argument("--sdf-trunc", type=float, default=0.008)
+    parser.add_argument("--depth-trunc", type=float, default=5.0)
+    parser.add_argument("--post-process-clusters", type=int, default=2)
     parser.add_argument(
         "--tsdf-use-mask",
         action=argparse.BooleanOptionalAction,
@@ -279,7 +510,6 @@ def main(argv: list[str]) -> int:
         default="mask",
         help="Mask dir name under each DTU scan scene dir (e.g. scan24/mask).",
     )
-    parser.add_argument("--tsdf-mask-threshold", type=float, default=0.5)
     parser.add_argument("--tsdf-mask-dilate", type=int, default=0)
     parser.add_argument(
         "--skip-existing-mesh",
@@ -315,12 +545,10 @@ def main(argv: list[str]) -> int:
     else:
         scans = [_normalize_scan_name(s) for s in _split_csv(args.scans)]
 
-    exclude = {_normalize_scan_name(s) for s in _split_csv(args.exclude_scans)}
-    scans = [s for s in scans if s not in exclude]
     if not scans:
         raise ValueError("No scans selected.")
 
-    dtu_official_dir: Optional[Path]
+    dtu_official_dir: Optional[Path] = None
     if args.dtu_official_dir is None:
         candidates = [
             dtu_dir / "eval_dtu",
@@ -328,7 +556,6 @@ def main(argv: list[str]) -> int:
             data_root / "Official_DTU_Dataset",
             data_root / "Offical_DTU_Dataset",  # common misspelling in some repos
         ]
-        dtu_official_dir = None
         for cand in candidates:
             if not cand.exists():
                 continue
@@ -347,13 +574,11 @@ def main(argv: list[str]) -> int:
         if not dtu_official_dir.exists():
             raise FileNotFoundError(f"DTU official dir not found: {dtu_official_dir}")
 
-    eval_script = (
-        Path(str(args.eval_script)).expanduser().resolve()
-        if args.eval_script is not None
-        else (dtu_dir / "eval_dtu" / "evaluate_single_scene.py")
-    )
-    if not eval_script.exists():
-        raise FileNotFoundError(f"Eval script not found: {eval_script}")
+    assert dtu_official_dir is not None
+
+    eval_py = dtu_dir / "eval_dtu" / "eval.py"
+    if not eval_py.exists():
+        raise FileNotFoundError(f"eval.py not found under DTU/eval_dtu: {eval_py}")
 
     repo_root = Path(__file__).resolve().parents[2]
     results_root = data_root / str(args.out_dir_name) / "DTU"
@@ -390,7 +615,6 @@ def main(argv: list[str]) -> int:
                 depth_trunc=float(args.depth_trunc),
                 post_process_clusters=int(args.post_process_clusters),
                 tsdf_mask_dir_name=tsdf_mask_dir_name,
-                tsdf_mask_threshold=float(args.tsdf_mask_threshold),
                 tsdf_mask_dilate=int(args.tsdf_mask_dilate),
                 dry_run=bool(args.dry_run),
             )
@@ -416,12 +640,25 @@ def main(argv: list[str]) -> int:
                     print(f"[cache] deleted {cache_dir}", flush=True)
             continue
 
-        _run_dtu_eval(
-            eval_script=eval_script,
+        scan_id = int(str(scan).replace("scan", ""))
+        culled_mesh = eval_out_dir / "culled_mesh.ply"
+        if not bool(args.dry_run):
+            eval_out_dir.mkdir(parents=True, exist_ok=True)
+        print(f"[cull] {scan} -> {culled_mesh}", flush=True)
+        if not bool(args.dry_run):
+            _cull_dtu_mesh(
+                scan_id=int(scan_id),
+                mesh_path=mesh,
+                result_mesh_path=culled_mesh,
+                mask_root=dtu_dir,
+                mask_dilate=int(args.cull_mask_dilate),
+                prefer_cuda=bool(args.cull_prefer_cuda),
+            )
+        _run_dtu_eval_py(
+            eval_py=eval_py,
             dtu_official_dir=dtu_official_dir,
-            dtu_mask_root=dtu_dir,
             scan=scan,
-            mesh_path=mesh,
+            mesh_path=culled_mesh,
             out_dir=eval_out_dir,
             dry_run=bool(args.dry_run),
         )
@@ -457,7 +694,7 @@ def main(argv: list[str]) -> int:
             summary_path=summary_path,
             exp_name=str(args.exp_name),
             dtu_official_dir=dtu_official_dir,
-            eval_script=eval_script,
+            eval_py=eval_py,
             max_steps=int(args.max_steps),
         )
         print(f"[summary] wrote {summary_path}", flush=True)

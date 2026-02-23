@@ -4,7 +4,7 @@ This folder contains scripts for geometry-focused benchmarking workflows.
 
 ## DTU MoGe priors
 
-Generate dense priors for each `DTU/scanXXX` scene by running `tools/depth_prior/moge_infer.py`:
+Generate dense normal priors for each `DTU/scanXXX` scene by running `tools/depth_prior/moge_infer.py`:
 
 ```bash
 python3 benchmarks/geo_quality/run_moge_priors_dtu_batch.py \
@@ -21,11 +21,11 @@ python3 benchmarks/geo_quality/run_moge_priors_dtu_batch.py \
   --export-alpha-mask
 ```
 
-This writes `DTU/scanXXX/invalid_mask/*.png` where white (255) indicates background (`alpha==0`) and black (0) indicates foreground (`alpha>0`). Use it as `data.sky_mask_dir_name="invalid_mask"` to ignore background pixels (and encourage transparency) during training.
+This writes `DTU/scanXXX/invalid_mask/*.png` where white (255) indicates background (`alpha<0.5`) and black (0) indicates foreground (`alpha>=0.5`). Use it as `data.sky_mask_dir_name="invalid_mask"` to ignore background pixels (and encourage transparency) during training.
 
 ## DTU training (with priors + invalid_mask as sky_mask)
 
-Train each scan with `moge_depth/` + `moge_normal/` enabled, and use `invalid_mask/` as `sky_mask_dir_name`:
+Train each scan with `moge_normal/` enabled, and use `invalid_mask/` as `sky_mask_dir_name`:
 
 ```bash
 python3 benchmarks/geo_quality/run_train_dtu_batch.py \
@@ -41,6 +41,11 @@ Defaults (can be overridden via CLI flags):
 - `--densification-budget 1000000`
 - `--prune-opa 0.05`
 - `--prune-scale3d 0.1`
+- `--flat-reg-weight 1.0`
+- `--scale-ratio-reg-weight 1.0`
+
+By default, the script enables invalid-mask sky masking.
+Use `--no-use-invalid-mask` to disable sky masking.
 
 This writes outputs under `<data-root>/geo_benchmark/DTU/scanXXX/<exp-name>/`.
 
@@ -58,9 +63,18 @@ python3 benchmarks/geo_quality/run_eval_dtu_batch.py \
 If you have the DTU official eval assets bundled under `<data-root>/DTU/eval_dtu/` (i.e. it contains `ObsMask/` and `Points/stl/`),
 you can omit `--dtu-official-dir` and the script will auto-detect it.
 
-By default, the script uses the eval code at `DTU/eval_dtu/evaluate_single_scene.py` under `--data-root`.
+By default, the script uses FriendlySplat's internal DTU mesh culling implementation and runs `eval.py` directly.
+
+The internal culling treats pixels with `alpha > 0.5` in `DTU/scanXXX/mask/*.png` as foreground.
+
 By default, TSDF fusion applies the per-frame DTU object mask at `DTU/scanXXX/mask/` (PGSR-style: depth is set to 0 outside the mask).
 Use `--no-tsdf-use-mask` to disable or `--tsdf-mask-dir-name` to change the folder name.
+
+TSDF defaults are aligned with PGSR's DTU settings:
+
+- `--voxel-length 0.002`
+- `--sdf-trunc 0.008` (i.e. `4 * voxel_length`)
+- `--depth-trunc 5.0`
 
 Expected dataset layout:
 
@@ -80,7 +94,6 @@ Expected dataset layout:
 Outputs are written into each scan folder:
 
 - `DTU/scanXXX/moge_normal/` (PNG)
-- `DTU/scanXXX/moge_depth/` (NPY)
 
 Evaluation summary:
 

@@ -34,7 +34,6 @@ _DTU_SCANS_DEFAULT: tuple[str, ...] = (
 class _Counts:
     images: int
     normals: int
-    depths: int
     invalid_masks: int
 
 
@@ -64,39 +63,57 @@ def _normalize_scan_name(name: str) -> str:
     return f"scan{int(s):d}"
 
 
-def _count_images(*, image_dir: Path) -> int:
+def _image_stems_flat(*, scene_dir: Path) -> list[str]:
+    image_dir = scene_dir / "images"
     exts = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
     if not image_dir.exists():
-        return 0
-    return sum(
-        1 for p in image_dir.rglob("*") if p.is_file() and p.suffix.lower() in exts
+        return []
+    files = sorted(
+        (p for p in image_dir.iterdir() if p.is_file() and p.suffix.lower() in exts),
+        key=lambda p: p.name,
     )
+    return [p.stem for p in files]
 
 
-def _count_scene_priors(*, scene_dir: Path, invalid_mask_dir_name: str) -> _Counts:
-    images = _count_images(image_dir=scene_dir / "images")
-    normals = sum(1 for _ in (scene_dir / "moge_normal").rglob("*.png"))
-    depths = sum(1 for _ in (scene_dir / "moge_depth").rglob("*.npy"))
-    invalid_masks = sum(
-        1 for _ in (scene_dir / str(invalid_mask_dir_name)).rglob("*.png")
-    )
+def _count_scene_priors(
+    *,
+    scene_dir: Path,
+    invalid_mask_dir_name: Optional[str],
+) -> _Counts:
+    stems = _image_stems_flat(scene_dir=scene_dir)
+    images = len(stems)
+
+    normal_dir = scene_dir / "moge_normal"
+    normals = sum(1 for s in stems if (normal_dir / f"{s}.png").is_file())
+
+    invalid_masks = 0
+    if invalid_mask_dir_name is not None:
+        mask_dir = scene_dir / str(invalid_mask_dir_name)
+        invalid_masks = sum(1 for s in stems if (mask_dir / f"{s}.png").is_file())
+
     return _Counts(
         images=int(images),
         normals=int(normals),
-        depths=int(depths),
         invalid_masks=int(invalid_masks),
     )
 
 
-def _priors_ready(*, scene_dir: Path, invalid_mask_dir_name: str) -> bool:
-    c = _count_scene_priors(scene_dir=scene_dir, invalid_mask_dir_name=invalid_mask_dir_name)
+def _priors_ready(
+    *,
+    scene_dir: Path,
+    invalid_mask_dir_name: Optional[str],
+) -> bool:
+    c = _count_scene_priors(
+        scene_dir=scene_dir,
+        invalid_mask_dir_name=invalid_mask_dir_name,
+    )
     if c.images <= 0:
         return False
-    return (
-        c.normals == c.images
-        and c.depths == c.images
-        and c.invalid_masks == c.images
-    )
+    if c.normals != c.images:
+        return False
+    if invalid_mask_dir_name is not None and c.invalid_masks != c.images:
+        return False
+    return True
 
 
 def _ply_done_path(*, result_dir: Path, max_steps: int) -> Path:
@@ -107,20 +124,19 @@ def _train_done(*, result_dir: Path, max_steps: int) -> bool:
     return _ply_done_path(result_dir=result_dir, max_steps=max_steps).exists()
 
 
-def _maybe_prepare_priors(
+def _prepare_priors(
     *,
     repo_root: Path,
     data_root: Path,
     scans: list[str],
     python: str,
-    invalid_mask_dir_name: str,
-    model_id: str,
+    export_alpha_mask: bool,
     verbose: bool,
     dry_run: bool,
 ) -> None:
     prep_script = repo_root / "benchmarks" / "geo_quality" / "run_moge_priors_dtu_batch.py"
     if not prep_script.exists():
-        raise FileNotFoundError(f"Missing prep script: {prep_script}")
+        raise FileNotFoundError(f"Missing prior script: {prep_script}")
 
     cmd = [
         str(python),
@@ -129,12 +145,9 @@ def _maybe_prepare_priors(
         str(data_root),
         "--scans",
         ",".join(scans),
-        "--export-alpha-mask",
-        "--alpha-mask-dir-name",
-        str(invalid_mask_dir_name),
-        "--model-id",
-        str(model_id),
     ]
+    if export_alpha_mask:
+        cmd.append("--export-alpha-mask")
     if verbose:
         cmd.append("--verbose")
     if dry_run:
@@ -150,7 +163,7 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="run_train_dtu_batch.py",
         description=(
-            "Batch runner for DTU training with MoGe depth/normal priors. "
+            "Batch runner for DTU training with MoGe normal priors. "
             "Uses invalid_mask as sky_mask to ignore alpha background pixels."
         ),
     )
@@ -210,6 +223,12 @@ def main(argv: list[str]) -> int:
         help="Per-scan densification budget (approx. max gaussians; default: 1000000).",
     )
     parser.add_argument(
+        "--grow-grad2d",
+        type=float,
+        default=None,
+        help="Optional: forward to trainer as --strategy.grow-grad2d (default: unchanged).",
+    )
+    parser.add_argument(
         "--prune-opa",
         type=float,
         default=0.05,
@@ -222,6 +241,18 @@ def main(argv: list[str]) -> int:
         help="Strategy prune_scale3d forwarded to trainer (default: 0.1).",
     )
     parser.add_argument(
+        "--flat-reg-weight",
+        type=float,
+        default=1.0,
+        help="Forward to trainer as --reg.flat-reg-weight (default: 1.0).",
+    )
+    parser.add_argument(
+        "--scale-ratio-reg-weight",
+        type=float,
+        default=1.0,
+        help="Forward to trainer as --reg.scale-ratio-reg-weight (default: 1.0).",
+    )
+    parser.add_argument(
         "--scans",
         type=str,
         default="default",
@@ -231,28 +262,16 @@ def main(argv: list[str]) -> int:
         ),
     )
     parser.add_argument(
-        "--exclude-scans",
-        type=str,
-        default=None,
-        help="Optional comma-separated scans to exclude (same format as --scans).",
+        "--use-invalid-mask",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Use invalid_mask as data.sky_mask_dir_name during training (default: on).",
     )
     parser.add_argument(
         "--invalid-mask-dir-name",
         type=str,
         default="invalid_mask",
         help="Per-scan mask folder name used as sky_mask_dir_name (default: invalid_mask).",
-    )
-    parser.add_argument(
-        "--prepare-priors",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="If set, auto-run the MoGe prior + invalid_mask generation script before training.",
-    )
-    parser.add_argument(
-        "--model-id",
-        type=str,
-        default="Ruicheng/moge-2-vitl-normal",
-        help="MoGe pretrained model id used when --prepare-priors is enabled.",
     )
     parser.add_argument(
         "--skip-existing",
@@ -289,9 +308,6 @@ def main(argv: list[str]) -> int:
         scans = sorted({p.name for p in dtu_dir.iterdir() if p.is_dir() and p.name.startswith("scan")})
     else:
         scans = [_normalize_scan_name(s) for s in _split_csv(args.scans)]
-
-    exclude = {_normalize_scan_name(s) for s in _split_csv(args.exclude_scans)}
-    scans = [s for s in scans if s not in exclude]
     if not scans:
         raise ValueError("No scans selected.")
 
@@ -308,30 +324,57 @@ def main(argv: list[str]) -> int:
     if not bool(args.dry_run):
         out_root.mkdir(parents=True, exist_ok=True)
 
-    if bool(args.prepare_priors):
-        _maybe_prepare_priors(
-            repo_root=repo_root,
-            data_root=data_root,
-            scans=scans,
-            python=sys.executable,
-            invalid_mask_dir_name=str(args.invalid_mask_dir_name),
-            model_id=str(args.model_id),
-            verbose=bool(args.verbose),
-            dry_run=bool(args.dry_run),
+    invalid_mask_dir_name = (
+        str(args.invalid_mask_dir_name) if bool(args.use_invalid_mask) else None
+    )
+
+    missing_priors_scans: list[str] = []
+    for scan in scans:
+        scene_dir = dtu_dir / scan
+        if not scene_dir.exists():
+            continue
+        c = _count_scene_priors(
+            scene_dir=scene_dir,
+            invalid_mask_dir_name=invalid_mask_dir_name,
         )
+        if c.images <= 0:
+            continue
+        if not _priors_ready(scene_dir=scene_dir, invalid_mask_dir_name=invalid_mask_dir_name):
+            missing_priors_scans.append(scan)
 
     any_failed = False
+    if missing_priors_scans:
+        try:
+            _prepare_priors(
+                repo_root=repo_root,
+                data_root=data_root,
+                scans=missing_priors_scans,
+                python=sys.executable,
+                export_alpha_mask=(invalid_mask_dir_name is not None),
+                verbose=bool(args.verbose),
+                dry_run=bool(args.dry_run),
+            )
+        except subprocess.CalledProcessError as e:
+            any_failed = True
+            print(f"[warn] prior generation failed (exit={e.returncode})", flush=True)
+
     for scan in scans:
         scene_dir = dtu_dir / scan
         if not scene_dir.exists():
             print(f"[skip] missing scan dir: {scene_dir}", flush=True)
             continue
 
-        if not _priors_ready(scene_dir=scene_dir, invalid_mask_dir_name=str(args.invalid_mask_dir_name)):
-            c = _count_scene_priors(scene_dir=scene_dir, invalid_mask_dir_name=str(args.invalid_mask_dir_name))
+        if not _priors_ready(
+            scene_dir=scene_dir,
+            invalid_mask_dir_name=invalid_mask_dir_name,
+        ):
+            c = _count_scene_priors(
+                scene_dir=scene_dir,
+                invalid_mask_dir_name=invalid_mask_dir_name,
+            )
             print(
                 f"[skip] priors missing/incomplete: {scan} "
-                f"(images={c.images}, normals={c.normals}, depths={c.depths}, invalid_masks={c.invalid_masks})",
+                f"(images={c.images}, normals={c.normals}, invalid_masks={c.invalid_masks})",
                 flush=True,
             )
             any_failed = True
@@ -362,12 +405,8 @@ def main(argv: list[str]) -> int:
             "1",
             "--data.preload",
             str(args.data_preload),
-            "--data.depth-dir-name",
-            "moge_depth",
             "--data.normal-dir-name",
             "moge_normal",
-            "--data.sky-mask-dir-name",
-            str(args.invalid_mask_dir_name),
             "--postprocess.use-bilateral-grid",
             "--optim.max-steps",
             str(int(args.max_steps)),
@@ -379,11 +418,20 @@ def main(argv: list[str]) -> int:
             str(float(args.prune_opa)),
             "--strategy.prune-scale3d",
             str(float(args.prune_scale3d)),
+            "--strategy.absgrad",
+            "--reg.flat-reg-weight",
+            str(float(args.flat_reg_weight)),
+            "--reg.scale-ratio-reg-weight",
+            str(float(args.scale_ratio_reg_weight)),
             "--viewer.disable-viewer",
             "--io.export-ply",
             "--io.ply-steps",
             str(int(args.max_steps)),
         ]
+        if args.grow_grad2d is not None:
+            cmd += ["--strategy.grow-grad2d", str(float(args.grow_grad2d))]
+        if invalid_mask_dir_name is not None:
+            cmd += ["--data.sky-mask-dir-name", str(invalid_mask_dir_name)]
 
         if str(args.data_preload) == "cuda":
             cmd += [
@@ -393,9 +441,8 @@ def main(argv: list[str]) -> int:
             ]
 
         # Benchmark defaults:
-        # - enable random backgrounds to discourage floaters / transparency artifacts
         # - enable bilateral-grid post-processing to absorb cross-frame photometric drift
-        cmd += ["--optim.random-bkgd"]
+        # Note: random backgrounds are disabled by default in FriendlySplat (`optim.random_bkgd=False`).
 
         if extra_args:
             cmd += extra_args
