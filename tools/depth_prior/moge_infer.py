@@ -31,6 +31,28 @@ def _to_numpy(arr):
     return arr
 
 
+def _alpha_to_exists_mask(alpha: np.ndarray) -> np.ndarray:
+    """Convert an alpha channel into a boolean 'exists' mask using alpha>=0.5.
+
+    This matches our invalid-mask convention: pixels with opacity < 0.5 are treated
+    as invalid/background.
+    """
+    a = np.asarray(alpha)
+    if np.issubdtype(a.dtype, np.integer):
+        denom = float(np.iinfo(a.dtype).max)
+        if denom <= 0:
+            return np.zeros(a.shape[:2], dtype=bool)
+        return (a.astype(np.float32) / denom) >= 0.5
+
+    af = a.astype(np.float32, copy=False)
+    maxv = float(np.nanmax(af)) if af.size > 0 else 0.0
+    if maxv <= 1.0:
+        return af >= 0.5
+    if maxv <= 255.0:
+        return (af / 255.0) >= 0.5
+    return (af / maxv) >= 0.5
+
+
 def _depth_edge_mask(
     depth: np.ndarray,
     *,
@@ -328,7 +350,7 @@ def run_moge_infer(
             else:
                 if int(img.shape[-1]) == 4:
                     alpha = img[..., 3]
-                    alpha_exists = np.asarray(alpha > 0, dtype=bool)
+                    alpha_exists = _alpha_to_exists_mask(alpha)
                     img_rgb_u8 = cv2.cvtColor(img, cv2.COLOR_BGRA2RGB)
                 elif int(img.shape[-1]) == 3:
                     img_rgb_u8 = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
