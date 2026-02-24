@@ -234,10 +234,12 @@ def _iter_frames(
     parsed_scene,
     split: str,
     default_hw: tuple[int, int],
+    K_scale_xy: tuple[float, float],
     interval: int,
 ) -> Iterable[CameraFrame]:
     idxs = parsed_scene.indices
     h_default, w_default = int(default_hw[0]), int(default_hw[1])
+    kx, ky = float(K_scale_xy[0]), float(K_scale_xy[1])
     if int(interval) <= 0:
         raise ValueError(f"interval must be > 0, got {interval}")
 
@@ -246,6 +248,12 @@ def _iter_frames(
             continue
         camtoworld = parsed_scene.camtoworlds[int(image_index)].astype(np.float32)
         K = parsed_scene.Ks[int(image_index)].astype(np.float32)
+        if not np.isfinite(kx) or not np.isfinite(ky) or kx <= 0.0 or ky <= 0.0:
+            raise ValueError(f"Invalid K_scale_xy={K_scale_xy}. Expected positive finite floats.")
+        if kx != 1.0 or ky != 1.0:
+            K = K.copy()
+            K[0, :] *= float(kx)
+            K[1, :] *= float(ky)
         yield CameraFrame(
             camtoworld=camtoworld,
             K=K,
@@ -296,6 +304,16 @@ def _create_tsdf_mesh(
     if sdf_trunc is None:
         sdf_trunc = float(voxel_length) * 5.0
     print(f"[tsdf] voxel_length={float(voxel_length):.6g}, sdf_trunc={float(sdf_trunc):.6g}, frames={n}")
+
+    # Resolution diagnostics (useful when running TSDF at reduced render_factor).
+    # Most datasets use a constant resolution for all frames; if not, print all unique sizes.
+    unique_hws = np.unique(np.asarray(hws, dtype=np.int32), axis=0)
+    if int(unique_hws.shape[0]) == 1:
+        h0, w0 = int(unique_hws[0, 0]), int(unique_hws[0, 1])
+        print(f"[tsdf] integration resolution: H={h0}, W={w0}", flush=True)
+    else:
+        sizes = ", ".join(f"(H={int(h)},W={int(w)})" for h, w in unique_hws.tolist())
+        print(f"[tsdf] integration resolutions (unique): {sizes}", flush=True)
 
     tsdf_vol = o3d.pipelines.integration.ScalableTSDFVolume(
         voxel_length=float(voxel_length),
@@ -400,7 +418,19 @@ def main() -> None:
     )
     parser.add_argument("--ply_path", type=str, required=True, help="Path to an uncompressed gsplat-style PLY.")
     parser.add_argument("--data_dir", type=str, required=True, help="COLMAP scene directory.")
-    parser.add_argument("--data_factor", type=int, default=1, help="Downsample factor (matches images_{factor}).")
+    parser.add_argument(
+        "--render_factor",
+        "--resolution",
+        "-r",
+        dest="render_factor",
+        type=int,
+        default=1,
+        help=(
+            "Additional render downscale factor applied during TSDF meshing. "
+            "For example, --render_factor 2 renders at half resolution. "
+            "This affects both rasterization resolution and TSDF integration."
+        ),
+    )
     parser.add_argument("--interval", type=int, default=1, help="Render every N-th frame.")
     parser.add_argument("--output_dir", type=str, default=None, help="Output directory (default: <ply_dir>/../mesh).")
     parser.add_argument("--device", type=str, default="cuda", help="Torch device for rendering (e.g. cuda:0, cpu).")
@@ -504,7 +534,7 @@ def main() -> None:
 
     dataparser = ColmapDataParser(
         data_dir=data_dir,
-        factor=int(args.data_factor),
+        factor=1,
         test_every=8,
         benchmark_train_split=False,
         depth_dir_name=None,
@@ -518,6 +548,20 @@ def main() -> None:
     print(f"[data] loaded train cameras: {int(parsed_scene.indices.size)} (interval={int(args.interval)})")
     first_image_index = int(parsed_scene.indices[0])
     h0, w0 = _infer_hw_from_image(image_path=parsed_scene.image_paths[first_image_index])
+    render_factor = int(args.render_factor)
+    if render_factor <= 0:
+        raise ValueError(f"--render_factor must be > 0, got {render_factor}")
+    if render_factor != 1:
+        h_render = max(1, int(round(float(h0) / float(render_factor))))
+        w_render = max(1, int(round(float(w0) / float(render_factor))))
+    else:
+        h_render, w_render = int(h0), int(w0)
+    kx = float(w_render) / max(float(w0), 1.0)
+    ky = float(h_render) / max(float(h0), 1.0)
+    print(
+        f"[render] render_factor={render_factor} (H,W)=({h_render},{w_render}) from ({h0},{w0})",
+        flush=True,
+    )
 
     mask_by_int: dict[int, Path] = {}
     mask_by_stem: dict[str, Path] = {}
@@ -616,7 +660,8 @@ def main() -> None:
         for frame in _iter_frames(
             parsed_scene=parsed_scene,
             split="train",
-            default_hw=(h0, w0),
+            default_hw=(h_render, w_render),
+            K_scale_xy=(kx, ky),
             interval=int(args.interval),
         ):
             if mask_paths is not None:
