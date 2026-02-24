@@ -321,8 +321,8 @@ class RegConfig:
     # - `surf_normal_loss_*`: supervise normals implied by depth w.r.t. the normal prior.
     # - `consistency_normal_loss_*`: encourage rendered normals to match depth-implied normals.
 
-    # Apply normal regularization once every N steps.
-    normal_reg_every_n: int = 8
+    # Apply normal-prior regularizations once every N steps.
+    prior_normal_reg_every_n: int = 8
     # Weight of the rendered-normal loss.
     normal_loss_weight: float = 0.1
     # Starting step for rendered-normal regularization.
@@ -331,6 +331,8 @@ class RegConfig:
     surf_normal_loss_weight: float = 0.1
     # Starting step for surface-normal regularization.
     surf_normal_loss_activation_step: int = 7000
+    # Apply normal-consistency regularization once every N steps.
+    consistency_normal_reg_every_n: int = 1
     # Weight of the normal consistency loss (rendered normals vs depth-implied normals).
     consistency_normal_loss_weight: float = 0.0
     # Starting step for normal consistency regularization.

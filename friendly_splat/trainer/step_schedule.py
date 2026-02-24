@@ -44,9 +44,12 @@ def compute_step_schedule(
         step % reg_cfg.depth_reg_every_n == 0
     )
     sky_due = reg_cfg.sky_loss_every_n > 0 and (step % reg_cfg.sky_loss_every_n == 0)
-    normal_due = reg_cfg.normal_reg_every_n > 0 and (
-        step % reg_cfg.normal_reg_every_n == 0
-    )
+
+    prior_every_n = int(reg_cfg.prior_normal_reg_every_n)
+    consistency_every_n = int(reg_cfg.consistency_normal_reg_every_n)
+
+    prior_normal_due = prior_every_n > 0 and (step % prior_every_n == 0)
+    consistency_normal_due = consistency_every_n > 0 and (step % consistency_every_n == 0)
     scale_ratio_due = reg_cfg.scale_ratio_reg_every_n > 0 and (
         step % reg_cfg.scale_ratio_reg_every_n == 0
     )
@@ -62,18 +65,18 @@ def compute_step_schedule(
         has_normal_prior
         and reg_cfg.normal_loss_weight > 0.0
         and step >= reg_cfg.normal_loss_activation_step
-        and normal_due
+        and prior_normal_due
     )
     do_surf_normal_reg = (
         has_normal_prior
         and reg_cfg.surf_normal_loss_weight > 0.0
         and step >= reg_cfg.surf_normal_loss_activation_step
-        and normal_due
+        and prior_normal_due
     )
     do_consistency_normal_reg = (
         reg_cfg.consistency_normal_loss_weight > 0.0
         and step >= reg_cfg.consistency_normal_loss_activation_step
-        and normal_due
+        and consistency_normal_due
     )
 
     do_flat_reg = reg_cfg.flat_reg_weight > 0.0
