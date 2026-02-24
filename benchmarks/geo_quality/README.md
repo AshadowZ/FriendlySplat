@@ -169,7 +169,7 @@ then runs a minimal TnT official toolbox evaluator under `benchmarks/geo_quality
 
 By default, TSDF hyperparameters use a single preset (unless you override them via CLI flags):
 
-- `voxel_length=0.002`, `sdf_trunc=0.008`, `depth_trunc=5.0`
+- `voxel_length=0.002`, `sdf_trunc=0.008`, `depth_trunc=20.0`
 
 If a scene contains a `transforms.json` (or `transforms_train.json`) with an `aabb_range` field (PGSR-style),
 the evaluator adapts TSDF voxel size as:

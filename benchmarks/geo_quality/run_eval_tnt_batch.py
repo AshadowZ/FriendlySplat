@@ -30,8 +30,8 @@ def _default_tsdf_params_2dgs(*, scene: str) -> tuple[float, float, float]:
     # may increase voxel_length when available.
     voxel_length = 0.002
     sdf_trunc = 4.0 * voxel_length
-    # Keep a conservative depth truncation for stable TSDF fusion.
-    depth_trunc = 5.0
+    # Align with PGSR's TnT TSDF setting.
+    depth_trunc = 20.0
     return voxel_length, sdf_trunc, depth_trunc
 
 
@@ -89,19 +89,16 @@ def _try_load_aabb_range(*, scene_dir: Path) -> Optional[np.ndarray]:
 
 def _adapt_tsdf_params_with_aabb(
     *,
-    scene_dir: Path,
+    bounds: np.ndarray,
     voxel_length: float,
     sdf_trunc: float,
     sdf_trunc_from_user: bool,
 ) -> tuple[float, float]:
-    """Adapt TSDF voxel size using aabb_range when available.
-
-    Matches PGSR's logic:
-      voxel_length = max(voxel_length, max_dis / 2048)
-      sdf_trunc = 4 * voxel_length (when not explicitly overridden)
-    """
-    bounds = _try_load_aabb_range(scene_dir=scene_dir)
-    if bounds is None:
+    """Adapt TSDF voxel size using aabb_range when available (PGSR-style)."""
+    bounds = np.asarray(bounds, dtype=np.float32)
+    if bounds.shape == (2, 3):
+        bounds = bounds.T
+    if bounds.shape != (3, 2):
         return float(voxel_length), float(sdf_trunc)
 
     extents = bounds[:, 1] - bounds[:, 0]
@@ -162,6 +159,7 @@ def _run_tsdf_mesh(
     sdf_trunc: Optional[float],
     depth_trunc: Optional[float],
     post_process_clusters: int,
+    aabb_bounds: Optional[np.ndarray],
     dry_run: bool,
 ) -> None:
     mesh_script = repo_root / "tools" / "mesh" / "tsdf_mesh_from_ply.py"
@@ -187,6 +185,16 @@ def _run_tsdf_mesh(
         "--output_dir",
         str(output_dir),
     ]
+    if aabb_bounds is not None:
+        bounds = np.asarray(aabb_bounds, dtype=np.float32)
+        if bounds.shape == (2, 3):
+            bounds = bounds.T
+        if bounds.shape != (3, 2):
+            raise ValueError(f"aabb_bounds must have shape (3,2), got {bounds.shape}")
+        aabb_min = bounds[:, 0].tolist()
+        aabb_max = bounds[:, 1].tolist()
+        cmd += ["--aabb_min", *(str(float(x)) for x in aabb_min)]
+        cmd += ["--aabb_max", *(str(float(x)) for x in aabb_max)]
     if voxel_length is not None:
         cmd += ["--voxel_length", str(float(voxel_length))]
     if sdf_trunc is not None:
@@ -295,7 +303,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--tsdf-render-factor",
         type=int,
-        default=2,
+        default=1,
         help="Render downscale factor for TSDF meshing (forwarded to tsdf_mesh_from_ply.py as --resolution).",
     )
     parser.add_argument("--voxel-length", type=float, default=None)
@@ -359,6 +367,7 @@ def main(argv: list[str]) -> int:
 
         mesh = _mesh_path(result_dir=result_dir)
         if not (bool(args.skip_existing_mesh) and mesh.exists()):
+            bounds = _try_load_aabb_range(scene_dir=scene_dir)
             sdf_from_user = args.sdf_trunc is not None
             voxel_length = args.voxel_length
             sdf_trunc = args.sdf_trunc
@@ -372,12 +381,13 @@ def main(argv: list[str]) -> int:
                 if depth_trunc is None:
                     depth_trunc = d
 
-            voxel_length, sdf_trunc = _adapt_tsdf_params_with_aabb(
-                scene_dir=scene_dir,
-                voxel_length=float(voxel_length),
-                sdf_trunc=float(sdf_trunc),
-                sdf_trunc_from_user=bool(sdf_from_user),
-            )
+            if bounds is not None:
+                voxel_length, sdf_trunc = _adapt_tsdf_params_with_aabb(
+                    bounds=bounds,
+                    voxel_length=float(voxel_length),
+                    sdf_trunc=float(sdf_trunc),
+                    sdf_trunc_from_user=bool(sdf_from_user),
+                )
 
             _run_tsdf_mesh(
                 repo_root=repo_root,
@@ -390,6 +400,7 @@ def main(argv: list[str]) -> int:
                 sdf_trunc=float(sdf_trunc),
                 depth_trunc=float(depth_trunc),
                 post_process_clusters=int(args.post_process_clusters),
+                aabb_bounds=bounds,
                 dry_run=bool(args.dry_run),
             )
 

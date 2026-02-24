@@ -291,6 +291,7 @@ def _create_tsdf_mesh(
     depth_trunc: Optional[float],
     mask_paths: Optional[list[str]],
     mask_dilate: int,
+    aabb_bounds: Optional[np.ndarray],
 ):
     n = int(len(depths_np))
     if n <= 0:
@@ -334,6 +335,31 @@ def _create_tsdf_mesh(
             k = int(mask_dilate) * 2 + 1
             kernel = np.ones((k, k), dtype=np.uint8)
 
+    bounds = None
+    if aabb_bounds is not None:
+        bounds = np.asarray(aabb_bounds, dtype=np.float32)
+        if bounds.shape == (2, 3):
+            bounds = bounds.T
+        if bounds.shape != (3, 2):
+            raise ValueError(f"aabb_bounds must have shape (3,2), got {bounds.shape}")
+        if not np.all(np.isfinite(bounds)):
+            raise ValueError("aabb_bounds contains non-finite values.")
+        mins = bounds[:, 0]
+        maxs = bounds[:, 1]
+        if not np.all(maxs >= mins):
+            raise ValueError(f"Invalid aabb_bounds (max < min): {bounds}")
+        print(
+            "[aabb] enabled: "
+            f"x=[{mins[0]:.6g},{maxs[0]:.6g}], "
+            f"y=[{mins[1]:.6g},{maxs[1]:.6g}], "
+            f"z=[{mins[2]:.6g},{maxs[2]:.6g}]",
+            flush=True,
+        )
+
+    aabb_cache: dict[tuple[int, int, float, float, float, float], tuple[np.ndarray, np.ndarray]] = {}
+    aabb_valid_before = 0
+    aabb_valid_after = 0
+
     for i in tqdm.tqdm(range(n), desc="TSDF Integration", unit="frame"):
         depth = depths_np[i].astype(np.float32)  # [H,W]
         color = colors_np[i]
@@ -360,6 +386,52 @@ def _create_tsdf_mesh(
                 alpha01 = (m_u8.astype(np.float32) / 255.0).clip(0.0, 1.0)
             depth[alpha01 < float(mask_threshold)] = 0.0
 
+        if bounds is not None:
+            K = Ks[i].astype(np.float32, copy=False)
+            fx = float(K[0, 0])
+            fy = float(K[1, 1])
+            cx = float(K[0, 2])
+            cy = float(K[1, 2])
+            if not (fx > 0.0 and fy > 0.0 and np.isfinite(fx) and np.isfinite(fy)):
+                raise ValueError(f"Invalid intrinsics for aabb crop: fx={fx}, fy={fy}")
+
+            key = (int(h), int(w), round(fx, 6), round(fy, 6), round(cx, 6), round(cy, 6))
+            cached = aabb_cache.get(key)
+            if cached is None:
+                u = np.arange(int(w), dtype=np.float32)
+                v = np.arange(int(h), dtype=np.float32)
+                xdir = (u - float(cx)) / float(fx)  # [W]
+                ydir = (v - float(cy)) / float(fy)  # [H]
+                aabb_cache[key] = (xdir, ydir)
+                xdir, ydir = xdir, ydir
+            else:
+                xdir, ydir = cached
+
+            # World point: p_w = t + d * (R @ [xdir, ydir, 1]).
+            c2w = camtoworlds[i].astype(np.float32, copy=False)
+            R = c2w[:3, :3]
+            t = c2w[:3, 3]
+
+            valid_before = int(np.count_nonzero(depth > 0.0))
+            keep = depth > 0.0
+
+            coeff = (R[0, 0] * xdir[None, :]) + (R[0, 1] * ydir[:, None]) + float(R[0, 2])
+            xw = float(t[0]) + depth * coeff
+            keep &= (xw >= float(bounds[0, 0])) & (xw <= float(bounds[0, 1]))
+
+            coeff = (R[1, 0] * xdir[None, :]) + (R[1, 1] * ydir[:, None]) + float(R[1, 2])
+            yw = float(t[1]) + depth * coeff
+            keep &= (yw >= float(bounds[1, 0])) & (yw <= float(bounds[1, 1]))
+
+            coeff = (R[2, 0] * xdir[None, :]) + (R[2, 1] * ydir[:, None]) + float(R[2, 2])
+            zw = float(t[2]) + depth * coeff
+            keep &= (zw >= float(bounds[2, 0])) & (zw <= float(bounds[2, 1]))
+
+            depth[~keep] = 0.0
+            valid_after = int(np.count_nonzero(keep))
+            aabb_valid_before += valid_before
+            aabb_valid_after += valid_after
+
         o3d_depth = o3d.geometry.Image(depth)
         o3d_color = o3d.geometry.Image(color)
         rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(
@@ -381,6 +453,13 @@ def _create_tsdf_mesh(
         )
         extrinsic_world_to_cam = np.linalg.inv(camtoworlds[i])
         tsdf_vol.integrate(rgbd, intrinsic, extrinsic_world_to_cam)
+
+    if bounds is not None and aabb_valid_before > 0:
+        frac = float(aabb_valid_after) / float(max(aabb_valid_before, 1))
+        print(
+            f"[aabb] kept depth pixels: {aabb_valid_after}/{aabb_valid_before} ({frac*100.0:.2f}%)",
+            flush=True,
+        )
 
     mesh = tsdf_vol.extract_triangle_mesh()
     mesh.compute_vertex_normals()
@@ -438,6 +517,20 @@ def main() -> None:
     parser.add_argument("--voxel_length", type=float, default=None, help="TSDF voxel size in scene units.")
     parser.add_argument("--sdf_trunc", type=float, default=None, help="TSDF truncation distance in scene units.")
     parser.add_argument("--depth_trunc", type=float, default=None, help="Max depth for TSDF integration.")
+    parser.add_argument(
+        "--aabb_min",
+        type=float,
+        nargs=3,
+        default=None,
+        help="Optional AABB min corner in world coords: x y z (enables 3D bbox depth culling).",
+    )
+    parser.add_argument(
+        "--aabb_max",
+        type=float,
+        nargs=3,
+        default=None,
+        help="Optional AABB max corner in world coords: x y z (enables 3D bbox depth culling).",
+    )
     parser.add_argument(
         "--write_workers",
         type=int,
@@ -585,6 +678,14 @@ def main() -> None:
         )
 
     mask_paths: Optional[list[str]] = [] if mask_dir is not None else None
+
+    aabb_bounds = None
+    if args.aabb_min is not None or args.aabb_max is not None:
+        if args.aabb_min is None or args.aabb_max is None:
+            raise ValueError("Provide both --aabb_min and --aabb_max.")
+        mins = np.asarray(args.aabb_min, dtype=np.float32).reshape(3)
+        maxs = np.asarray(args.aabb_max, dtype=np.float32).reshape(3)
+        aabb_bounds = np.stack([mins, maxs], axis=1)  # [3,2]
 
     splats = _load_ply_splats(str(ply_path))
     print(f"[ply] loaded {int(splats['means'].shape[0])} splats from: {ply_path}")
@@ -811,6 +912,7 @@ def main() -> None:
         depth_trunc=args.depth_trunc,
         mask_paths=mask_paths,
         mask_dilate=int(args.mask_dilate),
+        aabb_bounds=aabb_bounds,
     )
     mesh = _post_process_mesh(mesh=mesh, cluster_to_keep=int(args.post_process_clusters))
 
