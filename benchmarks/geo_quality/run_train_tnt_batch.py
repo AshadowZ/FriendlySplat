@@ -19,6 +19,10 @@ _TNT_SCENES_DEFAULT: tuple[str, ...] = (
     "Truck",
 )
 
+_TNT_MOGE_DEPTH_DIR_NAME = "moge_depth"
+_TNT_MOGE_NORMAL_DIR_NAME = "moge_normal"
+_TNT_INVALID_MASK_DIR_NAME = "invalid_mask"
+
 
 def _format_cmd(cmd: list[str]) -> str:
     return " ".join(shlex.quote(c) for c in cmd)
@@ -62,6 +66,82 @@ def _auto_tnt_dir(*, data_root: Path) -> Path:
     )
 
 
+def _list_images_flat(*, image_dir: Path) -> list[Path]:
+    exts = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
+    if not image_dir.is_dir():
+        return []
+    return sorted(
+        p
+        for p in image_dir.iterdir()
+        if p.is_file() and p.suffix.lower() in exts
+    )
+
+
+def _all_exist(*, parent_dir: Path, stems: list[str], suffix: str) -> bool:
+    if not stems or not parent_dir.is_dir():
+        return False
+    return all((parent_dir / f"{s}{suffix}").exists() for s in stems)
+
+
+def _ensure_moge_priors(
+    *,
+    repo_root: Path,
+    data_root: Path,
+    tnt_dir: Path,
+    scene: str,
+    scene_dir: Path,
+    stems: list[str],
+    use_depth_prior: bool,
+    use_invalid_mask: bool,
+    dry_run: bool,
+    verbose: bool,
+) -> None:
+    have_normals = _all_exist(
+        parent_dir=scene_dir / _TNT_MOGE_NORMAL_DIR_NAME,
+        stems=stems,
+        suffix=".png",
+    )
+    have_depths = True
+    if bool(use_depth_prior):
+        have_depths = _all_exist(
+            parent_dir=scene_dir / _TNT_MOGE_DEPTH_DIR_NAME,
+            stems=stems,
+            suffix=".npy",
+        )
+    have_invalid = True
+    if bool(use_invalid_mask):
+        have_invalid = _all_exist(
+            parent_dir=scene_dir / _TNT_INVALID_MASK_DIR_NAME,
+            stems=stems,
+            suffix=".png",
+        )
+    if have_normals and have_depths and have_invalid:
+        return
+
+    priors_py = repo_root / "benchmarks" / "geo_quality" / "run_moge_priors_tnt_batch.py"
+    if not priors_py.exists():
+        raise FileNotFoundError(f"Missing script: {priors_py}")
+
+    cmd = [
+        sys.executable,
+        str(priors_py),
+        "--data-root",
+        str(data_root),
+        "--tnt-dir",
+        str(tnt_dir),
+        "--scenes",
+        str(scene),
+    ]
+    if verbose:
+        cmd.append("--verbose")
+    tag = "dry-run" if bool(dry_run) else "run"
+    print(f"[{tag}] ensure priors: {scene}", flush=True)
+    print(f"[cmd] {_format_cmd(cmd)}", flush=True)
+    if dry_run:
+        return
+    subprocess.run(cmd, check=True, cwd=str(repo_root))
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="run_train_tnt_batch.py",
@@ -101,8 +181,8 @@ def main(argv: list[str]) -> int:
         "--data-preload",
         type=str,
         choices=("none", "cuda"),
-        default="cuda",
-        help="DataLoader preload mode (default: cuda).",
+        default="none",
+        help="DataLoader preload mode (default: none).",
     )
     parser.add_argument(
         "--max-steps",
@@ -119,8 +199,8 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--densification-budget",
         type=int,
-        default=1_000_000,
-        help="Per-scene densification budget (approx. max gaussians; default: 1000000).",
+        default=2_000_000,
+        help="Per-scene densification budget (approx. max gaussians; default: 2000000).",
     )
     parser.add_argument(
         "--grow-grad2d",
@@ -151,6 +231,18 @@ def main(argv: list[str]) -> int:
         type=float,
         default=1.0,
         help="Forward to trainer as --reg.scale-ratio-reg-weight (default: 1.0).",
+    )
+    parser.add_argument(
+        "--use-depth-prior",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=f"Enable dense depth priors from '{_TNT_MOGE_DEPTH_DIR_NAME}/' (default: on).",
+    )
+    parser.add_argument(
+        "--use-invalid-mask",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=f"Enable invalid masks as sky masks from '{_TNT_INVALID_MASK_DIR_NAME}/' (default: on).",
     )
     parser.add_argument(
         "--scenes",
@@ -225,6 +317,31 @@ def main(argv: list[str]) -> int:
             any_failed = True
             continue
 
+        image_paths = _list_images_flat(image_dir=scene_dir / "images")
+        stems = [p.stem for p in image_paths]
+        if not stems:
+            print(f"[skip] no images found: {scene_dir / 'images'}", flush=True)
+            any_failed = True
+            continue
+
+        try:
+            _ensure_moge_priors(
+                repo_root=repo_root,
+                data_root=data_root,
+                tnt_dir=tnt_dir,
+                scene=str(scene),
+                scene_dir=scene_dir,
+                stems=stems,
+                use_depth_prior=bool(args.use_depth_prior),
+                use_invalid_mask=bool(args.use_invalid_mask),
+                dry_run=bool(args.dry_run),
+                verbose=bool(args.verbose),
+            )
+        except Exception as exc:
+            any_failed = True
+            print(f"[fail] {scene} priors: {exc}", flush=True)
+            continue
+
         result_dir = out_root / str(scene) / str(args.exp_name)
         done = _train_done(result_dir=result_dir, max_steps=int(args.max_steps))
         if bool(args.skip_existing) and done:
@@ -250,6 +367,8 @@ def main(argv: list[str]) -> int:
             "1",
             "--data.preload",
             str(args.data_preload),
+            "--data.normal-dir-name",
+            _TNT_MOGE_NORMAL_DIR_NAME,
             "--postprocess.use-bilateral-grid",
             "--optim.max-steps",
             str(int(args.max_steps)),
@@ -271,6 +390,10 @@ def main(argv: list[str]) -> int:
             "--io.ply-steps",
             str(int(args.max_steps)),
         ]
+        if bool(args.use_depth_prior):
+            cmd += ["--data.depth-dir-name", _TNT_MOGE_DEPTH_DIR_NAME]
+        if bool(args.use_invalid_mask):
+            cmd += ["--data.sky-mask-dir-name", _TNT_INVALID_MASK_DIR_NAME]
         if args.grow_grad2d is not None:
             cmd += ["--strategy.grow-grad2d", str(float(args.grow_grad2d))]
         if str(args.data_preload) == "cuda":
@@ -309,4 +432,3 @@ def main(argv: list[str]) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))
-

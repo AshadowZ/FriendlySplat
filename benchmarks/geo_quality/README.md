@@ -124,6 +124,20 @@ Assumes each scene folder contains a COLMAP reconstruction and the official eval
       Barn.ply
 ```
 
+### MoGe priors (normal/depth/invalid_mask)
+
+```bash
+python3 benchmarks/geo_quality/run_moge_priors_tnt_batch.py \
+  --data-root /path/to/data \
+  --scenes default
+```
+
+This writes into each `<Scene>/`:
+
+- `moge_normal/*.png`
+- `moge_depth/*.npy`
+- `invalid_mask/*.png` (255=invalid, 0=valid)
+
 ### Train
 
 ```bash
@@ -131,6 +145,14 @@ python3 benchmarks/geo_quality/run_train_tnt_batch.py \
   --data-root /path/to/data \
   --scenes default
 ```
+
+By default, this script auto-generates (if missing) and enables:
+
+- depth prior: `moge_depth/` (`--data.depth-dir-name moge_depth`)
+- normal prior: `moge_normal/` (`--data.normal-dir-name moge_normal`)
+- invalid mask: `invalid_mask/` (`--data.sky-mask-dir-name invalid_mask`)
+
+Use `--no-use-depth-prior` to disable the depth prior, or `--no-use-invalid-mask` to disable sky masking.
 
 Outputs are written under `<data-root>/geo_benchmark/TnT/<Scene>/<exp-name>/`.
 
@@ -144,6 +166,11 @@ python3 benchmarks/geo_quality/run_eval_tnt_batch.py \
 
 This reconstructs a TSDF mesh from the exported splat PLY via `tools/mesh/tsdf_mesh_from_ply.py`,
 then runs a minimal TnT official toolbox evaluator under `benchmarks/geo_quality/tnt_eval/`.
+
+By default, TSDF hyperparameters follow 2DGS' TnT settings:
+
+- Barn/Caterpillar/Ignatius/Truck: `voxel_length=0.004`, `sdf_trunc=0.016`, `depth_trunc=3.0`
+- Meetingroom/Courthouse: `voxel_length=0.006`, `sdf_trunc=0.024`, `depth_trunc=4.5`
 
 Summary:
 

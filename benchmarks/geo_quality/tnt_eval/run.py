@@ -94,8 +94,15 @@ def _trajectory_alignment(
         np.asarray([[i, i] for i in range(len(gt_traj_col))], dtype=np.int32)
     )
     criteria = reg.RANSACConvergenceCriteria()
-    criteria.max_iteration = 100000
-    criteria.max_validation = 100000
+    # Open3D API differs across versions/builds:
+    # - Older versions: max_iteration + max_validation
+    # - Newer versions (e.g. 0.18): max_iteration + confidence
+    if hasattr(criteria, "max_iteration"):
+        criteria.max_iteration = 100000
+    if hasattr(criteria, "max_validation"):
+        criteria.max_validation = 100000
+    elif hasattr(criteria, "confidence"):
+        criteria.confidence = 0.999
     est = reg.TransformationEstimationPointToPoint(True)
 
     # Signature differs across Open3D versions; try keywords first.

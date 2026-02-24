@@ -21,6 +21,21 @@ _TNT_SCENES_DEFAULT: tuple[str, ...] = (
     "Truck",
 )
 
+_TNT_SCENES_360: frozenset[str] = frozenset({"Barn", "Caterpillar", "Ignatius", "Truck"})
+_TNT_SCENES_LARGE: frozenset[str] = frozenset({"Meetingroom", "Courthouse"})
+
+
+def _default_tsdf_params_2dgs(*, scene: str) -> tuple[float, float, float]:
+    """Return (voxel_length, sdf_trunc, depth_trunc) aligned with 2DGS's TnT eval."""
+    if str(scene) in _TNT_SCENES_LARGE:
+        voxel_length = 0.006
+        depth_trunc = 4.5
+    else:
+        voxel_length = 0.004
+        depth_trunc = 3.0
+    sdf_trunc = 4.0 * voxel_length
+    return voxel_length, sdf_trunc, depth_trunc
+
 
 @dataclass(frozen=True)
 class _EvalRow:
@@ -277,6 +292,18 @@ def main(argv: list[str]) -> int:
 
         mesh = _mesh_path(result_dir=result_dir)
         if not (bool(args.skip_existing_mesh) and mesh.exists()):
+            voxel_length = args.voxel_length
+            sdf_trunc = args.sdf_trunc
+            depth_trunc = args.depth_trunc
+            if voxel_length is None or sdf_trunc is None or depth_trunc is None:
+                v, s, d = _default_tsdf_params_2dgs(scene=str(scene))
+                if voxel_length is None:
+                    voxel_length = v
+                if sdf_trunc is None:
+                    sdf_trunc = s
+                if depth_trunc is None:
+                    depth_trunc = d
+
             _run_tsdf_mesh(
                 repo_root=repo_root,
                 ply_path=ply,
@@ -284,9 +311,9 @@ def main(argv: list[str]) -> int:
                 data_factor=1,
                 device=str(args.device),
                 interval=int(args.interval),
-                voxel_length=args.voxel_length,
-                sdf_trunc=args.sdf_trunc,
-                depth_trunc=args.depth_trunc,
+                voxel_length=voxel_length,
+                sdf_trunc=sdf_trunc,
+                depth_trunc=depth_trunc,
                 post_process_clusters=int(args.post_process_clusters),
                 dry_run=bool(args.dry_run),
             )
@@ -369,4 +396,3 @@ def main(argv: list[str]) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))
-
