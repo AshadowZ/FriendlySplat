@@ -167,10 +167,19 @@ python3 benchmarks/geo_quality/run_eval_tnt_batch.py \
 This reconstructs a TSDF mesh from the exported splat PLY via `tools/mesh/tsdf_mesh_from_ply.py`,
 then runs a minimal TnT official toolbox evaluator under `benchmarks/geo_quality/tnt_eval/`.
 
-By default, TSDF hyperparameters follow 2DGS' TnT settings:
+By default, TSDF hyperparameters use a single preset (unless you override them via CLI flags):
 
-- Barn/Caterpillar/Ignatius/Truck: `voxel_length=0.004`, `sdf_trunc=0.016`, `depth_trunc=3.0`
-- Meetingroom/Courthouse: `voxel_length=0.006`, `sdf_trunc=0.024`, `depth_trunc=4.5`
+- `voxel_length=0.002`, `sdf_trunc=0.008`, `depth_trunc=5.0`
+
+If a scene contains a `transforms.json` (or `transforms_train.json`) with an `aabb_range` field (PGSR-style),
+the evaluator adapts TSDF voxel size as:
+
+- `voxel_length = max(voxel_length, max_dis / 2048)`
+- `sdf_trunc = 4 * voxel_length` (unless `--sdf-trunc` is explicitly set)
+
+By default, TSDF meshing renders at half resolution:
+
+- `--tsdf-render-factor 2` (forwarded to `tools/mesh/tsdf_mesh_from_ply.py` as `--resolution`)
 
 Summary:
 

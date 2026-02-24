@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
+
 
 _TNT_SCENES_DEFAULT: tuple[str, ...] = (
     "Barn",
@@ -21,19 +23,15 @@ _TNT_SCENES_DEFAULT: tuple[str, ...] = (
     "Truck",
 )
 
-_TNT_SCENES_360: frozenset[str] = frozenset({"Barn", "Caterpillar", "Ignatius", "Truck"})
-_TNT_SCENES_LARGE: frozenset[str] = frozenset({"Meetingroom", "Courthouse"})
-
 
 def _default_tsdf_params_2dgs(*, scene: str) -> tuple[float, float, float]:
-    """Return (voxel_length, sdf_trunc, depth_trunc) aligned with 2DGS's TnT eval."""
-    if str(scene) in _TNT_SCENES_LARGE:
-        voxel_length = 0.006
-        depth_trunc = 4.5
-    else:
-        voxel_length = 0.004
-        depth_trunc = 3.0
+    """Return (voxel_length, sdf_trunc, depth_trunc) default TSDF parameters."""
+    # Start from a single conservative preset. Scene-scale adaptation (aabb_range)
+    # may increase voxel_length when available.
+    voxel_length = 0.002
     sdf_trunc = 4.0 * voxel_length
+    # Keep a conservative depth truncation for stable TSDF fusion.
+    depth_trunc = 5.0
     return voxel_length, sdf_trunc, depth_trunc
 
 
@@ -61,6 +59,69 @@ def _split_csv(value: Optional[str]) -> list[str]:
             continue
         items.append(s)
     return items
+
+
+def _try_load_aabb_range(*, scene_dir: Path) -> Optional[np.ndarray]:
+    """Load aabb_range from transforms.json (PGSR-style) if present.
+
+    Expected JSON field: "aabb_range" with shape [3,2] (min/max per axis).
+    Returns float32 array [3,2] or None.
+    """
+    for name in ("transforms.json", "transforms_train.json"):
+        path = scene_dir / name
+        if not path.exists():
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+        except Exception:
+            continue
+        if not isinstance(meta, dict) or "aabb_range" not in meta:
+            continue
+        bounds = np.asarray(meta["aabb_range"], dtype=np.float32)
+        if bounds.shape == (2, 3):
+            bounds = bounds.T
+        if bounds.shape != (3, 2):
+            continue
+        return bounds
+    return None
+
+
+def _adapt_tsdf_params_with_aabb(
+    *,
+    scene_dir: Path,
+    voxel_length: float,
+    sdf_trunc: float,
+    sdf_trunc_from_user: bool,
+) -> tuple[float, float]:
+    """Adapt TSDF voxel size using aabb_range when available.
+
+    Matches PGSR's logic:
+      voxel_length = max(voxel_length, max_dis / 2048)
+      sdf_trunc = 4 * voxel_length (when not explicitly overridden)
+    """
+    bounds = _try_load_aabb_range(scene_dir=scene_dir)
+    if bounds is None:
+        return float(voxel_length), float(sdf_trunc)
+
+    extents = bounds[:, 1] - bounds[:, 0]
+    if not np.all(np.isfinite(extents)):
+        return float(voxel_length), float(sdf_trunc)
+    max_dis = float(np.max(extents))
+    if not (max_dis > 0.0):
+        return float(voxel_length), float(sdf_trunc)
+
+    base = float(voxel_length)
+    adapted = max(base, max_dis / 2048.0)
+    if adapted != base:
+        print(
+            f"[tsdf] aabb_range detected: max_dis={max_dis:.6g} -> voxel_length=max({base:.6g}, {max_dis/2048.0:.6g})={adapted:.6g}",
+            flush=True,
+        )
+    voxel_length = adapted
+    if not bool(sdf_trunc_from_user):
+        sdf_trunc = 4.0 * float(voxel_length)
+    return float(voxel_length), float(sdf_trunc)
 
 
 def _auto_tnt_dir(*, data_root: Path) -> Path:
@@ -94,7 +155,7 @@ def _run_tsdf_mesh(
     repo_root: Path,
     ply_path: Path,
     scene_dir: Path,
-    data_factor: int,
+    render_factor: int,
     device: str,
     interval: int,
     voxel_length: Optional[float],
@@ -115,8 +176,8 @@ def _run_tsdf_mesh(
         str(ply_path),
         "--data_dir",
         str(scene_dir),
-        "--data_factor",
-        str(int(data_factor)),
+        "--resolution",
+        str(int(render_factor)),
         "--device",
         str(device),
         "--interval",
@@ -231,6 +292,12 @@ def main(argv: list[str]) -> int:
 
     parser.add_argument("--device", type=str, default="cuda:0")
     parser.add_argument("--interval", type=int, default=1)
+    parser.add_argument(
+        "--tsdf-render-factor",
+        type=int,
+        default=2,
+        help="Render downscale factor for TSDF meshing (forwarded to tsdf_mesh_from_ply.py as --resolution).",
+    )
     parser.add_argument("--voxel-length", type=float, default=None)
     parser.add_argument("--sdf-trunc", type=float, default=None)
     parser.add_argument("--depth-trunc", type=float, default=None)
@@ -292,6 +359,7 @@ def main(argv: list[str]) -> int:
 
         mesh = _mesh_path(result_dir=result_dir)
         if not (bool(args.skip_existing_mesh) and mesh.exists()):
+            sdf_from_user = args.sdf_trunc is not None
             voxel_length = args.voxel_length
             sdf_trunc = args.sdf_trunc
             depth_trunc = args.depth_trunc
@@ -304,16 +372,23 @@ def main(argv: list[str]) -> int:
                 if depth_trunc is None:
                     depth_trunc = d
 
+            voxel_length, sdf_trunc = _adapt_tsdf_params_with_aabb(
+                scene_dir=scene_dir,
+                voxel_length=float(voxel_length),
+                sdf_trunc=float(sdf_trunc),
+                sdf_trunc_from_user=bool(sdf_from_user),
+            )
+
             _run_tsdf_mesh(
                 repo_root=repo_root,
                 ply_path=ply,
                 scene_dir=scene_dir,
-                data_factor=1,
+                render_factor=int(args.tsdf_render_factor),
                 device=str(args.device),
                 interval=int(args.interval),
-                voxel_length=voxel_length,
-                sdf_trunc=sdf_trunc,
-                depth_trunc=depth_trunc,
+                voxel_length=float(voxel_length),
+                sdf_trunc=float(sdf_trunc),
+                depth_trunc=float(depth_trunc),
                 post_process_clusters=int(args.post_process_clusters),
                 dry_run=bool(args.dry_run),
             )

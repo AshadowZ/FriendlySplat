@@ -22,13 +22,13 @@ pip install -r tools/requirements.txt
 python tools/mesh/tsdf_mesh_from_ply.py \
   --ply_path results/my_scene/ply/splats_step030000.ply \
   --data_dir /path/to/colmap_scene \
-  --data_factor 1 \
+  --render_factor 2 \
   --interval 2 \
   --output_dir results/my_scene/mesh
 ```
 
 Notes:
 - Use `--interval` to skip frames (faster, less memory).
-- If you used `--data_factor > 1` during training, set the same value here.
 This tool assumes the input PLY is already in the same coordinate system as the COLMAP scene.
+- Use `--render_factor > 1` (or `-r 2`) to render TSDF inputs at lower resolution (e.g. 2 = half-res).
 - If disk I/O becomes a bottleneck, tune `--write_workers` / `--queue_size`.
