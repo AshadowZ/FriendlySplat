@@ -114,10 +114,12 @@ class ColmapDataParser(DataParser):
                 if value is not None
             ]
             if configured_priors:
-                raise ValueError(
-                    f"factor={int(self.factor)} with auxiliary priors is not supported. "
-                    f"Configured priors: {', '.join(configured_priors)}. "
-                    "Please use factor=1 when enabling depth/normal/mask priors."
+                warnings.warn(
+                    "Using auxiliary priors with factor>1 requires the priors/masks to be stored at the same "
+                    f"resolution as images_{int(self.factor)}/. Configured priors: {', '.join(configured_priors)}. "
+                    "FriendlySplat will validate shapes when loading priors at runtime.",
+                    category=UserWarning,
+                    stacklevel=2,
                 )
 
         self.depth_paths = self._build_paths(self.depth_dir_name, ext=".npy")

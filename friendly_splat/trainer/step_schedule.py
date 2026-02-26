@@ -59,6 +59,7 @@ def compute_step_schedule(
         has_depth_prior
         and reg_cfg.depth_loss_weight > 0.0
         and step >= reg_cfg.depth_loss_activation_step
+        and (int(reg_cfg.depth_loss_stop_step) < 0 or step < int(reg_cfg.depth_loss_stop_step))
         and depth_due
     )
     do_render_normal_reg = (

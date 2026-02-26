@@ -71,7 +71,7 @@ def _ply_path(*, result_dir: Path, max_steps: int) -> Path:
 
 
 def _mesh_path(*, result_dir: Path) -> Path:
-    return result_dir / "mesh" / "reconstructed_mesh.ply"
+    return result_dir / "mesh" / "tsdf_mesh_post.ply"
 
 def _load_K_Rt_from_P(*, P) -> Tuple["object", "object"]:
     """Decompose a 3x4 projection matrix to intrinsics (4x4) and pose (4x4).

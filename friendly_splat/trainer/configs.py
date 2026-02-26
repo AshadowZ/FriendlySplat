@@ -315,6 +315,8 @@ class RegConfig:
     depth_loss_weight: float = 0.25
     # Starting step for depth regularization.
     depth_loss_activation_step: int = 1000
+    # Stop applying depth regularization at this step.
+    depth_loss_stop_step: int = 15_000
 
     # Normal supervision weights:
     # - `normal_loss_*`: supervise rendered normals (from gsplat) w.r.t. the normal prior.
@@ -336,7 +338,7 @@ class RegConfig:
     # Weight of the normal consistency loss (rendered normals vs depth-implied normals).
     consistency_normal_loss_weight: float = 0.0
     # Starting step for normal consistency regularization.
-    consistency_normal_loss_activation_step: int = 7000
+    consistency_normal_loss_activation_step: int = 15000
 
 
 @dataclass(frozen=True)
@@ -522,6 +524,10 @@ def validate_train_config(cfg: TrainConfig) -> None:
         raise ValueError(f"world_size must be > 0, got {cfg.world_size}")
     if cfg.optim.max_steps <= 0:
         raise ValueError(f"optim.max_steps must be > 0, got {cfg.optim.max_steps}")
+    if int(cfg.reg.depth_loss_stop_step) != -1 and int(cfg.reg.depth_loss_stop_step) < 0:
+        raise ValueError(
+            f"reg.depth_loss_stop_step must be -1 or >= 0, got {cfg.reg.depth_loss_stop_step}"
+        )
     if cfg.eval.max_images is not None and int(cfg.eval.max_images) <= 0:
         raise ValueError(
             f"eval.max_images must be > 0 or None, got {cfg.eval.max_images}"

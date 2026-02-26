@@ -8,6 +8,10 @@ This directory contains a standalone mesh-extraction script that:
 
 It intentionally does **not** depend on `friendly_splat/trainer/*`.
 
+Outputs (under `--output_dir`):
+- `tsdf_mesh.ply`: raw TSDF mesh (pre post-process).
+- `tsdf_mesh_post.ply`: post-processed mesh (used by benchmark scripts).
+
 ## Install
 
 This tool requires Open3D:

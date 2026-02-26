@@ -124,16 +124,17 @@ Assumes each scene folder contains a COLMAP reconstruction and the official eval
       Barn.ply
 ```
 
-### MoGe priors (normal/depth/invalid_mask)
+### Preprocess (images_2 + MoGe priors)
 
 ```bash
-python3 benchmarks/geo_quality/run_moge_priors_tnt_batch.py \
+python3 benchmarks/geo_quality/preprocess_tnt_batch.py \
   --data-root /path/to/data \
   --scenes default
 ```
 
-This writes into each `<Scene>/`:
+This generates half-resolution images and writes priors into each `<Scene>/`:
 
+- `images_2/*` (half-res)
 - `moge_normal/*.png`
 - `moge_depth/*.npy`
 - `invalid_mask/*.png` (255=invalid, 0=valid)
@@ -148,6 +149,7 @@ python3 benchmarks/geo_quality/run_train_tnt_batch.py \
 
 By default, this script auto-generates (if missing) and enables:
 
+- half-resolution images: `images_2/` (generated from `images/`)
 - depth prior: `moge_depth/` (`--data.depth-dir-name moge_depth`)
 - normal prior: `moge_normal/` (`--data.normal-dir-name moge_normal`)
 - invalid mask: `invalid_mask/` (`--data.sky-mask-dir-name invalid_mask`)

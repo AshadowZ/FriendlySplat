@@ -23,6 +23,10 @@ _TNT_MOGE_DEPTH_DIR_NAME = "moge_depth"
 _TNT_MOGE_NORMAL_DIR_NAME = "moge_normal"
 _TNT_INVALID_MASK_DIR_NAME = "invalid_mask"
 
+_DEFAULT_PRIOR_NORMAL_REG_EVERY_N = 2
+_DEFAULT_CONSISTENCY_NORMAL_LOSS_WEIGHT = 0.15
+_DEFAULT_CONSISTENCY_NORMAL_LOSS_ACTIVATION_STEP = 15_000
+
 
 def _format_cmd(cmd: list[str]) -> str:
     return " ".join(shlex.quote(c) for c in cmd)
@@ -83,6 +87,14 @@ def _all_exist(*, parent_dir: Path, stems: list[str], suffix: str) -> bool:
     return all((parent_dir / f"{s}{suffix}").exists() for s in stems)
 
 
+def _extra_args_override_flag(*, extra_args: list[str], flag: str) -> bool:
+    """Return True if extra_args explicitly sets a given flag (supports `--x y` and `--x=y`)."""
+    for a in extra_args:
+        if a == flag or a.startswith(f"{flag}="):
+            return True
+    return False
+
+
 def _ensure_moge_priors(
     *,
     repo_root: Path,
@@ -96,6 +108,9 @@ def _ensure_moge_priors(
     dry_run: bool,
     verbose: bool,
 ) -> None:
+    images2 = _list_images_flat(image_dir=scene_dir / "images_2")
+    have_images2 = bool(images2) and int(len(images2)) >= int(len(stems))
+
     have_normals = _all_exist(
         parent_dir=scene_dir / _TNT_MOGE_NORMAL_DIR_NAME,
         stems=stems,
@@ -115,10 +130,10 @@ def _ensure_moge_priors(
             stems=stems,
             suffix=".png",
         )
-    if have_normals and have_depths and have_invalid:
+    if have_images2 and have_normals and have_depths and have_invalid:
         return
 
-    priors_py = repo_root / "benchmarks" / "geo_quality" / "run_moge_priors_tnt_batch.py"
+    priors_py = repo_root / "benchmarks" / "geo_quality" / "preprocess_tnt_batch.py"
     if not priors_py.exists():
         raise FileNotFoundError(f"Missing script: {priors_py}")
 
@@ -205,8 +220,8 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--grow-grad2d",
         type=float,
-        default=None,
-        help="Optional: forward to trainer as --strategy.grow-grad2d (default: unchanged).",
+        default=0.0001,
+        help="Forward to trainer as --strategy.grow-grad2d (default: 0.0001).",
     )
     parser.add_argument(
         "--prune-opa",
@@ -312,15 +327,17 @@ def main(argv: list[str]) -> int:
             print(f"[skip] missing scene dir: {scene_dir}", flush=True)
             any_failed = True
             continue
-        if not (scene_dir / "images").exists() or not (scene_dir / "sparse").exists():
-            print(f"[skip] missing images/ or sparse/: {scene_dir}", flush=True)
+        have_any_images = (scene_dir / "images").exists() or (scene_dir / "images_2").exists()
+        if not have_any_images or not (scene_dir / "sparse").exists():
+            print(f"[skip] missing images/ (or images_2/) or sparse/: {scene_dir}", flush=True)
             any_failed = True
             continue
 
-        image_paths = _list_images_flat(image_dir=scene_dir / "images")
+        image_dir = (scene_dir / "images") if (scene_dir / "images").exists() else (scene_dir / "images_2")
+        image_paths = _list_images_flat(image_dir=image_dir)
         stems = [p.stem for p in image_paths]
         if not stems:
-            print(f"[skip] no images found: {scene_dir / 'images'}", flush=True)
+            print(f"[skip] no images found: {image_dir}", flush=True)
             any_failed = True
             continue
 
@@ -364,7 +381,7 @@ def main(argv: list[str]) -> int:
             "--io.device",
             str(args.device),
             "--data.data-factor",
-            "1",
+            "2",
             "--data.preload",
             str(args.data_preload),
             "--data.normal-dir-name",
@@ -385,6 +402,12 @@ def main(argv: list[str]) -> int:
             str(float(args.flat_reg_weight)),
             "--reg.scale-ratio-reg-weight",
             str(float(args.scale_ratio_reg_weight)),
+            "--reg.prior-normal-reg-every-n",
+            str(int(_DEFAULT_PRIOR_NORMAL_REG_EVERY_N)),
+            "--reg.consistency-normal-loss-weight",
+            str(float(_DEFAULT_CONSISTENCY_NORMAL_LOSS_WEIGHT)),
+            "--reg.consistency-normal-loss-activation-step",
+            str(int(_DEFAULT_CONSISTENCY_NORMAL_LOSS_ACTIVATION_STEP)),
             "--viewer.disable-viewer",
             "--io.export-ply",
             "--io.ply-steps",
@@ -402,6 +425,16 @@ def main(argv: list[str]) -> int:
                 "--data.num-workers",
                 "0",
             ]
+        # Allow per-run overrides via `-- ...` extra_args.
+        if _extra_args_override_flag(extra_args=extra_args, flag="--reg.prior-normal-reg-every-n"):
+            i = cmd.index("--reg.prior-normal-reg-every-n")
+            cmd[i : i + 2] = []
+        if _extra_args_override_flag(extra_args=extra_args, flag="--reg.consistency-normal-loss-weight"):
+            i = cmd.index("--reg.consistency-normal-loss-weight")
+            cmd[i : i + 2] = []
+        if _extra_args_override_flag(extra_args=extra_args, flag="--reg.consistency-normal-loss-activation-step"):
+            i = cmd.index("--reg.consistency-normal-loss-activation-step")
+            cmd[i : i + 2] = []
         if extra_args:
             cmd += extra_args
 

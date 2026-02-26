@@ -276,6 +276,9 @@ def _evaluate_fscore(
     crop_volume,
     voxel_size: float,
     threshold: float,
+    save_eval_vis: bool,
+    out_dir: "Path",
+    o3d,
 ):
     s = copy.deepcopy(est_pcd)
     s.transform(trans)
@@ -288,29 +291,64 @@ def _evaluate_fscore(
         t = crop_volume.crop_point_cloud(t)
     t = t.voxel_down_sample(float(voxel_size))
 
+    if len(s.points) == 0 or len(t.points) == 0:
+        # Avoid Open3D errors on empty point clouds.
+        if bool(save_eval_vis):
+            out_dir.mkdir(parents=True, exist_ok=True)
+            o3d.io.write_point_cloud(str(out_dir / "precision.ply"), s)
+            o3d.io.write_point_cloud(str(out_dir / "recall.ply"), t)
+        return _EvalStats(precision=0.0, recall=0.0, fscore=0.0)
+
     dist1 = s.compute_point_cloud_distance(t)
     dist2 = t.compute_point_cloud_distance(s)
+
+    if bool(save_eval_vis):
+        import numpy as np  # noqa: WPS433
+
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        d1 = np.asarray(list(dist1), dtype=np.float64).reshape(-1)
+        d2 = np.asarray(list(dist2), dtype=np.float64).reshape(-1)
+
+        # Precision visualization: est points close to GT are green.
+        s_vis = copy.deepcopy(s)
+        c1 = np.ones((len(s_vis.points), 3), dtype=np.float64)
+        if d1.size == len(s_vis.points):
+            c1[d1 < float(threshold)] = np.asarray([0.0, 1.0, 0.0], dtype=np.float64)
+        s_vis.colors = o3d.utility.Vector3dVector(c1)
+        o3d.io.write_point_cloud(str(out_dir / "precision.ply"), s_vis)
+
+        # Recall visualization: GT points close to est are green.
+        t_vis = copy.deepcopy(t)
+        c2 = np.ones((len(t_vis.points), 3), dtype=np.float64)
+        if d2.size == len(t_vis.points):
+            c2[d2 < float(threshold)] = np.asarray([0.0, 1.0, 0.0], dtype=np.float64)
+        t_vis.colors = o3d.utility.Vector3dVector(c2)
+        o3d.io.write_point_cloud(str(out_dir / "recall.ply"), t_vis)
+
     return _get_f1(threshold=float(threshold), dist_est_to_gt=dist1, dist_gt_to_est=dist2)
 
 
 def _mesh_to_pcd(*, mesh_path: Path, o3d):
     import numpy as np  # noqa: WPS433
 
-    try:
-        import trimesh
-    except ModuleNotFoundError as e:  # pragma: no cover
-        raise ModuleNotFoundError("Missing dependency 'trimesh' for TnT evaluation.") from e
-
-    mesh = trimesh.load_mesh(str(mesh_path))
-    if not hasattr(mesh, "vertices") or mesh.vertices is None or len(mesh.vertices) == 0:
+    # Align with 2DGS's vendored Tanks&Temples evaluation:
+    # evaluate mesh vertices + per-triangle centroid points (denser point set).
+    mesh = o3d.io.read_triangle_mesh(str(mesh_path))
+    mesh.remove_unreferenced_vertices()
+    if len(mesh.vertices) == 0:
         raise ValueError(f"Mesh has no vertices: {mesh_path}")
-    vertices = np.asarray(mesh.vertices, dtype=np.float64)
-    if hasattr(mesh, "faces") and mesh.faces is not None and len(mesh.faces) > 0:
-        sampled = vertices[np.asarray(mesh.faces)].mean(axis=1)
-        vertices = np.concatenate([vertices, sampled], axis=0)
+
+    verts = np.asarray(mesh.vertices, dtype=np.float64)
+    tris = np.asarray(mesh.triangles, dtype=np.int64)
+    if tris.size > 0:
+        centroids = verts[tris].mean(axis=1)
+        points = np.concatenate([verts, centroids], axis=0)
+    else:
+        points = verts
 
     pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(vertices)
+    pcd.points = o3d.utility.Vector3dVector(points)
     return pcd
 
 
@@ -321,6 +359,7 @@ def run_evaluation(
     ply_path: Path,
     out_dir: Path,
     tau_override: Optional[float],
+    save_eval_vis: bool,
 ) -> dict:
     import numpy as np  # noqa: WPS433
     import open3d as o3d  # noqa: WPS433
@@ -402,6 +441,9 @@ def run_evaluation(
         crop_volume=vol,
         voxel_size=tau / 2.0,
         threshold=tau,
+        save_eval_vis=bool(save_eval_vis),
+        out_dir=out_dir,
+        o3d=o3d,
     )
 
     results = {
@@ -426,6 +468,11 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--ply-path", type=str, required=True)
     parser.add_argument("--out-dir", type=str, default=None)
     parser.add_argument("--tau", type=float, default=None, help="Override scene tau threshold.")
+    parser.add_argument(
+        "--save-eval-vis",
+        action="store_true",
+        help="Save precision/recall colored point clouds (precision.ply / recall.ply) under --out-dir.",
+    )
     args = parser.parse_args(argv)
 
     dataset_dir = Path(str(args.dataset_dir)).expanduser().resolve()
@@ -443,6 +490,7 @@ def main(argv: list[str]) -> int:
         ply_path=ply_path,
         out_dir=out_dir,
         tau_override=args.tau,
+        save_eval_vis=bool(args.save_eval_vis),
     )
     print(
         f"[tnt] scene={results['scene']} tau={results['tau']:.6g} "
