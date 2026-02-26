@@ -901,7 +901,7 @@ def main() -> None:
     c2w_np = np.stack(all_c2w, axis=0)
     hws_np = np.asarray(all_hws, dtype=np.int32)
 
-    mesh = _create_tsdf_mesh(
+    mesh_raw = _create_tsdf_mesh(
         depths_np=depths_np,
         colors_np=colors_np,
         Ks=Ks_np,
@@ -914,11 +914,16 @@ def main() -> None:
         mask_dilate=int(args.mask_dilate),
         aabb_bounds=aabb_bounds,
     )
-    mesh = _post_process_mesh(mesh=mesh, cluster_to_keep=int(args.post_process_clusters))
+    out_raw = output_dir / "tsdf_mesh.ply"
+    o3d.io.write_triangle_mesh(str(out_raw), mesh_raw)
+    print(f"Saved mesh: {out_raw}")
 
-    out_path = output_dir / "reconstructed_mesh.ply"
-    o3d.io.write_triangle_mesh(str(out_path), mesh)
-    print(f"Saved mesh: {out_path}")
+    mesh_post = _post_process_mesh(mesh=mesh_raw, cluster_to_keep=int(args.post_process_clusters))
+    mesh_post.compute_vertex_normals()
+
+    out_post = output_dir / "tsdf_mesh_post.ply"
+    o3d.io.write_triangle_mesh(str(out_post), mesh_post)
+    print(f"Saved mesh: {out_post}")
 
     if bool(args.delete_cache):
         try:

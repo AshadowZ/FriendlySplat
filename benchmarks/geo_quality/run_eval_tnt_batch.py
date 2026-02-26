@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import shlex
 import subprocess
@@ -26,12 +27,29 @@ _TNT_SCENES_DEFAULT: tuple[str, ...] = (
 
 def _default_tsdf_params_2dgs(*, scene: str) -> tuple[float, float, float]:
     """Return (voxel_length, sdf_trunc, depth_trunc) default TSDF parameters."""
-    # Start from a single conservative preset. Scene-scale adaptation (aabb_range)
-    # may increase voxel_length when available.
-    voxel_length = 0.002
-    sdf_trunc = 4.0 * voxel_length
-    # Align with PGSR's TnT TSDF setting.
-    depth_trunc = 20.0
+    # Align with 2DGS's TnT benchmark presets:
+    # - scripts/tnt_eval.py (render stage) uses two fixed TSDF configs.
+    s = str(scene)
+    tnt_360 = {"Barn", "Caterpillar", "Ignatius", "Truck"}
+    # "Church" is not used by 2DGS's TNT benchmark script, but we treat it as a
+    # large-scale scene here for consistency with its tau and typical usage.
+    tnt_large = {"Meetingroom", "Courthouse", "Church"}
+
+    if s in tnt_large:
+        voxel_length = 0.006
+        sdf_trunc = 0.024
+        depth_trunc = 4.5
+        return voxel_length, sdf_trunc, depth_trunc
+    if s in tnt_360:
+        voxel_length = 0.004
+        sdf_trunc = 0.016
+        depth_trunc = 3.0
+        return voxel_length, sdf_trunc, depth_trunc
+
+    # Fallback for non-standard scenes: use the 360 preset.
+    voxel_length = 0.004
+    sdf_trunc = 0.016
+    depth_trunc = 3.0
     return voxel_length, sdf_trunc, depth_trunc
 
 
@@ -61,66 +79,6 @@ def _split_csv(value: Optional[str]) -> list[str]:
     return items
 
 
-def _try_load_aabb_range(*, scene_dir: Path) -> Optional[np.ndarray]:
-    """Load aabb_range from transforms.json (PGSR-style) if present.
-
-    Expected JSON field: "aabb_range" with shape [3,2] (min/max per axis).
-    Returns float32 array [3,2] or None.
-    """
-    for name in ("transforms.json", "transforms_train.json"):
-        path = scene_dir / name
-        if not path.exists():
-            continue
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                meta = json.load(f)
-        except Exception:
-            continue
-        if not isinstance(meta, dict) or "aabb_range" not in meta:
-            continue
-        bounds = np.asarray(meta["aabb_range"], dtype=np.float32)
-        if bounds.shape == (2, 3):
-            bounds = bounds.T
-        if bounds.shape != (3, 2):
-            continue
-        return bounds
-    return None
-
-
-def _adapt_tsdf_params_with_aabb(
-    *,
-    bounds: np.ndarray,
-    voxel_length: float,
-    sdf_trunc: float,
-    sdf_trunc_from_user: bool,
-) -> tuple[float, float]:
-    """Adapt TSDF voxel size using aabb_range when available (PGSR-style)."""
-    bounds = np.asarray(bounds, dtype=np.float32)
-    if bounds.shape == (2, 3):
-        bounds = bounds.T
-    if bounds.shape != (3, 2):
-        return float(voxel_length), float(sdf_trunc)
-
-    extents = bounds[:, 1] - bounds[:, 0]
-    if not np.all(np.isfinite(extents)):
-        return float(voxel_length), float(sdf_trunc)
-    max_dis = float(np.max(extents))
-    if not (max_dis > 0.0):
-        return float(voxel_length), float(sdf_trunc)
-
-    base = float(voxel_length)
-    adapted = max(base, max_dis / 2048.0)
-    if adapted != base:
-        print(
-            f"[tsdf] aabb_range detected: max_dis={max_dis:.6g} -> voxel_length=max({base:.6g}, {max_dis/2048.0:.6g})={adapted:.6g}",
-            flush=True,
-        )
-    voxel_length = adapted
-    if not bool(sdf_trunc_from_user):
-        sdf_trunc = 4.0 * float(voxel_length)
-    return float(voxel_length), float(sdf_trunc)
-
-
 def _auto_tnt_dir(*, data_root: Path) -> Path:
     candidates = [
         data_root / "Tanks&Temples-Geo",
@@ -144,7 +102,83 @@ def _ply_path(*, result_dir: Path, max_steps: int) -> Path:
 
 
 def _mesh_path(*, result_dir: Path) -> Path:
-    return result_dir / "mesh" / "reconstructed_mesh.ply"
+    return result_dir / "mesh" / "tsdf_mesh_post.ply"
+
+
+def _list_images_flat(*, image_dir: Path) -> list[Path]:
+    exts = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
+    if not image_dir.is_dir():
+        return []
+    return sorted(p for p in image_dir.iterdir() if p.is_file() and p.suffix.lower() in exts)
+
+
+def _safe_rmtree_under(*, path: Path, root: Path) -> None:
+    """Delete a directory tree only if it's under a given root (best-effort safety)."""
+    p = Path(path).expanduser().resolve()
+    r = Path(root).expanduser().resolve()
+    try:
+        p.relative_to(r)
+    except Exception as e:
+        raise ValueError(f"Refusing to delete path outside root (path={p}, root={r}).") from e
+    if p.exists() and p.is_dir():
+        shutil.rmtree(p)
+
+
+def _prepare_tsdf_mask_from_invalid_mask(
+    *,
+    scene_dir: Path,
+    result_dir: Path,
+    invalid_mask_dir_name: str = "invalid_mask",
+) -> Optional[Path]:
+    """Invert invalid_mask into a TSDF object mask (255=keep/foreground, 0=discard)."""
+    try:
+        import cv2  # noqa: WPS433
+        import numpy as np  # noqa: WPS433
+    except ModuleNotFoundError:  # pragma: no cover
+        print("[mask] disabled (missing dependency: cv2)", flush=True)
+        return None
+
+    invalid_dir = scene_dir / str(invalid_mask_dir_name)
+    if not invalid_dir.exists() or not invalid_dir.is_dir():
+        return None
+
+    images = _list_images_flat(image_dir=scene_dir / "images")
+    if not images:
+        return None
+
+    out_dir = result_dir / "mesh" / "tsdf_obj_mask"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    missing = 0
+    for img in images:
+        stem = img.stem
+        src = invalid_dir / f"{stem}.png"
+        dst = out_dir / f"{stem}.png"
+        if not src.exists():
+            missing += 1
+            # Keep all pixels if invalid mask is missing for this frame.
+            im = cv2.imread(str(img), cv2.IMREAD_UNCHANGED)
+            if im is None:
+                raise FileNotFoundError(f"Failed to read image to infer size: {img}")
+            h, w = int(im.shape[0]), int(im.shape[1])
+            out = np.full((h, w), 255, dtype=np.uint8)
+        else:
+            m = cv2.imread(str(src), cv2.IMREAD_UNCHANGED)
+            if m is None:
+                raise FileNotFoundError(f"Failed to read invalid mask: {src}")
+            if m.ndim == 3:
+                m = m[:, :, 0]
+            # invalid_mask convention: 255=invalid, 0=valid.
+            valid = m.astype(np.uint8, copy=False) < 128
+            out = valid.astype(np.uint8) * 255
+        if not cv2.imwrite(str(dst), out):
+            raise RuntimeError(f"Failed to write TSDF mask: {dst}")
+
+    print(
+        f"[mask] enabled (invalid_mask inverted -> {out_dir}, missing={missing}/{len(images)})",
+        flush=True,
+    )
+    return out_dir
 
 
 def _run_tsdf_mesh(
@@ -159,7 +193,7 @@ def _run_tsdf_mesh(
     sdf_trunc: Optional[float],
     depth_trunc: Optional[float],
     post_process_clusters: int,
-    aabb_bounds: Optional[np.ndarray],
+    tsdf_mask_dir: Optional[Path],
     dry_run: bool,
 ) -> None:
     mesh_script = repo_root / "tools" / "mesh" / "tsdf_mesh_from_ply.py"
@@ -185,22 +219,14 @@ def _run_tsdf_mesh(
         "--output_dir",
         str(output_dir),
     ]
-    if aabb_bounds is not None:
-        bounds = np.asarray(aabb_bounds, dtype=np.float32)
-        if bounds.shape == (2, 3):
-            bounds = bounds.T
-        if bounds.shape != (3, 2):
-            raise ValueError(f"aabb_bounds must have shape (3,2), got {bounds.shape}")
-        aabb_min = bounds[:, 0].tolist()
-        aabb_max = bounds[:, 1].tolist()
-        cmd += ["--aabb_min", *(str(float(x)) for x in aabb_min)]
-        cmd += ["--aabb_max", *(str(float(x)) for x in aabb_max)]
     if voxel_length is not None:
         cmd += ["--voxel_length", str(float(voxel_length))]
     if sdf_trunc is not None:
         cmd += ["--sdf_trunc", str(float(sdf_trunc))]
     if depth_trunc is not None:
         cmd += ["--depth_trunc", str(float(depth_trunc))]
+    if tsdf_mask_dir is not None:
+        cmd += ["--mask_dir", str(tsdf_mask_dir), "--mask_dilate", "0"]
 
     print(f"[mesh] {_format_cmd(cmd)}", flush=True)
     if dry_run:
@@ -215,6 +241,7 @@ def _run_tnt_eval(
     traj_path: Path,
     mesh_path: Path,
     out_dir: Path,
+    save_eval_vis: bool,
     dry_run: bool,
 ) -> None:
     eval_py = repo_root / "benchmarks" / "geo_quality" / "tnt_eval" / "run.py"
@@ -233,10 +260,14 @@ def _run_tnt_eval(
         "--out-dir",
         str(out_dir),
     ]
+    if bool(save_eval_vis):
+        cmd.append("--save-eval-vis")
     print(f"[tnt] {_format_cmd(cmd)}", flush=True)
     if dry_run:
         return
-    subprocess.run(cmd, check=True, cwd=str(eval_py.parent))
+    env = dict(os.environ)
+    env["OMP_NUM_THREADS"] = "4"
+    subprocess.run(cmd, check=True, cwd=str(eval_py.parent), env=env)
 
 
 def _load_results_json(path: Path) -> dict:
@@ -303,13 +334,19 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--tsdf-render-factor",
         type=int,
-        default=1,
+        default=2,
         help="Render downscale factor for TSDF meshing (forwarded to tsdf_mesh_from_ply.py as --resolution).",
     )
     parser.add_argument("--voxel-length", type=float, default=None)
     parser.add_argument("--sdf-trunc", type=float, default=None)
     parser.add_argument("--depth-trunc", type=float, default=None)
     parser.add_argument("--post-process-clusters", type=int, default=1)
+    parser.add_argument(
+        "--save-eval-vis",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Save precision/recall colored point clouds under each eval_tnt/ dir (default: off).",
+    )
 
     parser.add_argument(
         "--skip-existing-mesh",
@@ -367,8 +404,6 @@ def main(argv: list[str]) -> int:
 
         mesh = _mesh_path(result_dir=result_dir)
         if not (bool(args.skip_existing_mesh) and mesh.exists()):
-            bounds = _try_load_aabb_range(scene_dir=scene_dir)
-            sdf_from_user = args.sdf_trunc is not None
             voxel_length = args.voxel_length
             sdf_trunc = args.sdf_trunc
             depth_trunc = args.depth_trunc
@@ -381,14 +416,7 @@ def main(argv: list[str]) -> int:
                 if depth_trunc is None:
                     depth_trunc = d
 
-            if bounds is not None:
-                voxel_length, sdf_trunc = _adapt_tsdf_params_with_aabb(
-                    bounds=bounds,
-                    voxel_length=float(voxel_length),
-                    sdf_trunc=float(sdf_trunc),
-                    sdf_trunc_from_user=bool(sdf_from_user),
-                )
-
+            tsdf_mask_dir = _prepare_tsdf_mask_from_invalid_mask(scene_dir=scene_dir, result_dir=result_dir)
             _run_tsdf_mesh(
                 repo_root=repo_root,
                 ply_path=ply,
@@ -400,9 +428,12 @@ def main(argv: list[str]) -> int:
                 sdf_trunc=float(sdf_trunc),
                 depth_trunc=float(depth_trunc),
                 post_process_clusters=int(args.post_process_clusters),
-                aabb_bounds=bounds,
+                tsdf_mask_dir=tsdf_mask_dir,
                 dry_run=bool(args.dry_run),
             )
+            if tsdf_mask_dir is not None and not bool(args.dry_run):
+                _safe_rmtree_under(path=tsdf_mask_dir, root=result_dir)
+                print(f"[mask] deleted {tsdf_mask_dir}", flush=True)
 
         eval_out_dir = result_dir / "eval_tnt"
         results_json = eval_out_dir / "results.json"
@@ -440,6 +471,7 @@ def main(argv: list[str]) -> int:
             traj_path=traj_path,
             mesh_path=mesh,
             out_dir=eval_out_dir,
+            save_eval_vis=bool(args.save_eval_vis),
             dry_run=bool(args.dry_run),
         )
 

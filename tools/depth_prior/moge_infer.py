@@ -239,8 +239,8 @@ def run_moge_infer(
     factor = int(factor)
     if factor != 1:
         print(
-            f"[WARN] factor={factor} is supported for this tool, but FriendlySplat training "
-            "currently requires factor=1 when using auxiliary priors."
+            f"[WARN] factor={factor}: priors will be generated at images_{factor}/ resolution (if present). "
+            "Ensure training uses the same --data.data-factor so priors match the rendered image size."
         )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
