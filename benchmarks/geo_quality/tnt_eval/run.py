@@ -32,7 +32,9 @@ def _registration_module(o3d):
         return reg
     reg = getattr(o3d, "registration", None)
     if reg is None:
-        raise RuntimeError("Open3D registration module not found (unsupported Open3D version).")
+        raise RuntimeError(
+            "Open3D registration module not found (unsupported Open3D version)."
+        )
     return reg
 
 
@@ -41,7 +43,9 @@ def read_trajectory(path: str) -> list[CameraPose]:
     if not p.is_file():
         raise FileNotFoundError(f"Trajectory file not found: {p}")
 
-    lines = [ln.strip() for ln in p.read_text(encoding="utf-8", errors="strict").splitlines()]
+    lines = [
+        ln.strip() for ln in p.read_text(encoding="utf-8", errors="strict").splitlines()
+    ]
     lines = [ln for ln in lines if ln]
     out: list[CameraPose] = []
     i = 0
@@ -140,7 +144,9 @@ def _crop_and_downsample(
 ):
     pcd_copy = copy.deepcopy(pcd)
     pcd_copy.transform(trans)  # Open3D transforms in-place
-    pcd_crop = crop_volume.crop_point_cloud(pcd_copy) if crop_volume is not None else pcd_copy
+    pcd_crop = (
+        crop_volume.crop_point_cloud(pcd_copy) if crop_volume is not None else pcd_copy
+    )
 
     if down_sample_method == "voxel":
         return pcd_crop.voxel_down_sample(float(voxel_size))
@@ -326,7 +332,9 @@ def _evaluate_fscore(
         t_vis.colors = o3d.utility.Vector3dVector(c2)
         o3d.io.write_point_cloud(str(out_dir / "recall.ply"), t_vis)
 
-    return _get_f1(threshold=float(threshold), dist_est_to_gt=dist1, dist_gt_to_est=dist2)
+    return _get_f1(
+        threshold=float(threshold), dist_est_to_gt=dist1, dist_gt_to_est=dist2
+    )
 
 
 def _mesh_to_pcd(*, mesh_path: Path, o3d):
@@ -467,7 +475,9 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--traj-path", type=str, required=True)
     parser.add_argument("--ply-path", type=str, required=True)
     parser.add_argument("--out-dir", type=str, default=None)
-    parser.add_argument("--tau", type=float, default=None, help="Override scene tau threshold.")
+    parser.add_argument(
+        "--tau", type=float, default=None, help="Override scene tau threshold."
+    )
     parser.add_argument(
         "--save-eval-vis",
         action="store_true",

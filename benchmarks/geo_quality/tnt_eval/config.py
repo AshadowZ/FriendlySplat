@@ -8,4 +8,3 @@ scenes_tau_dict = {
     "Meetingroom": 0.01,
     "Truck": 0.005,
 }
-

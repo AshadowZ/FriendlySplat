@@ -34,4 +34,3 @@ def compute_relocation(
         opacities, scales, ratios, binoms, int(n_max)
     )
     return new_opacities, new_scales
-

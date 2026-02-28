@@ -106,7 +106,13 @@ def main(argv: list[str]) -> int:
             "scan122",
         ]
     elif scans_raw.lower() == "all":
-        scans = sorted({p.name for p in dtu_dir.iterdir() if p.is_dir() and p.name.startswith("scan")})
+        scans = sorted(
+            {
+                p.name
+                for p in dtu_dir.iterdir()
+                if p.is_dir() and p.name.startswith("scan")
+            }
+        )
     else:
         scans = []
         for part in scans_raw.split(","):
@@ -134,7 +140,9 @@ def main(argv: list[str]) -> int:
     if extra_args and extra_args[0] == "--":
         extra_args = extra_args[1:]
 
-    max_steps_override = _read_flag_value(extra_args=extra_args, flag="--optim.max-steps")
+    max_steps_override = _read_flag_value(
+        extra_args=extra_args, flag="--optim.max-steps"
+    )
     max_steps = int(max_steps_override) if max_steps_override is not None else 30_000
 
     out_root = data_root / str(args.out_dir_name)
@@ -163,10 +171,12 @@ def main(argv: list[str]) -> int:
             p.is_file() and p.suffix.lower() in exts_img for p in images_2_dir.iterdir()
         )
         have_normals = moge_normal_dir.is_dir() and any(
-            p.is_file() and p.suffix.lower() == ".png" for p in moge_normal_dir.iterdir()
+            p.is_file() and p.suffix.lower() == ".png"
+            for p in moge_normal_dir.iterdir()
         )
         have_invalid = invalid_mask_dir.is_dir() and any(
-            p.is_file() and p.suffix.lower() == ".png" for p in invalid_mask_dir.iterdir()
+            p.is_file() and p.suffix.lower() == ".png"
+            for p in invalid_mask_dir.iterdir()
         )
 
         if not (have_images_2 and have_normals and have_invalid):
@@ -188,7 +198,9 @@ def main(argv: list[str]) -> int:
             *(["--verbose"] if bool(args.verbose) else []),
             *(["--dry-run"] if bool(args.dry_run) else []),
         ]
-        print(f"[{tag}] preprocess priors: {len(scans_need_preprocess)} scans", flush=True)
+        print(
+            f"[{tag}] preprocess priors: {len(scans_need_preprocess)} scans", flush=True
+        )
         print(f"[cmd] {_format_cmd(preprocess_cmd)}", flush=True)
         if not bool(args.dry_run):
             proc = subprocess.run(preprocess_cmd, check=False, cwd=str(repo_root))
@@ -229,19 +241,27 @@ def main(argv: list[str]) -> int:
             # ----------------------------
             # I/O
             # ----------------------------
-            "--io.data-dir", str(scene_dir),
-            "--io.result-dir", str(result_dir),
-            "--io.device", "cuda:0",
+            "--io.data-dir",
+            str(scene_dir),
+            "--io.result-dir",
+            str(result_dir),
+            "--io.device",
+            "cuda:0",
             "--io.export-ply",
-            "--io.ply-steps", str(int(max_steps)),
+            "--io.ply-steps",
+            str(int(max_steps)),
             # ----------------------------
             # Data
             # ----------------------------
-            "--data.data-factor", "2",
-            "--data.preload", "cuda",
+            "--data.data-factor",
+            "2",
+            "--data.preload",
+            "cuda",
             "--data.no-prefetch-to-gpu",
-            "--data.num-workers", "0",
-            "--data.normal-dir-name", "moge_normal",
+            "--data.num-workers",
+            "0",
+            "--data.normal-dir-name",
+            "moge_normal",
             # ----------------------------
             # Postprocess
             # ----------------------------
@@ -249,22 +269,31 @@ def main(argv: list[str]) -> int:
             # ----------------------------
             # Optim
             # ----------------------------
-            "--optim.max-steps", str(int(max_steps)),
+            "--optim.max-steps",
+            str(int(max_steps)),
             # ----------------------------
             # Strategy
             # ----------------------------
-            "--strategy.impl", "improved",
+            "--strategy.impl",
+            "improved",
             "--strategy.absgrad",
-            "--strategy.densification-budget", "1000000",
-            "--strategy.grow-grad2d", "0.0003",
-            "--strategy.prune-opa", "0.05",
-            "--strategy.prune-scale3d", "0.1",
+            "--strategy.densification-budget",
+            "1000000",
+            "--strategy.grow-grad2d",
+            "0.0003",
+            "--strategy.prune-opa",
+            "0.05",
+            "--strategy.prune-scale3d",
+            "0.1",
             # ----------------------------
             # Regularization
             # ----------------------------
-            "--reg.surf_normal_loss_activation_step", "1000",
-            "--reg.flat-reg-weight", "1.0",
-            "--reg.scale-ratio-reg-weight", "1.0",
+            "--reg.surf_normal_loss_activation_step",
+            "1000",
+            "--reg.flat-reg-weight",
+            "1.0",
+            "--reg.scale-ratio-reg-weight",
+            "1.0",
             # ----------------------------
             # Viewer
             # ----------------------------

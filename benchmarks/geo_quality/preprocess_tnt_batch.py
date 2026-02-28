@@ -25,9 +25,7 @@ def _ensure_images_2(
 
     exts = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
     images = sorted(
-        p
-        for p in src_dir.iterdir()
-        if p.is_file() and p.suffix.lower() in exts
+        p for p in src_dir.iterdir() if p.is_file() and p.suffix.lower() in exts
     )
     if not images:
         raise FileNotFoundError(f"No images found under: {src_dir}")
@@ -70,7 +68,10 @@ def _ensure_images_2(
             raise RuntimeError(f"Failed to write downsampled image: {out}")
         wrote += 1
 
-    print(f"[images_2] {scene_dir.name}: wrote={wrote} (skip_existing={bool(skip_existing)})", flush=True)
+    print(
+        f"[images_2] {scene_dir.name}: wrote={wrote} (skip_existing={bool(skip_existing)})",
+        flush=True,
+    )
 
 
 def _run_one_scene(*, scene_dir: Path, verbose: bool, dry_run: bool) -> None:
@@ -180,7 +181,13 @@ def main(argv: list[str]) -> int:
             "Truck",
         ]
     elif scenes_raw.lower() == "all":
-        scenes = sorted({p.name for p in tnt_dir.iterdir() if p.is_dir() and not p.name.startswith(".")})
+        scenes = sorted(
+            {
+                p.name
+                for p in tnt_dir.iterdir()
+                if p.is_dir() and not p.name.startswith(".")
+            }
+        )
     else:
         scenes = [s.strip() for s in scenes_raw.split(",") if s.strip()]
     if not scenes:
@@ -196,7 +203,11 @@ def main(argv: list[str]) -> int:
         image_dir = scene_dir / "images"
         exts = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
         stems = (
-            [p.stem for p in sorted(image_dir.iterdir()) if p.is_file() and p.suffix.lower() in exts]
+            [
+                p.stem
+                for p in sorted(image_dir.iterdir())
+                if p.is_file() and p.suffix.lower() in exts
+            ]
             if image_dir.is_dir()
             else []
         )
@@ -211,13 +222,23 @@ def main(argv: list[str]) -> int:
                 dry_run=bool(args.dry_run),
             )
             if bool(args.skip_existing):
-                have_normals = all((scene_dir / "moge_normal" / f"{s}.png").exists() for s in stems)
-                have_depths = all((scene_dir / "moge_depth" / f"{s}.npy").exists() for s in stems)
-                have_invalid = all((scene_dir / "invalid_mask" / f"{s}.png").exists() for s in stems)
+                have_normals = all(
+                    (scene_dir / "moge_normal" / f"{s}.png").exists() for s in stems
+                )
+                have_depths = all(
+                    (scene_dir / "moge_depth" / f"{s}.npy").exists() for s in stems
+                )
+                have_invalid = all(
+                    (scene_dir / "invalid_mask" / f"{s}.png").exists() for s in stems
+                )
                 if have_normals and have_depths and have_invalid:
                     print(f"[skip] {scene} (priors already exist)", flush=True)
                     continue
-            _run_one_scene(scene_dir=scene_dir, verbose=bool(args.verbose), dry_run=bool(args.dry_run))
+            _run_one_scene(
+                scene_dir=scene_dir,
+                verbose=bool(args.verbose),
+                dry_run=bool(args.dry_run),
+            )
             print(f"[ok] {scene}", flush=True)
         except Exception as exc:
             any_failed = True

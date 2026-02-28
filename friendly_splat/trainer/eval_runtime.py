@@ -117,13 +117,15 @@ def _get_eval_metrics(
                 param.requires_grad_(False)
 
             window_size = 11
-            base_window = create_inria_ssim_window(window_size=window_size, channel=3).to(
-                device=device
-            )
+            base_window = create_inria_ssim_window(
+                window_size=window_size, channel=3
+            ).to(device=device)
 
             psnr_bchw = partial(psnr_inria_bchw, data_range=1.0)
 
-            def ssim_bchw(pred_rgb_bchw: torch.Tensor, gt_rgb_bchw: torch.Tensor) -> torch.Tensor:
+            def ssim_bchw(
+                pred_rgb_bchw: torch.Tensor, gt_rgb_bchw: torch.Tensor
+            ) -> torch.Tensor:
                 return ssim_inria_bchw(
                     pred_rgb_bchw,
                     gt_rgb_bchw,
@@ -131,8 +133,11 @@ def _get_eval_metrics(
                     window_size=window_size,
                 )
 
-            def lpips_bchw(pred_rgb_bchw: torch.Tensor, gt_rgb_bchw: torch.Tensor) -> torch.Tensor:
+            def lpips_bchw(
+                pred_rgb_bchw: torch.Tensor, gt_rgb_bchw: torch.Tensor
+            ) -> torch.Tensor:
                 return lpips_module(pred_rgb_bchw, gt_rgb_bchw).mean()
+
         else:
             raise ValueError(
                 f"Unknown metrics_backend {backend_s!r} (expected 'gsplat' or 'inria')."

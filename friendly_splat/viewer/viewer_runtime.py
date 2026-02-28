@@ -114,7 +114,13 @@ class ViewerRuntime:
         if self.disable_viewer:
             return
 
-        if viser is None or vtf is None or uplot is None or GsplatViewer is None or np is None:
+        if (
+            viser is None
+            or vtf is None
+            or uplot is None
+            or GsplatViewer is None
+            or np is None
+        ):
             detail = None
             if _GSPLAT_VIEWER_IMPORT_ERROR is not None:
                 detail = f"{type(_GSPLAT_VIEWER_IMPORT_ERROR).__name__}: {_GSPLAT_VIEWER_IMPORT_ERROR}"

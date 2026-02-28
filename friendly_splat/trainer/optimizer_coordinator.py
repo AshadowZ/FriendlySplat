@@ -207,7 +207,10 @@ class OptimizerCoordinator:
         iter1 = int(step) + 1
         if iter1 % update_every == 0:
             return True
-        if bool(self.optim_cfg.mu_enable) and int(step) == int(self.optim_cfg.max_steps) - 1:
+        if (
+            bool(self.optim_cfg.mu_enable)
+            and int(step) == int(self.optim_cfg.max_steps) - 1
+        ):
             return True
         return False
 
@@ -314,7 +317,8 @@ class OptimizerCoordinator:
                             self._gns_opacity_visibility is None
                             or int(self._gns_opacity_visibility.numel())
                             != int(opacity_logits.numel())
-                            or self._gns_opacity_visibility.device != opacity_logits.device
+                            or self._gns_opacity_visibility.device
+                            != opacity_logits.device
                         ):
                             self._gns_opacity_visibility = torch.ones_like(
                                 opacity_logits, dtype=torch.bool

@@ -34,4 +34,3 @@ __all__ = [
     "get_state_dict",
     "normalize_activation",
 ]
-

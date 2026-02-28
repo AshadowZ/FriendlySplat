@@ -86,7 +86,11 @@ def _get_image_size_for_index(parsed_scene: Any, image_index: int) -> tuple[int,
         sizes = meta.get("image_sizes")
         if sizes is not None:
             arr = np.asarray(sizes)
-            if arr.ndim == 2 and arr.shape[1] == 2 and int(image_index) < int(arr.shape[0]):
+            if (
+                arr.ndim == 2
+                and arr.shape[1] == 2
+                and int(image_index) < int(arr.shape[0])
+            ):
                 w = int(arr[int(image_index), 0])
                 h = int(arr[int(image_index), 1])
                 if w > 0 and h > 0:
@@ -205,7 +209,9 @@ def maybe_hard_prune_after_densify(
 
     # Linear target: reach final_budget at the last pruning event.
     frac = float(event_index + 1) / float(num_events)
-    target_count = int(round(float(start_count) - float(start_count - target_budget) * frac))
+    target_count = int(
+        round(float(start_count) - float(start_count - target_budget) * frac)
+    )
     target_count = max(int(target_budget), min(int(start_count), int(target_count)))
 
     n_prune = int(max(0, int(n_before) - int(target_count)))

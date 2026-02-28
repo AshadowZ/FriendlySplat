@@ -71,7 +71,9 @@ def similarity_from_cameras(c2w, strict_scaling=False, center_method="focus"):
     return transform, scale
 
 
-def similarity_from_cameras_no_rotation(c2w, strict_scaling=False, center_method="focus"):
+def similarity_from_cameras_no_rotation(
+    c2w, strict_scaling=False, center_method="focus"
+):
     """Get a similarity transform (translation + uniform scale only) from camera poses.
 
     This variant intentionally avoids any world rotation. It is useful when you want

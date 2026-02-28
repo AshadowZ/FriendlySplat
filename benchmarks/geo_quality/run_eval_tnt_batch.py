@@ -62,7 +62,9 @@ def _safe_rmtree_under(*, path: Path, root: Path) -> None:
     try:
         p.relative_to(r)
     except Exception as e:
-        raise ValueError(f"Refusing to delete path outside root (path={p}, root={r}).") from e
+        raise ValueError(
+            f"Refusing to delete path outside root (path={p}, root={r})."
+        ) from e
     if p.exists() and p.is_dir():
         shutil.rmtree(p)
 
@@ -94,9 +96,7 @@ def _prepare_tsdf_mask_from_invalid_mask(
     exts = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
     images = (
         sorted(
-            p
-            for p in image_dir.iterdir()
-            if p.is_file() and p.suffix.lower() in exts
+            p for p in image_dir.iterdir() if p.is_file() and p.suffix.lower() in exts
         )
         if image_dir.is_dir()
         else []
@@ -189,11 +189,7 @@ def _run_tsdf_mesh(
             if voxel_length is not None
             else []
         ),
-        *(
-            ["--sdf_trunc", str(float(sdf_trunc))]
-            if sdf_trunc is not None
-            else []
-        ),
+        *(["--sdf_trunc", str(float(sdf_trunc))] if sdf_trunc is not None else []),
         *(
             ["--depth_trunc", str(float(depth_trunc))]
             if depth_trunc is not None
@@ -258,7 +254,9 @@ def _fmt_cell(value: Optional[float]) -> str:
     return f"{float(value):.4f}"
 
 
-def _write_summary_md(*, rows: list[_EvalRow], summary_path: Path, exp_name: str, max_steps: int) -> None:
+def _write_summary_md(
+    *, rows: list[_EvalRow], summary_path: Path, exp_name: str, max_steps: int
+) -> None:
     rows_sorted = sorted(rows, key=lambda r: str(r.scene).lower())
     valid_f1 = [float(r.fscore) for r in rows_sorted if r.fscore is not None]
     valid_p = [float(r.precision) for r in rows_sorted if r.precision is not None]
@@ -382,7 +380,13 @@ def main(argv: list[str]) -> int:
             "Truck",
         ]
     elif scenes_raw.lower() == "all":
-        scenes = sorted({p.name for p in tnt_dir.iterdir() if p.is_dir() and not p.name.startswith(".")})
+        scenes = sorted(
+            {
+                p.name
+                for p in tnt_dir.iterdir()
+                if p.is_dir() and not p.name.startswith(".")
+            }
+        )
     else:
         scenes = [s.strip() for s in scenes_raw.split(",") if s.strip()]
     if not scenes:
@@ -445,7 +449,9 @@ def main(argv: list[str]) -> int:
             rows.append(
                 _EvalRow(
                     scene=str(scene),
-                    precision=float(stats.get("precision")) if "precision" in stats else None,
+                    precision=float(stats.get("precision"))
+                    if "precision" in stats
+                    else None,
                     recall=float(stats.get("recall")) if "recall" in stats else None,
                     fscore=float(stats.get("fscore")) if "fscore" in stats else None,
                     tau=float(stats.get("tau")) if "tau" in stats else None,
@@ -488,7 +494,9 @@ def main(argv: list[str]) -> int:
         rows.append(
             _EvalRow(
                 scene=str(scene),
-                precision=float(stats.get("precision")) if "precision" in stats else None,
+                precision=float(stats.get("precision"))
+                if "precision" in stats
+                else None,
                 recall=float(stats.get("recall")) if "recall" in stats else None,
                 fscore=float(stats.get("fscore")) if "fscore" in stats else None,
                 tau=float(stats.get("tau")) if "tau" in stats else None,

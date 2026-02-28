@@ -66,7 +66,9 @@ class NaturalSelectionPolicy:
         self.final_budget = int(self.cfg.final_budget)
         self.opacity_reg_weight = float(self.cfg.opacity_reg_weight)
 
-        self.state = NaturalSelectionState(opacity_reg_weight=float(self.opacity_reg_weight))
+        self.state = NaturalSelectionState(
+            opacity_reg_weight=float(self.opacity_reg_weight)
+        )
         if self.enable and self.verbose:
             print(
                 f"[GNS] Enabled: densify_stop_step={int(self.densify_stop_step)}, "
@@ -212,7 +214,10 @@ class NaturalSelectionPolicy:
         current_gs_count = int(params["opacities"].numel())
 
         # Early stop: if we're already close to the budget, force a final prune and finish.
-        if int(train_step) > int(self.reg_start) and current_gs_count < float(self.final_budget) * 1.05:
+        if (
+            int(train_step) > int(self.reg_start)
+            and current_gs_count < float(self.final_budget) * 1.05
+        ):
             if self.verbose:
                 print(
                     f"[GNS] Count {current_gs_count} < 1.05 * Budget. "

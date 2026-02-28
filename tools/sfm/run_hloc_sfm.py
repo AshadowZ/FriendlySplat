@@ -58,7 +58,11 @@ def copy_images_fast(
 
     image_exts = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif"}
     image_paths = sorted(
-        [p for p in image_dir.iterdir() if p.is_file() and p.suffix.lower() in image_exts]
+        [
+            p
+            for p in image_dir.iterdir()
+            if p.is_file() and p.suffix.lower() in image_exts
+        ]
     )
     if not image_paths:
         raise RuntimeError(f"No images found in {image_dir}")
@@ -101,7 +105,13 @@ def split_panoramas(
     _ensure_empty_dir(output_dir, overwrite=overwrite)
 
     image_exts = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif"}
-    pano_paths = sorted([p for p in pano_dir.iterdir() if p.is_file() and p.suffix.lower() in image_exts])
+    pano_paths = sorted(
+        [
+            p
+            for p in pano_dir.iterdir()
+            if p.is_file() and p.suffix.lower() in image_exts
+        ]
+    )
     if not pano_paths:
         raise RuntimeError(f"No images found in {pano_dir}")
 
@@ -189,8 +199,15 @@ def main(argv: list[str]) -> int:
     from tools.sfm.hloc_utils import CameraModel, run_hloc
 
     parser = argparse.ArgumentParser(description="Run SfM using HLOC + pycolmap.")
-    parser.add_argument("--input-image-dir", type=Path, required=True, help="Path to original images.")
-    parser.add_argument("--output-dir", type=Path, required=True, help="Output directory (exported COLMAP scene root).")
+    parser.add_argument(
+        "--input-image-dir", type=Path, required=True, help="Path to original images."
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        required=True,
+        help="Output directory (exported COLMAP scene root).",
+    )
     parser.add_argument(
         "--overwrite",
         action="store_true",
@@ -271,7 +288,9 @@ def main(argv: list[str]) -> int:
     keep_work_dir: bool = bool(args.keep_work_dir)
 
     if not input_image_dir.is_dir():
-        raise FileNotFoundError(f"--input-image-dir is not a directory: {input_image_dir}")
+        raise FileNotFoundError(
+            f"--input-image-dir is not a directory: {input_image_dir}"
+        )
     output_dir.mkdir(parents=True, exist_ok=True)
 
     work_dir = output_dir / "_sfm_work"
@@ -326,4 +345,3 @@ def main(argv: list[str]) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))
-

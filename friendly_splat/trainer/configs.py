@@ -524,7 +524,10 @@ def validate_train_config(cfg: TrainConfig) -> None:
         raise ValueError(f"world_size must be > 0, got {cfg.world_size}")
     if cfg.optim.max_steps <= 0:
         raise ValueError(f"optim.max_steps must be > 0, got {cfg.optim.max_steps}")
-    if int(cfg.reg.depth_loss_stop_step) != -1 and int(cfg.reg.depth_loss_stop_step) < 0:
+    if (
+        int(cfg.reg.depth_loss_stop_step) != -1
+        and int(cfg.reg.depth_loss_stop_step) < 0
+    ):
         raise ValueError(
             f"reg.depth_loss_stop_step must be -1 or >= 0, got {cfg.reg.depth_loss_stop_step}"
         )
@@ -597,9 +600,7 @@ def validate_train_config(cfg: TrainConfig) -> None:
     hp = cfg.hard_prune
     if bool(hp.enable):
         if int(hp.start_step) <= 0:
-            raise ValueError(
-                f"hard_prune.start_step must be > 0, got {hp.start_step}"
-            )
+            raise ValueError(f"hard_prune.start_step must be > 0, got {hp.start_step}")
         # `strategy.refine_stop_iter` uses 0-based `step` units. Hard prune uses 1-based
         # training steps, so the strict "after densification" condition is:
         #   start_step >= refine_stop_iter + 1  <=>  start_step > refine_stop_iter

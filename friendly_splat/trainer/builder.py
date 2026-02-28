@@ -249,7 +249,9 @@ def build_training_context(cfg: TrainConfig) -> TrainingContext:
         )
     # Strategy sanity requires access to raw splat tensors + the per-splat optimizers.
     strategy.check_sanity(gaussian_model.splats, optimizer_bundle.splat_optimizers)
-    strategy_state = strategy.initialize_state(scene_scale=float(parsed_scene.scene_scale))
+    strategy_state = strategy.initialize_state(
+        scene_scale=float(parsed_scene.scene_scale)
+    )
 
     optimizer_coordinator = OptimizerCoordinator(
         optim_cfg=cfg.optim,

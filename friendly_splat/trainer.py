@@ -92,7 +92,9 @@ class Trainer:
 
         # Similarity transform applied by the dataparser (COLMAP -> training space).
         # Used for exporting artifacts (e.g. PLY) in the original COLMAP coordinate system.
-        self.scene_transform = torch.from_numpy(self.dataset.parsed_scene.transform).float()
+        self.scene_transform = torch.from_numpy(
+            self.dataset.parsed_scene.transform
+        ).float()
 
         torch.backends.cudnn.benchmark = True
 
@@ -295,7 +297,9 @@ class Trainer:
 
         wall_total_s = float(time.perf_counter() - float(wall_start_s))
         print(f"Training time: wall={wall_total_s:.2f}s", flush=True)
-        if tb_writer.should_log(step=int(cfg.optim.max_steps) - 1, respect_every_n=False):
+        if tb_writer.should_log(
+            step=int(cfg.optim.max_steps) - 1, respect_every_n=False
+        ):
             tb_writer.log_scalars(
                 step=int(cfg.optim.max_steps) - 1,
                 scalars={"total_time_s": wall_total_s},

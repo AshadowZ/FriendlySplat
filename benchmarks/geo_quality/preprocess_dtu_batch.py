@@ -34,7 +34,9 @@ def _ensure_images_2(
         ) from exc
 
     exts = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
-    images = sorted(p for p in src_dir.iterdir() if p.is_file() and p.suffix.lower() in exts)
+    images = sorted(
+        p for p in src_dir.iterdir() if p.is_file() and p.suffix.lower() in exts
+    )
     if not images:
         raise FileNotFoundError(f"No images found under: {src_dir}")
 
@@ -76,7 +78,9 @@ def _ensure_images_2(
         new_h = max(1, int(round(float(h) / 2.0)))
         resized_bgr = None
         if need_image:
-            resized_bgr = cv2.resize(img_bgr, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
+            resized_bgr = cv2.resize(
+                img_bgr, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4
+            )
 
         mask_u8 = None
         if need_mask:
@@ -93,7 +97,9 @@ def _ensure_images_2(
                     maxv = float(np.nanmax(alpha_f)) if alpha_f.size > 0 else 0.0
                     if maxv > 1.0:
                         alpha_f = alpha_f / max(maxv, 1e-6)
-                alpha_ds = cv2.resize(alpha_f, (new_w, new_h), interpolation=cv2.INTER_AREA)
+                alpha_ds = cv2.resize(
+                    alpha_f, (new_w, new_h), interpolation=cv2.INTER_AREA
+                )
                 mask_u8 = (alpha_ds < 0.5).astype(np.uint8) * 255
 
         if dry_run:
@@ -252,7 +258,13 @@ def main(argv: list[str]) -> int:
             "scan122",
         ]
     elif scans_raw.lower() == "all":
-        scans = sorted({p.name for p in dtu_dir.iterdir() if p.is_dir() and p.name.startswith("scan")})
+        scans = sorted(
+            {
+                p.name
+                for p in dtu_dir.iterdir()
+                if p.is_dir() and p.name.startswith("scan")
+            }
+        )
     else:
         scans = []
         for part in scans_raw.split(","):
@@ -291,11 +303,10 @@ def main(argv: list[str]) -> int:
             moge_done = bool(marker_normals.exists()) and all(
                 (scene_dir / "moge_normal" / f"{s}.png").exists() for s in stems
             )
-            mask_done = (
-                (not bool(args.export_alpha_mask))
-                or (
-                    bool(marker_masks.exists())
-                    and all((scene_dir / "invalid_mask" / f"{s}.png").exists() for s in stems)
+            mask_done = (not bool(args.export_alpha_mask)) or (
+                bool(marker_masks.exists())
+                and all(
+                    (scene_dir / "invalid_mask" / f"{s}.png").exists() for s in stems
                 )
             )
 
@@ -305,12 +316,20 @@ def main(argv: list[str]) -> int:
 
             print(f"[run] {scan}", flush=True)
             if not moge_done:
-                _run_one_scene(scene_dir=scene_dir, verbose=bool(args.verbose), dry_run=bool(args.dry_run))
+                _run_one_scene(
+                    scene_dir=scene_dir,
+                    verbose=bool(args.verbose),
+                    dry_run=bool(args.dry_run),
+                )
                 if not bool(args.dry_run):
                     marker_normals.parent.mkdir(parents=True, exist_ok=True)
                     marker_normals.write_text("factor=2\n", encoding="utf-8")
 
-            if bool(args.export_alpha_mask) and not mask_done and not bool(args.dry_run):
+            if (
+                bool(args.export_alpha_mask)
+                and not mask_done
+                and not bool(args.dry_run)
+            ):
                 if not bool(args.dry_run):
                     marker_masks.parent.mkdir(parents=True, exist_ok=True)
                     marker_masks.write_text("factor=2\n", encoding="utf-8")

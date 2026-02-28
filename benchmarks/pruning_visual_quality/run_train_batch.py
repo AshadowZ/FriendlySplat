@@ -117,7 +117,9 @@ def _parse_scene_int_map(value: Optional[str]) -> dict[str, int]:
     out: dict[str, int] = {}
     for part in _split_csv(value):
         if "=" not in part:
-            raise ValueError(f"Invalid scene mapping entry {part!r}. Expected 'scene=int'.")
+            raise ValueError(
+                f"Invalid scene mapping entry {part!r}. Expected 'scene=int'."
+            )
         scene, raw = part.split("=", 1)
         scene = scene.strip()
         if not scene:
@@ -370,7 +372,9 @@ def main(argv: list[str]) -> int:
     if include_datasets_raw.lower() == "all":
         dataset_keys = list(_DATASETS.keys())
     else:
-        dataset_keys = [_normalize_dataset_key(x) for x in _split_csv(include_datasets_raw)]
+        dataset_keys = [
+            _normalize_dataset_key(x) for x in _split_csv(include_datasets_raw)
+        ]
 
     include_scenes = set(_split_csv(args.scenes))
     exclude_scenes = set(_split_csv(args.exclude_scenes))
@@ -415,7 +419,9 @@ def main(argv: list[str]) -> int:
             raise KeyError(f"Unknown dataset key {dataset_key!r}")
 
         for scene in _iter_selected_scenes(
-            dataset=dataset, include_scenes=include_scenes, exclude_scenes=exclude_scenes
+            dataset=dataset,
+            include_scenes=include_scenes,
+            exclude_scenes=exclude_scenes,
         ):
             dataset_dir = data_root / dataset.dir_name
             scene_data_dir = dataset_dir / scene
@@ -579,7 +585,9 @@ def main(argv: list[str]) -> int:
                     ]
                 elif str(pruner) == "speedy":
                     start_step_1based = int(densify_stop_step) + 1
-                    stop_step_1based = int(min(int(args.speedy_stop_step), int(args.max_steps)))
+                    stop_step_1based = int(
+                        min(int(args.speedy_stop_step), int(args.max_steps))
+                    )
                     if stop_step_1based < start_step_1based:
                         stop_step_1based = int(start_step_1based)
                     cmd += [

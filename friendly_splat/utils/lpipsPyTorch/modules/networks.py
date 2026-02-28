@@ -36,10 +36,10 @@ class BaseNet(nn.Module):
     def __init__(self):
         super().__init__()
         self.register_buffer(
-            "mean", torch.Tensor([-.030, -.088, -.188])[None, :, None, None]
+            "mean", torch.Tensor([-0.030, -0.088, -0.188])[None, :, None, None]
         )
         self.register_buffer(
-            "std", torch.Tensor([.458, .448, .450])[None, :, None, None]
+            "std", torch.Tensor([0.458, 0.448, 0.450])[None, :, None, None]
         )
 
     def set_requires_grad(self, state: bool):
@@ -96,4 +96,3 @@ __all__ = [
     "VGG16",
     "get_network",
 ]
-

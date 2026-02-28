@@ -74,7 +74,9 @@ class MCMCStrategy(Strategy):
 
             n_new = self._add_new_gs(params, optimizers, binoms)
             if self.verbose:
-                print(f"Step {step}: added {n_new} GSs. Now having {len(params['means'])} GSs.")
+                print(
+                    f"Step {step}: added {n_new} GSs. Now having {len(params['means'])} GSs."
+                )
 
             torch.cuda.empty_cache()
 

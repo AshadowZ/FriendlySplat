@@ -481,8 +481,8 @@ struct OpenCVPinholeCameraModel
     float r2;
   };
 
-  inline __device__ auto
-  compute_distortion(glm::fvec2 const &uv) const -> DistortionReturn {
+  inline __device__ auto compute_distortion(glm::fvec2 const &uv) const
+      -> DistortionReturn {
     // Computes the radial, tangential, and thin-prism distortion given the
     // camera ray
     auto const uv_squared = glm::fvec2(uv[0] * uv[0], uv[1] * uv[1]);
@@ -612,9 +612,9 @@ struct OpenCVPinholeCameraModel
     float fx, fy, fx_x, fx_y, fy_x, fy_y, valid_flag;
   };
 
-  inline __device__ auto
-  compute_residual_and_jacobian(float x, float y, float xd,
-                                float yd) const -> JacobianReturn {
+  inline __device__ auto compute_residual_and_jacobian(float x, float y,
+                                                       float xd, float yd) const
+      -> JacobianReturn {
     auto const &[k1, k2, k3, k4, k5, k6] = parameters.radial_coeffs;
     auto const &[p1, p2] = parameters.tangential_coeffs;
     auto const &[s1, s2, s3, s4] = parameters.thin_prism_coeffs;

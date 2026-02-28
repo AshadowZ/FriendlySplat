@@ -31,4 +31,3 @@ class LPIPS(nn.Module):
 
 
 __all__ = ["LPIPS"]
-

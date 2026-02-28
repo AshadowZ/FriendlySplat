@@ -115,13 +115,19 @@ def _get_sparse_depth_map(
     if point3d_ids.size == 0 or bool(np.all(point3d_ids == -1)):
         return None
 
-    valid_ids = [int(pid) for pid in point3d_ids.tolist() if int(pid) != -1 and int(pid) in points3d]
+    valid_ids = [
+        int(pid)
+        for pid in point3d_ids.tolist()
+        if int(pid) != -1 and int(pid) in points3d
+    ]
     if not valid_ids:
         return None
 
     points = np.asarray([points3d[pid].xyz for pid in valid_ids], dtype=np.float64)
     errs = np.asarray([points3d[pid].error for pid in valid_ids], dtype=np.float64)
-    num_views = np.asarray([len(points3d[pid].image_ids) for pid in valid_ids], dtype=np.float64)
+    num_views = np.asarray(
+        [len(points3d[pid].image_ids) for pid in valid_ids], dtype=np.float64
+    )
 
     R = np.asarray(w2c[:3, :3], dtype=np.float64)
     t = np.asarray(w2c[:3, 3], dtype=np.float64)
@@ -191,7 +197,9 @@ def _robust_affine_depth_fit(
         return a, b
     except Exception as exc:
         if verbose:
-            print(f"[WARN] sklearn RANSAC unavailable/failed: {exc}. Falling back to robust scale.")
+            print(
+                f"[WARN] sklearn RANSAC unavailable/failed: {exc}. Falling back to robust scale."
+            )
 
     # Fallback: robust scale only (no intercept), after filtering.
     ratio = y / np.maximum(x, 1e-12)
@@ -287,7 +295,9 @@ def run_moge_infer(
         else:
             cams, images, points3d = read_model(str(colmap_dir))
             images_by_name = {img.name: img for img in images.values()}
-            print(f"Loaded COLMAP model from {colmap_dir} (images={len(images_by_name)}).")
+            print(
+                f"Loaded COLMAP model from {colmap_dir} (images={len(images_by_name)})."
+            )
 
     print("Loading MoGe model...")
     model_load_start = time.time()
@@ -322,7 +332,9 @@ def run_moge_infer(
     write_threads = max(1, int(write_threads))
 
     filename_queue: "Queue[Optional[tuple[int, str, str]]]" = Queue()
-    data_queue: "Queue[tuple[int, str, Optional[np.ndarray], float]]" = Queue(maxsize=queue_size)
+    data_queue: "Queue[tuple[int, str, Optional[np.ndarray], float]]" = Queue(
+        maxsize=queue_size
+    )
     save_queue: "Queue[Optional[_SaveItem]]" = Queue(maxsize=queue_size)
 
     for idx, (name, path) in enumerate(zip(image_names, image_paths)):
@@ -380,7 +392,10 @@ def run_moge_infer(
             w_expected, h_expected = image_sizes[int(idx)]
 
             alpha_exists = item.alpha_exists
-            if alpha_exists is not None and alpha_exists.shape[:2] != (int(h_expected), int(w_expected)):
+            if alpha_exists is not None and alpha_exists.shape[:2] != (
+                int(h_expected),
+                int(w_expected),
+            ):
                 alpha_exists = cv2.resize(
                     alpha_exists.astype(np.uint8),
                     (int(w_expected), int(h_expected)),
@@ -396,7 +411,7 @@ def run_moge_infer(
             if item.normal is not None and item.normal.numel() > 0:
                 normal_np = item.normal.detach().cpu().numpy()
                 # Encode to match FriendlySplat decode: normal = 1 - (u8/255)*2.
-                normal_vis = (0.5 - 0.5 * normal_np)  # (1 - normal)/2
+                normal_vis = 0.5 - 0.5 * normal_np  # (1 - normal)/2
                 normal_u8 = np.clip(normal_vis * 255.0, 0, 255).astype(np.uint8)
                 if normal_u8.shape[:2] != (int(h_expected), int(w_expected)):
                     normal_u8 = cv2.resize(
@@ -413,15 +428,21 @@ def run_moge_infer(
                 if not cv2.imwrite(normal_path, bgr):
                     print(f"[WARN] Failed to write normal: {normal_path}")
 
-            depth_np = item.depth.detach().cpu().numpy() if item.depth is not None else None
+            depth_np = (
+                item.depth.detach().cpu().numpy() if item.depth is not None else None
+            )
             depth_mask_np = raw_mask_np.copy() if raw_mask_np is not None else None
 
             if depth_np is not None:
                 depth_np = depth_np.astype(np.float32, copy=False)
                 finite = np.isfinite(depth_np)
                 if not bool(np.all(finite)):
-                    depth_np = np.where(finite, depth_np, 0.0).astype(np.float32, copy=False)
-                    depth_mask_np = finite if depth_mask_np is None else (depth_mask_np & finite)
+                    depth_np = np.where(finite, depth_np, 0.0).astype(
+                        np.float32, copy=False
+                    )
+                    depth_mask_np = (
+                        finite if depth_mask_np is None else (depth_mask_np & finite)
+                    )
                 if depth_np.shape[:2] != (int(h_expected), int(w_expected)):
                     depth_np = cv2.resize(
                         depth_np,
@@ -444,7 +465,11 @@ def run_moge_infer(
                     )
 
             # Export invalid-depth mask for training (255=invalid, 0=valid).
-            if bool(save_sky_mask) and sky_mask_output_dir is not None and depth_np is not None:
+            if (
+                bool(save_sky_mask)
+                and sky_mask_output_dir is not None
+                and depth_np is not None
+            ):
                 valid = np.isfinite(depth_np) & (depth_np > 0)
                 if depth_mask_np is not None:
                     valid = valid & depth_mask_np.astype(bool)
@@ -481,8 +506,12 @@ def run_moge_infer(
                         valid_sparse = sparse_depth > 0
                         if depth_mask_np is not None:
                             valid_sparse = valid_sparse & depth_mask_np
-                        valid_sparse = valid_sparse & np.isfinite(depth_np) & (depth_np > 0)
-                        if int(np.count_nonzero(valid_sparse)) >= int(colmap_min_sparse):
+                        valid_sparse = (
+                            valid_sparse & np.isfinite(depth_np) & (depth_np > 0)
+                        )
+                        if int(np.count_nonzero(valid_sparse)) >= int(
+                            colmap_min_sparse
+                        ):
                             d_pred = depth_np[valid_sparse]
                             d_colmap = sparse_depth[valid_sparse]
                             a, b = _robust_affine_depth_fit(
@@ -494,7 +523,9 @@ def run_moge_infer(
                                 verbose=bool(verbose),
                             )
                             if verbose:
-                                print(f"[COLMAP] {image_name}: depth = {a:.6f} * pred + {b:.6f}")
+                                print(
+                                    f"[COLMAP] {image_name}: depth = {a:.6f} * pred + {b:.6f}"
+                                )
                             depth_np = depth_np * float(a) + float(b)
 
             # Remove depth edges by masking out discontinuities (optional).
@@ -504,12 +535,18 @@ def run_moge_infer(
                     rtol=float(depth_edge_rtol),
                     mask=depth_mask_np,
                 )
-                depth_mask_np = (~edge) if depth_mask_np is None else (depth_mask_np & (~edge))
-
-            if bool(save_depth) and depth_np is not None and depth_output_dir is not None:
-                depth_to_save = np.nan_to_num(depth_np, nan=0.0, posinf=0.0, neginf=0.0).astype(
-                    np.float32, copy=False
+                depth_mask_np = (
+                    (~edge) if depth_mask_np is None else (depth_mask_np & (~edge))
                 )
+
+            if (
+                bool(save_depth)
+                and depth_np is not None
+                and depth_output_dir is not None
+            ):
+                depth_to_save = np.nan_to_num(
+                    depth_np, nan=0.0, posinf=0.0, neginf=0.0
+                ).astype(np.float32, copy=False)
                 if depth_mask_np is not None:
                     depth_to_save = depth_to_save.copy()
                     depth_to_save[~depth_mask_np] = 0.0
@@ -517,7 +554,11 @@ def run_moge_infer(
                 os.makedirs(os.path.dirname(depth_path), exist_ok=True)
                 np.save(depth_path, depth_to_save)
 
-            if bool(save_depth_vis) and depth_np is not None and depth_vis_output_dir is not None:
+            if (
+                bool(save_depth_vis)
+                and depth_np is not None
+                and depth_vis_output_dir is not None
+            ):
                 depth_vis = depth_np.astype(np.float32, copy=False)
                 depth_vis = np.nan_to_num(depth_vis, nan=0.0, posinf=0.0, neginf=0.0)
                 valid = (depth_vis > 0) & np.isfinite(depth_vis)
@@ -534,7 +575,11 @@ def run_moge_infer(
                     if depth_mask_np is not None:
                         depth_u8 = depth_u8.copy()
                         depth_u8[~depth_mask_np] = 0
-                    cmap = cv2.COLORMAP_TURBO if hasattr(cv2, "COLORMAP_TURBO") else cv2.COLORMAP_JET
+                    cmap = (
+                        cv2.COLORMAP_TURBO
+                        if hasattr(cv2, "COLORMAP_TURBO")
+                        else cv2.COLORMAP_JET
+                    )
                     depth_color = cv2.applyColorMap(depth_u8, cmap)
                     if depth_mask_np is not None:
                         depth_color = depth_color.copy()
@@ -584,15 +629,26 @@ def run_moge_infer(
             normal_t = output.get("normal")
             depth_t = (
                 output.get("depth")
-                if (save_depth or save_depth_vis or save_sky_mask or align_depth_with_colmap)
+                if (
+                    save_depth
+                    or save_depth_vis
+                    or save_sky_mask
+                    or align_depth_with_colmap
+                )
                 else None
             )
 
             item = _SaveItem(
                 image_name=str(name),
-                normal=normal_t.detach().cpu() if isinstance(normal_t, torch.Tensor) else None,
-                raw_mask=mask_t.detach().cpu() if isinstance(mask_t, torch.Tensor) else None,
-                depth=depth_t.detach().cpu() if isinstance(depth_t, torch.Tensor) else None,
+                normal=normal_t.detach().cpu()
+                if isinstance(normal_t, torch.Tensor)
+                else None,
+                raw_mask=mask_t.detach().cpu()
+                if isinstance(mask_t, torch.Tensor)
+                else None,
+                depth=depth_t.detach().cpu()
+                if isinstance(depth_t, torch.Tensor)
+                else None,
                 alpha_exists=alpha_exists,
             )
             save_queue.put(item)
@@ -622,8 +678,15 @@ def run_moge_infer(
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Run MoGe to export depth/normal priors for FriendlySplat.")
-    p.add_argument("--data-dir", type=str, required=True, help="Scene root containing COLMAP + images.")
+    p = argparse.ArgumentParser(
+        description="Run MoGe to export depth/normal priors for FriendlySplat."
+    )
+    p.add_argument(
+        "--data-dir",
+        type=str,
+        required=True,
+        help="Scene root containing COLMAP + images.",
+    )
     p.add_argument(
         "--factor",
         type=int,
@@ -637,13 +700,27 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="MoGe pretrained model id.",
     )
 
-    p.add_argument("--read-threads", type=int, default=2, help="Parallel image read threads.")
-    p.add_argument("--write-threads", type=int, default=4, help="Parallel write threads.")
+    p.add_argument(
+        "--read-threads", type=int, default=2, help="Parallel image read threads."
+    )
+    p.add_argument(
+        "--write-threads", type=int, default=4, help="Parallel write threads."
+    )
     p.add_argument("--queue-size", type=int, default=8, help="Read/write queue size.")
 
-    p.add_argument("--save-depth", action="store_true", help="Export dense depth .npy files.")
-    p.add_argument("--save-depth-vis", action="store_true", help="Export depth visualization .png files.")
-    p.add_argument("--save-sky-mask", action="store_true", help="Export invalid-depth mask as .png (255=invalid).")
+    p.add_argument(
+        "--save-depth", action="store_true", help="Export dense depth .npy files."
+    )
+    p.add_argument(
+        "--save-depth-vis",
+        action="store_true",
+        help="Export depth visualization .png files.",
+    )
+    p.add_argument(
+        "--save-sky-mask",
+        action="store_true",
+        help="Export invalid-depth mask as .png (255=invalid).",
+    )
 
     p.add_argument(
         "--remove-depth-edge",
@@ -651,7 +728,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=True,
         help="Mask out depth edges (default: on).",
     )
-    p.add_argument("--depth-edge-rtol", type=float, default=0.04, help="Relative threshold for depth edge mask.")
+    p.add_argument(
+        "--depth-edge-rtol",
+        type=float,
+        default=0.04,
+        help="Relative threshold for depth edge mask.",
+    )
 
     p.add_argument(
         "--align-depth-with-colmap",
@@ -659,15 +741,52 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=True,
         help="Align depth to COLMAP sparse depths when available (default: on).",
     )
-    p.add_argument("--colmap-min-sparse", type=int, default=30, help="Min sparse points to run alignment.")
-    p.add_argument("--colmap-clip-low", type=float, default=5.0, help="Sparse depth clip low percentile.")
-    p.add_argument("--colmap-clip-high", type=float, default=95.0, help="Sparse depth clip high percentile.")
-    p.add_argument("--colmap-ransac-trials", type=int, default=2000, help="RANSAC max trials.")
+    p.add_argument(
+        "--colmap-min-sparse",
+        type=int,
+        default=30,
+        help="Min sparse points to run alignment.",
+    )
+    p.add_argument(
+        "--colmap-clip-low",
+        type=float,
+        default=5.0,
+        help="Sparse depth clip low percentile.",
+    )
+    p.add_argument(
+        "--colmap-clip-high",
+        type=float,
+        default=95.0,
+        help="Sparse depth clip high percentile.",
+    )
+    p.add_argument(
+        "--colmap-ransac-trials", type=int, default=2000, help="RANSAC max trials."
+    )
 
-    p.add_argument("--out-normal-dir", type=str, default="moge_normal", help="Output dir name for normals.")
-    p.add_argument("--out-depth-dir", type=str, default="moge_depth", help="Output dir name for depths.")
-    p.add_argument("--out-depth-vis-dir", type=str, default="moge_depth_vis", help="Output dir name for depth vis.")
-    p.add_argument("--out-sky-mask-dir", type=str, default="sky_mask", help="Output dir name for sky mask.")
+    p.add_argument(
+        "--out-normal-dir",
+        type=str,
+        default="moge_normal",
+        help="Output dir name for normals.",
+    )
+    p.add_argument(
+        "--out-depth-dir",
+        type=str,
+        default="moge_depth",
+        help="Output dir name for depths.",
+    )
+    p.add_argument(
+        "--out-depth-vis-dir",
+        type=str,
+        default="moge_depth_vis",
+        help="Output dir name for depth vis.",
+    )
+    p.add_argument(
+        "--out-sky-mask-dir",
+        type=str,
+        default="sky_mask",
+        help="Output dir name for sky mask.",
+    )
 
     p.add_argument("--verbose", action="store_true", help="Verbose logging.")
     return p

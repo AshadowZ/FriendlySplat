@@ -158,11 +158,14 @@ def color_correct(
 # Inria-style metrics (gaussian-splatting / Improved-GS reference implementation)
 # ----------------------------
 
+
 def _validate_bchw_pair(
     pred_rgb_bchw: torch.Tensor, gt_rgb_bchw: torch.Tensor, *, name: str
 ) -> None:
     if pred_rgb_bchw.shape != gt_rgb_bchw.shape:
-        raise ValueError(f"{name} shape mismatch: {pred_rgb_bchw.shape} vs {gt_rgb_bchw.shape}")
+        raise ValueError(
+            f"{name} shape mismatch: {pred_rgb_bchw.shape} vs {gt_rgb_bchw.shape}"
+        )
     if pred_rgb_bchw.dim() != 4:
         raise ValueError(f"{name} expects BCHW, got {pred_rgb_bchw.shape}")
 
@@ -195,8 +198,11 @@ def psnr_inria_bchw(
 
     # Match the gaussian-splatting reference implementation:
     # mse = (((img1 - img2)) ** 2).view(B, -1).mean(1, keepdim=True)
-    mse = (pred_rgb_bchw - gt_rgb_bchw).pow(2).view(int(pred_rgb_bchw.shape[0]), -1).mean(
-        1, keepdim=True
+    mse = (
+        (pred_rgb_bchw - gt_rgb_bchw)
+        .pow(2)
+        .view(int(pred_rgb_bchw.shape[0]), -1)
+        .mean(1, keepdim=True)
     )
     mse = mse.clamp(min=1e-12)
     data_range_t = torch.tensor(float(data_range), device=mse.device, dtype=mse.dtype)
@@ -219,7 +225,10 @@ def _inria_create_window(*, window_size: int, channel: int) -> torch.Tensor:
     w2 = (w1 @ w1.t()).float().unsqueeze(0).unsqueeze(0)  # [1,1,ws,ws]
     return w2.expand(int(channel), 1, window_size, window_size).contiguous()
 
-def create_inria_ssim_window(*, window_size: int = 11, channel: int = 3) -> torch.Tensor:
+
+def create_inria_ssim_window(
+    *, window_size: int = 11, channel: int = 3
+) -> torch.Tensor:
     """Create the fixed gaussian window used by Inria-style SSIM (float32, CPU)."""
     return _inria_create_window(window_size=int(window_size), channel=int(channel))
 

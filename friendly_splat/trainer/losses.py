@@ -251,7 +251,9 @@ def scale_ratio_regularization_from_log_scales(
     return (ratio - thr).clamp(min=0.0).mean()
 
 
-def opacity_mean_regularization_from_logits(opacity_logits: torch.Tensor) -> torch.Tensor:
+def opacity_mean_regularization_from_logits(
+    opacity_logits: torch.Tensor,
+) -> torch.Tensor:
     """MCMC-3DGS-style opacity regularization.
 
     Inspired by "3D Gaussian Splatting as Markov Chain Monte Carlo"
@@ -484,13 +486,17 @@ def compute_losses(
     # Optional MCMC regularizers (only active when weights > 0).
     opacity_reg = torch.tensor(0.0, device=device)
     if float(reg_cfg.opacity_reg_weight) > 0.0:
-        opacity_reg = opacity_mean_regularization_from_logits(gaussian_model.opacity_logits)
+        opacity_reg = opacity_mean_regularization_from_logits(
+            gaussian_model.opacity_logits
+        )
         total = total + float(reg_cfg.opacity_reg_weight) * opacity_reg
         items["opacity_reg"] = opacity_reg.detach()
 
     scale_l1_reg = torch.tensor(0.0, device=device)
     if float(reg_cfg.scale_l1_reg_weight) > 0.0:
-        scale_l1_reg = scale_mean_regularization_from_log_scales(gaussian_model.log_scales)
+        scale_l1_reg = scale_mean_regularization_from_log_scales(
+            gaussian_model.log_scales
+        )
         total = total + float(reg_cfg.scale_l1_reg_weight) * scale_l1_reg
         items["scale_l1_reg"] = scale_l1_reg.detach()
 

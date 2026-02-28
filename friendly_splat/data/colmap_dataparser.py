@@ -427,7 +427,10 @@ class ColmapDataParser(DataParser):
             if int(cam_id) == camera_id0:
                 imsize_dict[int(cam_id)] = (int(actual_w), int(actual_h))
             else:
-                imsize_dict[int(cam_id)] = (int(round(float(w) * s_w)), int(round(float(h) * s_h)))
+                imsize_dict[int(cam_id)] = (
+                    int(round(float(w) * s_w)),
+                    int(round(float(h) * s_h)),
+                )
 
     def _build_paths(self, dir_name: Optional[str], ext: str) -> Optional[List[str]]:
         if dir_name is None:

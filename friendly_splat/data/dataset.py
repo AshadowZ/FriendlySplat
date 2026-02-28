@@ -97,7 +97,10 @@ class InputDataset(torch.utils.data.Dataset):
             depth_data = np.load(depth_path).astype(np.float32)
             if depth_data.ndim == 3 and int(depth_data.shape[-1]) == 1:
                 depth_data = depth_data[..., 0]
-            if depth_data.ndim != 2 or (int(depth_data.shape[0]), int(depth_data.shape[1])) != (h_img, w_img):
+            if depth_data.ndim != 2 or (
+                int(depth_data.shape[0]),
+                int(depth_data.shape[1]),
+            ) != (h_img, w_img):
                 _raise_prior_shape_mismatch(
                     modality="depth",
                     path=str(depth_path),
@@ -111,7 +114,12 @@ class InputDataset(torch.utils.data.Dataset):
         if load_auxiliary_priors and parsed_scene.normal_paths is not None:
             normal_path = parsed_scene.normal_paths[image_index]
             normal_data = imread_rgb(normal_path)
-            if normal_data.ndim != 3 or int(normal_data.shape[-1]) != 3 or (int(normal_data.shape[0]), int(normal_data.shape[1])) != (h_img, w_img):
+            if (
+                normal_data.ndim != 3
+                or int(normal_data.shape[-1]) != 3
+                or (int(normal_data.shape[0]), int(normal_data.shape[1]))
+                != (h_img, w_img)
+            ):
                 _raise_prior_shape_mismatch(
                     modality="normal",
                     path=str(normal_path),
@@ -124,7 +132,10 @@ class InputDataset(torch.utils.data.Dataset):
         if load_auxiliary_priors and parsed_scene.dynamic_mask_paths is not None:
             dyn_path = parsed_scene.dynamic_mask_paths[image_index]
             dyn = imread_gray(dyn_path)
-            if dyn.ndim != 2 or (int(dyn.shape[0]), int(dyn.shape[1])) != (h_img, w_img):
+            if dyn.ndim != 2 or (int(dyn.shape[0]), int(dyn.shape[1])) != (
+                h_img,
+                w_img,
+            ):
                 _raise_prior_shape_mismatch(
                     modality="dynamic_mask",
                     path=str(dyn_path),
@@ -138,7 +149,10 @@ class InputDataset(torch.utils.data.Dataset):
         if load_auxiliary_priors and parsed_scene.sky_mask_paths is not None:
             sky_path = parsed_scene.sky_mask_paths[image_index]
             sky = imread_gray(sky_path)
-            if sky.ndim != 2 or (int(sky.shape[0]), int(sky.shape[1])) != (h_img, w_img):
+            if sky.ndim != 2 or (int(sky.shape[0]), int(sky.shape[1])) != (
+                h_img,
+                w_img,
+            ):
                 _raise_prior_shape_mismatch(
                     modality="sky_mask",
                     path=str(sky_path),

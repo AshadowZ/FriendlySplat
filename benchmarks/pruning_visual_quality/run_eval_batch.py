@@ -257,7 +257,9 @@ def _load_ply_splats(ply_path: Path) -> dict[str, torch.Tensor]:
     }
 
 
-def _build_gaussian_model(*, splats: dict[str, torch.Tensor], device: torch.device) -> GaussianModel:
+def _build_gaussian_model(
+    *, splats: dict[str, torch.Tensor], device: torch.device
+) -> GaussianModel:
     from friendly_splat.modules.gaussian import GaussianModel
 
     params = {k: torch.nn.Parameter(v.to(device=device)) for k, v in splats.items()}
@@ -307,19 +309,34 @@ def _rotmat_to_quat_wxyz(rot: torch.Tensor) -> torch.Tensor:
         y = float(r[0, 2] - r[2, 0]) / s
         z = float(r[1, 0] - r[0, 1]) / s
     elif float(r[0, 0]) > float(r[1, 1]) and float(r[0, 0]) > float(r[2, 2]):
-        s = torch.sqrt(torch.tensor(1.0 + float(r[0, 0]) - float(r[1, 1]) - float(r[2, 2]))).item() * 2.0
+        s = (
+            torch.sqrt(
+                torch.tensor(1.0 + float(r[0, 0]) - float(r[1, 1]) - float(r[2, 2]))
+            ).item()
+            * 2.0
+        )
         w = float(r[2, 1] - r[1, 2]) / s
         x = 0.25 * s
         y = float(r[0, 1] + r[1, 0]) / s
         z = float(r[0, 2] + r[2, 0]) / s
     elif float(r[1, 1]) > float(r[2, 2]):
-        s = torch.sqrt(torch.tensor(1.0 + float(r[1, 1]) - float(r[0, 0]) - float(r[2, 2]))).item() * 2.0
+        s = (
+            torch.sqrt(
+                torch.tensor(1.0 + float(r[1, 1]) - float(r[0, 0]) - float(r[2, 2]))
+            ).item()
+            * 2.0
+        )
         w = float(r[0, 2] - r[2, 0]) / s
         x = float(r[0, 1] + r[1, 0]) / s
         y = 0.25 * s
         z = float(r[1, 2] + r[2, 1]) / s
     else:
-        s = torch.sqrt(torch.tensor(1.0 + float(r[2, 2]) - float(r[0, 0]) - float(r[1, 1]))).item() * 2.0
+        s = (
+            torch.sqrt(
+                torch.tensor(1.0 + float(r[2, 2]) - float(r[0, 0]) - float(r[1, 1]))
+            ).item()
+            * 2.0
+        )
         w = float(r[1, 0] - r[0, 1]) / s
         x = float(r[0, 2] + r[2, 0]) / s
         y = float(r[1, 2] + r[2, 1]) / s
@@ -354,7 +371,9 @@ def _apply_colmap_to_train_transform_inplace(
       - mapping means/quats/scales back using the same similarity transform used by the dataparser
       - leaving SH coefficients unchanged
     """
-    T = transform_colmap_to_train.to(device=splats["means"].device, dtype=splats["means"].dtype)
+    T = transform_colmap_to_train.to(
+        device=splats["means"].device, dtype=splats["means"].dtype
+    )
     A = T[:3, :3]
     t = T[:3, 3]
 
@@ -364,7 +383,9 @@ def _apply_colmap_to_train_transform_inplace(
     # uniform similarity scale (columns have norm == scale).
     col_norms = torch.linalg.norm(A, dim=0)
     length_scale = float(col_norms.mean().item())
-    splats["scales"] = splats["scales"] + float(torch.log(torch.tensor(max(length_scale, 1e-12))).item())
+    splats["scales"] = splats["scales"] + float(
+        torch.log(torch.tensor(max(length_scale, 1e-12))).item()
+    )
 
     rot = A / float(max(length_scale, 1e-12))
     q_rot = _rotmat_to_quat_wxyz(rot)
@@ -513,7 +534,9 @@ def main(argv: list[str]) -> int:
 
     out_dir = data_root / "pruning_benchmark"
     out_dir.mkdir(parents=True, exist_ok=True)
-    md_path = out_dir / (str(args.out_name) if args.out_name is not None else "summary.md")
+    md_path = out_dir / (
+        str(args.out_name) if args.out_name is not None else "summary.md"
+    )
 
     device = torch.device(str(args.device))
 
@@ -531,7 +554,9 @@ def main(argv: list[str]) -> int:
             continue
 
         for scene in _iter_selected_scenes(
-            dataset=dataset, include_scenes=include_scenes, exclude_scenes=exclude_scenes
+            dataset=dataset,
+            include_scenes=include_scenes,
+            exclude_scenes=exclude_scenes,
         ):
             scene_data_dir = dataset_dir / scene
             if not scene_data_dir.exists():
@@ -573,10 +598,14 @@ def main(argv: list[str]) -> int:
                             data_factor = data_cfg.get("data_factor")
                             test_every = int(data_cfg.get("test_every", test_every))
                             benchmark_train_split = bool(
-                                data_cfg.get("benchmark_train_split", benchmark_train_split)
+                                data_cfg.get(
+                                    "benchmark_train_split", benchmark_train_split
+                                )
                             )
                             normalize_world_space = bool(
-                                data_cfg.get("normalize_world_space", normalize_world_space)
+                                data_cfg.get(
+                                    "normalize_world_space", normalize_world_space
+                                )
                             )
                             # Backward compatibility: older configs rotated by default.
                             align_world_axes = bool(
@@ -592,8 +621,12 @@ def main(argv: list[str]) -> int:
                                 optim_cfg.get("sh_degree_interval", sh_degree_interval)
                             )
                             packed = bool(optim_cfg.get("packed", packed))
-                            sparse_grad = bool(optim_cfg.get("sparse_grad", sparse_grad))
-                            antialiased = bool(optim_cfg.get("antialiased", antialiased))
+                            sparse_grad = bool(
+                                optim_cfg.get("sparse_grad", sparse_grad)
+                            )
+                            antialiased = bool(
+                                optim_cfg.get("antialiased", antialiased)
+                            )
                         strategy_cfg = cfg_dict.get("strategy") or {}
                         if isinstance(strategy_cfg, dict):
                             absgrad = bool(strategy_cfg.get("absgrad", absgrad))
@@ -607,7 +640,9 @@ def main(argv: list[str]) -> int:
                         ply_path, ply_step = _find_latest_ply_path(scene_out_dir)
                     else:
                         ply_step = int(args.step)
-                        ply_path = _find_ply_path(scene_out_dir=scene_out_dir, step=int(ply_step))
+                        ply_path = _find_ply_path(
+                            scene_out_dir=scene_out_dir, step=int(ply_step)
+                        )
                     step_index = int(ply_step) - 1
                     if step_index < 0:
                         raise ValueError(f"--step must be > 0, got {ply_step}")
@@ -651,7 +686,9 @@ def main(argv: list[str]) -> int:
                     if cam_space == "train" and bool(normalize_world_space):
                         # Map geometry back into training coords to match the camera space (and SH basis).
                         transform = (
-                            torch.from_numpy(dataparser.transform).float().to(device=device)
+                            torch.from_numpy(dataparser.transform)
+                            .float()
+                            .to(device=device)
                         )
                         _apply_colmap_to_train_transform_inplace(
                             splats=splats,
@@ -665,7 +702,9 @@ def main(argv: list[str]) -> int:
                         EvalConfig(),
                         lpips_net="vgg",
                         metrics_backend=str(args.metrics_backend),
-                        max_images=int(args.max_images) if args.max_images is not None else None,
+                        max_images=int(args.max_images)
+                        if args.max_images is not None
+                        else None,
                         compute_cc_metrics=False,
                     )
                     optim_cfg = replace(
@@ -771,7 +810,11 @@ def main(argv: list[str]) -> int:
             "lpips": _mean([float(x["lpips"]) for x in items]),
             "num_gaussians": _mean([float(x["num_gaussians"]) for x in items]),
             "train_time_s": _mean(
-                [float(x["train_time_s"]) for x in items if x.get("train_time_s") is not None]
+                [
+                    float(x["train_time_s"])
+                    for x in items
+                    if x.get("train_time_s") is not None
+                ]
             ),
         }
 

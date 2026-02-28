@@ -32,7 +32,9 @@ def _safe_rmtree_under(*, path: Path, root: Path) -> None:
     try:
         p.relative_to(r)
     except Exception as e:
-        raise ValueError(f"Refusing to delete path outside root (path={p}, root={r}).") from e
+        raise ValueError(
+            f"Refusing to delete path outside root (path={p}, root={r})."
+        ) from e
     if p.exists() and p.is_dir():
         shutil.rmtree(p)
 
@@ -122,9 +124,7 @@ def _prepare_tsdf_mask_from_invalid_mask(
     exts = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
     images = (
         sorted(
-            p
-            for p in image_dir.iterdir()
-            if p.is_file() and p.suffix.lower() in exts
+            p for p in image_dir.iterdir() if p.is_file() and p.suffix.lower() in exts
         )
         if image_dir.is_dir()
         else []
@@ -230,8 +230,12 @@ def _cull_dtu_mesh(
         raise FileNotFoundError(f"Missing cameras.npz: {cameras_npz}")
 
     cam_dict = np.load(str(cameras_npz))
-    scale_mats = [cam_dict[f"scale_mat_{idx}"].astype(np.float32) for idx in range(n_images)]
-    world_mats = [cam_dict[f"world_mat_{idx}"].astype(np.float32) for idx in range(n_images)]
+    scale_mats = [
+        cam_dict[f"scale_mat_{idx}"].astype(np.float32) for idx in range(n_images)
+    ]
+    world_mats = [
+        cam_dict[f"world_mat_{idx}"].astype(np.float32) for idx in range(n_images)
+    ]
     intrinsics_all: list["torch.Tensor"] = []
     pose_all: list["torch.Tensor"] = []
     for scale_mat, world_mat in zip(scale_mats, world_mats):
@@ -331,7 +335,9 @@ def _cull_dtu_mesh(
         mask_bin = alpha01 > 0.5
         if selem is not None:
             mask_bin = binary_dilation(mask_bin, selem)
-        mask_t = torch.from_numpy(mask_bin.astype(np.float32))[None, None].to(device=device)
+        mask_t = torch.from_numpy(mask_bin.astype(np.float32))[None, None].to(
+            device=device
+        )
 
         sampled = F.grid_sample(
             mask_t,
@@ -491,7 +497,9 @@ def _write_summary_md(
     lines.append("| Scan | mean_d2s | mean_s2d | overall |")
     lines.append("|---:|---:|---:|---:|")
     for r in rows_sorted:
-        lines.append(f"| {r.scan} | {_fmt_cell(r.mean_d2s)} | {_fmt_cell(r.mean_s2d)} | {_fmt_cell(r.overall)} |")
+        lines.append(
+            f"| {r.scan} | {_fmt_cell(r.mean_d2s)} | {_fmt_cell(r.mean_s2d)} | {_fmt_cell(r.overall)} |"
+        )
     lines.append(
         f"| **Mean** | **{_fmt_cell(mean_d2s)}** | **{_fmt_cell(mean_s2d)}** | **{_fmt_cell(mean_overall)}** |"
     )
@@ -508,7 +516,9 @@ def main(argv: list[str]) -> int:
     )
     parser.add_argument("--data-root", type=str, required=True)
     parser.add_argument("--dtu-dir-name", type=str, default="dtu_dataset/dtu")
-    parser.add_argument("--out-dir-name", type=str, default="benchmark/geo_benchmark/dtu_benchmark")
+    parser.add_argument(
+        "--out-dir-name", type=str, default="benchmark/geo_benchmark/dtu_benchmark"
+    )
     parser.add_argument("--exp-name", type=str, default="dtu_moge_priors")
     parser.add_argument("--max-steps", type=int, default=30_000)
     parser.add_argument(
@@ -609,7 +619,13 @@ def main(argv: list[str]) -> int:
             "scan122",
         ]
     elif scans_raw.lower() == "all":
-        scans = sorted({p.name for p in dtu_dir.iterdir() if p.is_dir() and p.name.startswith("scan")})
+        scans = sorted(
+            {
+                p.name
+                for p in dtu_dir.iterdir()
+                if p.is_dir() and p.name.startswith("scan")
+            }
+        )
     else:
         scans = []
         for part in scans_raw.split(","):
@@ -708,8 +724,12 @@ def main(argv: list[str]) -> int:
             rows.append(
                 _EvalRow(
                     scan=scan,
-                    mean_d2s=float(stats.get("mean_d2s")) if "mean_d2s" in stats else None,
-                    mean_s2d=float(stats.get("mean_s2d")) if "mean_s2d" in stats else None,
+                    mean_d2s=float(stats.get("mean_d2s"))
+                    if "mean_d2s" in stats
+                    else None,
+                    mean_s2d=float(stats.get("mean_s2d"))
+                    if "mean_s2d" in stats
+                    else None,
                     overall=float(stats.get("overall")) if "overall" in stats else None,
                     result_dir=str(result_dir),
                 )

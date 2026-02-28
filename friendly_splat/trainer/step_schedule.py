@@ -49,7 +49,9 @@ def compute_step_schedule(
     consistency_every_n = int(reg_cfg.consistency_normal_reg_every_n)
 
     prior_normal_due = prior_every_n > 0 and (step % prior_every_n == 0)
-    consistency_normal_due = consistency_every_n > 0 and (step % consistency_every_n == 0)
+    consistency_normal_due = consistency_every_n > 0 and (
+        step % consistency_every_n == 0
+    )
     scale_ratio_due = reg_cfg.scale_ratio_reg_every_n > 0 and (
         step % reg_cfg.scale_ratio_reg_every_n == 0
     )
@@ -59,7 +61,10 @@ def compute_step_schedule(
         has_depth_prior
         and reg_cfg.depth_loss_weight > 0.0
         and step >= reg_cfg.depth_loss_activation_step
-        and (int(reg_cfg.depth_loss_stop_step) < 0 or step < int(reg_cfg.depth_loss_stop_step))
+        and (
+            int(reg_cfg.depth_loss_stop_step) < 0
+            or step < int(reg_cfg.depth_loss_stop_step)
+        )
         and depth_due
     )
     do_render_normal_reg = (

@@ -130,9 +130,9 @@ if __name__ == "__main__":
         (data_grid >= 0) & (data_grid < np.expand_dims(ObsMask.shape, 0))
     ).sum(axis=-1) == 3
     data_grid_in = data_grid[grid_inbound]
-    in_obs = ObsMask[
-        data_grid_in[:, 0], data_grid_in[:, 1], data_grid_in[:, 2]
-    ].astype(np.bool_)
+    in_obs = ObsMask[data_grid_in[:, 0], data_grid_in[:, 1], data_grid_in[:, 2]].astype(
+        np.bool_
+    )
     data_in_obs = data_in[grid_inbound][in_obs]
 
     pbar.update(1)
@@ -180,7 +180,9 @@ if __name__ == "__main__":
     data_color[
         np.where(inbound)[0][grid_inbound][in_obs][dist_d2s[:, 0] >= max_dist]
     ] = G
-    write_vis_pcd(f"{args.vis_out_dir}/vis_{args.scan:03}_d2s.ply", data_down, data_color)
+    write_vis_pcd(
+        f"{args.vis_out_dir}/vis_{args.scan:03}_d2s.ply", data_down, data_color
+    )
     stl_color = np.tile(B, (stl.shape[0], 1))
     stl_alpha = dist_s2d.clip(max=vis_dist) / vis_dist
     stl_color[np.where(above)[0]] = R * stl_alpha + W * (1 - stl_alpha)
@@ -205,4 +207,3 @@ if __name__ == "__main__":
             fp,
             indent=True,
         )
-

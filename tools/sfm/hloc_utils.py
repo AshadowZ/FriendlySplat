@@ -155,7 +155,9 @@ def _select_largest_colmap_model(
         except Exception as exc:
             _log(f"Warning: failed to read model {model_dir}: {exc}")
     if not model_stats:
-        raise RuntimeError(f"Unable to read any COLMAP reconstructions under {sparse_root}")
+        raise RuntimeError(
+            f"Unable to read any COLMAP reconstructions under {sparse_root}"
+        )
 
     best_dir, best_count = max(model_stats, key=lambda item: item[1])
     sparse0 = sparse_root / "0"
@@ -182,11 +184,15 @@ def _ensure_empty_export_dirs(export_dir: Path, overwrite: bool) -> tuple[Path, 
 
     if images_dir.exists():
         if not overwrite:
-            raise FileExistsError(f"images/ already exists under export dir (use --overwrite): {images_dir}")
+            raise FileExistsError(
+                f"images/ already exists under export dir (use --overwrite): {images_dir}"
+            )
         shutil.rmtree(images_dir)
     if (export_dir / "sparse").exists():
         if not overwrite:
-            raise FileExistsError(f"sparse/ already exists under export dir (use --overwrite): {export_dir / 'sparse'}")
+            raise FileExistsError(
+                f"sparse/ already exists under export dir (use --overwrite): {export_dir / 'sparse'}"
+            )
         shutil.rmtree(export_dir / "sparse")
 
     images_dir.mkdir(parents=True, exist_ok=True)
@@ -199,18 +205,24 @@ def _prepare_export_root_for_undistort(export_dir: Path, overwrite: bool) -> Non
     sparse_root = export_dir / "sparse"
     if images_dir.exists():
         if not overwrite:
-            raise FileExistsError(f"images/ already exists under export dir (use --overwrite): {images_dir}")
+            raise FileExistsError(
+                f"images/ already exists under export dir (use --overwrite): {images_dir}"
+            )
         shutil.rmtree(images_dir)
     if sparse_root.exists():
         if not overwrite:
-            raise FileExistsError(f"sparse/ already exists under export dir (use --overwrite): {sparse_root}")
+            raise FileExistsError(
+                f"sparse/ already exists under export dir (use --overwrite): {sparse_root}"
+            )
         shutil.rmtree(sparse_root)
 
     for script_name in ("run-colmap-geometric.sh", "run-colmap-photometric.sh"):
         script_path = export_dir / script_name
         if script_path.exists():
             if not overwrite:
-                raise FileExistsError(f"Helper script already exists under export dir (use --overwrite): {script_path}")
+                raise FileExistsError(
+                    f"Helper script already exists under export dir (use --overwrite): {script_path}"
+                )
             try:
                 script_path.unlink()
             except OSError:
@@ -219,7 +231,9 @@ def _prepare_export_root_for_undistort(export_dir: Path, overwrite: bool) -> Non
     stereo_dir = export_dir / "stereo"
     if stereo_dir.exists():
         if not overwrite:
-            raise FileExistsError(f"stereo/ already exists under export dir (use --overwrite): {stereo_dir}")
+            raise FileExistsError(
+                f"stereo/ already exists under export dir (use --overwrite): {stereo_dir}"
+            )
         try:
             shutil.rmtree(stereo_dir)
         except OSError:
@@ -292,7 +306,10 @@ def run_hloc(
         _log("Error: refine_pixsfm=True requires `pixsfm`.")
         sys.exit(1)
 
-    if is_panorama and camera_model not in (CameraModel.PINHOLE, CameraModel.SIMPLE_PINHOLE):
+    if is_panorama and camera_model not in (
+        CameraModel.PINHOLE,
+        CameraModel.SIMPLE_PINHOLE,
+    ):
         _log(
             "Warning: panorama mode currently supports PINHOLE/SIMPLE_PINHOLE only. "
             "Forcing camera_model=PINHOLE."
@@ -492,7 +509,11 @@ def run_hloc(
         )
         valid_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif"}
         src_images = sorted(
-            [p for p in image_dir.rglob("*") if p.is_file() and p.suffix.lower() in valid_extensions]
+            [
+                p
+                for p in image_dir.rglob("*")
+                if p.is_file() and p.suffix.lower() in valid_extensions
+            ]
         )
         name_map: dict[str, str] = {}
         for src_path in src_images:

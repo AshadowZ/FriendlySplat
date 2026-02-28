@@ -209,7 +209,9 @@ def _load_ply_splats(ply_path: str) -> dict[str, torch.Tensor]:
     }
 
 
-def _build_gaussian_model(*, splats: dict[str, torch.Tensor], device: torch.device) -> GaussianModel:
+def _build_gaussian_model(
+    *, splats: dict[str, torch.Tensor], device: torch.device
+) -> GaussianModel:
     params = {k: torch.nn.Parameter(v.to(device=device)) for k, v in splats.items()}
     model = GaussianModel(params)
     model.eval()
@@ -249,7 +251,9 @@ def _iter_frames(
         camtoworld = parsed_scene.camtoworlds[int(image_index)].astype(np.float32)
         K = parsed_scene.Ks[int(image_index)].astype(np.float32)
         if not np.isfinite(kx) or not np.isfinite(ky) or kx <= 0.0 or ky <= 0.0:
-            raise ValueError(f"Invalid K_scale_xy={K_scale_xy}. Expected positive finite floats.")
+            raise ValueError(
+                f"Invalid K_scale_xy={K_scale_xy}. Expected positive finite floats."
+            )
         if kx != 1.0 or ky != 1.0:
             K = K.copy()
             K[0, :] *= float(kx)
@@ -297,14 +301,18 @@ def _create_tsdf_mesh(
     if n <= 0:
         raise ValueError("No frames provided for TSDF integration.")
     if mask_paths is not None and int(len(mask_paths)) != n:
-        raise ValueError(f"mask_paths length mismatch: got {len(mask_paths)}, expected {n}")
+        raise ValueError(
+            f"mask_paths length mismatch: got {len(mask_paths)}, expected {n}"
+        )
 
     med_dist = _estimate_med_camera_dist(camtoworlds)
     if voxel_length is None:
         voxel_length = float(med_dist) / 192.0
     if sdf_trunc is None:
         sdf_trunc = float(voxel_length) * 5.0
-    print(f"[tsdf] voxel_length={float(voxel_length):.6g}, sdf_trunc={float(sdf_trunc):.6g}, frames={n}")
+    print(
+        f"[tsdf] voxel_length={float(voxel_length):.6g}, sdf_trunc={float(sdf_trunc):.6g}, frames={n}"
+    )
 
     # Resolution diagnostics (useful when running TSDF at reduced render_factor).
     # Most datasets use a constant resolution for all frames; if not, print all unique sizes.
@@ -356,7 +364,9 @@ def _create_tsdf_mesh(
             flush=True,
         )
 
-    aabb_cache: dict[tuple[int, int, float, float, float, float], tuple[np.ndarray, np.ndarray]] = {}
+    aabb_cache: dict[
+        tuple[int, int, float, float, float, float], tuple[np.ndarray, np.ndarray]
+    ] = {}
     aabb_valid_before = 0
     aabb_valid_after = 0
 
@@ -368,9 +378,13 @@ def _create_tsdf_mesh(
 
         h, w = int(hws[i, 0]), int(hws[i, 1])
         if depth.shape[0] != h or depth.shape[1] != w:
-            raise ValueError(f"Cached depth shape mismatch: got {depth.shape}, expected {(h, w)}")
+            raise ValueError(
+                f"Cached depth shape mismatch: got {depth.shape}, expected {(h, w)}"
+            )
         if color.shape[0] != h or color.shape[1] != w:
-            raise ValueError(f"Cached color shape mismatch: got {color.shape}, expected {(h, w, 3)}")
+            raise ValueError(
+                f"Cached color shape mismatch: got {color.shape}, expected {(h, w, 3)}"
+            )
 
         if use_mask:
             mp = Path(str(mask_paths[i])).expanduser().resolve()
@@ -395,7 +409,14 @@ def _create_tsdf_mesh(
             if not (fx > 0.0 and fy > 0.0 and np.isfinite(fx) and np.isfinite(fy)):
                 raise ValueError(f"Invalid intrinsics for aabb crop: fx={fx}, fy={fy}")
 
-            key = (int(h), int(w), round(fx, 6), round(fy, 6), round(cx, 6), round(cy, 6))
+            key = (
+                int(h),
+                int(w),
+                round(fx, 6),
+                round(fy, 6),
+                round(cx, 6),
+                round(cy, 6),
+            )
             cached = aabb_cache.get(key)
             if cached is None:
                 u = np.arange(int(w), dtype=np.float32)
@@ -415,15 +436,21 @@ def _create_tsdf_mesh(
             valid_before = int(np.count_nonzero(depth > 0.0))
             keep = depth > 0.0
 
-            coeff = (R[0, 0] * xdir[None, :]) + (R[0, 1] * ydir[:, None]) + float(R[0, 2])
+            coeff = (
+                (R[0, 0] * xdir[None, :]) + (R[0, 1] * ydir[:, None]) + float(R[0, 2])
+            )
             xw = float(t[0]) + depth * coeff
             keep &= (xw >= float(bounds[0, 0])) & (xw <= float(bounds[0, 1]))
 
-            coeff = (R[1, 0] * xdir[None, :]) + (R[1, 1] * ydir[:, None]) + float(R[1, 2])
+            coeff = (
+                (R[1, 0] * xdir[None, :]) + (R[1, 1] * ydir[:, None]) + float(R[1, 2])
+            )
             yw = float(t[1]) + depth * coeff
             keep &= (yw >= float(bounds[1, 0])) & (yw <= float(bounds[1, 1]))
 
-            coeff = (R[2, 0] * xdir[None, :]) + (R[2, 1] * ydir[:, None]) + float(R[2, 2])
+            coeff = (
+                (R[2, 0] * xdir[None, :]) + (R[2, 1] * ydir[:, None]) + float(R[2, 2])
+            )
             zw = float(t[2]) + depth * coeff
             keep &= (zw >= float(bounds[2, 0])) & (zw <= float(bounds[2, 1]))
 
@@ -495,8 +522,15 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Extract a TSDF mesh from a gsplat-style 3DGS PLY export."
     )
-    parser.add_argument("--ply_path", type=str, required=True, help="Path to an uncompressed gsplat-style PLY.")
-    parser.add_argument("--data_dir", type=str, required=True, help="COLMAP scene directory.")
+    parser.add_argument(
+        "--ply_path",
+        type=str,
+        required=True,
+        help="Path to an uncompressed gsplat-style PLY.",
+    )
+    parser.add_argument(
+        "--data_dir", type=str, required=True, help="COLMAP scene directory."
+    )
     parser.add_argument(
         "--render_factor",
         "--resolution",
@@ -510,13 +544,45 @@ def main() -> None:
             "This affects both rasterization resolution and TSDF integration."
         ),
     )
-    parser.add_argument("--interval", type=int, default=1, help="Render every N-th frame.")
-    parser.add_argument("--output_dir", type=str, default=None, help="Output directory (default: <ply_dir>/../mesh).")
-    parser.add_argument("--device", type=str, default="cuda", help="Torch device for rendering (e.g. cuda:0, cpu).")
-    parser.add_argument("--sh_degree", type=int, default=-1, help="SH degree to render (-1 uses max from ckpt).")
-    parser.add_argument("--voxel_length", type=float, default=None, help="TSDF voxel size in scene units.")
-    parser.add_argument("--sdf_trunc", type=float, default=None, help="TSDF truncation distance in scene units.")
-    parser.add_argument("--depth_trunc", type=float, default=None, help="Max depth for TSDF integration.")
+    parser.add_argument(
+        "--interval", type=int, default=1, help="Render every N-th frame."
+    )
+    parser.add_argument(
+        "--output_dir",
+        type=str,
+        default=None,
+        help="Output directory (default: <ply_dir>/../mesh).",
+    )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="cuda",
+        help="Torch device for rendering (e.g. cuda:0, cpu).",
+    )
+    parser.add_argument(
+        "--sh_degree",
+        type=int,
+        default=-1,
+        help="SH degree to render (-1 uses max from ckpt).",
+    )
+    parser.add_argument(
+        "--voxel_length",
+        type=float,
+        default=None,
+        help="TSDF voxel size in scene units.",
+    )
+    parser.add_argument(
+        "--sdf_trunc",
+        type=float,
+        default=None,
+        help="TSDF truncation distance in scene units.",
+    )
+    parser.add_argument(
+        "--depth_trunc",
+        type=float,
+        default=None,
+        help="Max depth for TSDF integration.",
+    )
     parser.add_argument(
         "--aabb_min",
         type=float,
@@ -549,7 +615,12 @@ def main() -> None:
         default=50,
         help="Keep K largest connected components (0 disables).",
     )
-    parser.add_argument("--cache_dir", type=str, default=None, help="Cache directory for RGB/depth .npy files.")
+    parser.add_argument(
+        "--cache_dir",
+        type=str,
+        default=None,
+        help="Cache directory for RGB/depth .npy files.",
+    )
     parser.add_argument(
         "--delete_cache",
         action="store_true",
@@ -591,7 +662,10 @@ def main() -> None:
 
     # Import gsplat lazily so we can print early diagnostics before the first
     # run potentially triggers CUDA extension compilation.
-    print("[gsplat] importing rasterization (first run may compile CUDA extensions)...", flush=True)
+    print(
+        "[gsplat] importing rasterization (first run may compile CUDA extensions)...",
+        flush=True,
+    )
     from gsplat.rendering import rasterization  # noqa: WPS433
 
     ply_path = Path(args.ply_path).expanduser().resolve()
@@ -601,7 +675,10 @@ def main() -> None:
     output_dir = (
         Path(args.output_dir).expanduser().resolve()
         if args.output_dir is not None
-        else (ply_path.parent.parent if ply_path.parent.name == "ply" else ply_path.parent) / "mesh"
+        else (
+            ply_path.parent.parent if ply_path.parent.name == "ply" else ply_path.parent
+        )
+        / "mesh"
     )
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -617,13 +694,19 @@ def main() -> None:
         else:
             cache_dir.unlink()
     cache_dir.mkdir(parents=True, exist_ok=True)
-    print(f"[cache] dir={cache_dir} (write_workers={int(args.write_workers)}, queue_size={int(args.queue_size)})")
+    print(
+        f"[cache] dir={cache_dir} (write_workers={int(args.write_workers)}, queue_size={int(args.queue_size)})"
+    )
 
     data_dir = str(args.data_dir)
     mask_dir: Optional[Path] = None
     if args.mask_dir is not None:
         raw = Path(str(args.mask_dir)).expanduser()
-        mask_dir = (Path(data_dir).expanduser().resolve() / raw).resolve() if not raw.is_absolute() else raw.resolve()
+        mask_dir = (
+            (Path(data_dir).expanduser().resolve() / raw).resolve()
+            if not raw.is_absolute()
+            else raw.resolve()
+        )
 
     dataparser = ColmapDataParser(
         data_dir=data_dir,
@@ -638,9 +721,13 @@ def main() -> None:
     parsed_scene = dataparser.get_dataparser_outputs(split="train")
     if int(parsed_scene.indices.size) <= 0:
         raise ValueError(f"Train split is empty for data_dir={data_dir!r}.")
-    print(f"[data] loaded train cameras: {int(parsed_scene.indices.size)} (interval={int(args.interval)})")
+    print(
+        f"[data] loaded train cameras: {int(parsed_scene.indices.size)} (interval={int(args.interval)})"
+    )
     first_image_index = int(parsed_scene.indices[0])
-    h0, w0 = _infer_hw_from_image(image_path=parsed_scene.image_paths[first_image_index])
+    h0, w0 = _infer_hw_from_image(
+        image_path=parsed_scene.image_paths[first_image_index]
+    )
     render_factor = int(args.render_factor)
     if render_factor <= 0:
         raise ValueError(f"--render_factor must be > 0, got {render_factor}")
@@ -712,7 +799,9 @@ def main() -> None:
     all_hws: list[tuple[int, int]] = []
 
     total_frames = int(parsed_scene.indices.size)
-    total_to_render = int(math.ceil(float(total_frames) / float(max(int(args.interval), 1))))
+    total_to_render = int(
+        math.ceil(float(total_frames) / float(max(int(args.interval), 1)))
+    )
     pbar = tqdm.tqdm(total=total_to_render, desc="Rendering RGB+Depth", unit="frame")
 
     write_workers = max(1, int(args.write_workers))
@@ -778,7 +867,9 @@ def main() -> None:
                     )
                 mask_paths.append(str(mp))
 
-            c2w = torch.from_numpy(frame.camtoworld).to(device=device, dtype=torch.float32)[None]
+            c2w = torch.from_numpy(frame.camtoworld).to(
+                device=device, dtype=torch.float32
+            )[None]
             K = torch.from_numpy(frame.K).to(device=device, dtype=torch.float32)[None]
 
             renders, _alphas, meta = rasterization(
@@ -814,7 +905,9 @@ def main() -> None:
             elif isinstance(expected_depth, torch.Tensor):
                 depth = expected_depth
             else:
-                raise RuntimeError("Renderer did not return depth (expected_depth/meta['render_median']).")
+                raise RuntimeError(
+                    "Renderer did not return depth (expected_depth/meta['render_median'])."
+                )
 
             color_path = str(cache_dir / f"color_{rendered:06d}.npy")
             depth_path = str(cache_dir / f"depth_{rendered:06d}.npy")
@@ -849,7 +942,12 @@ def main() -> None:
                     )
                 )
             else:
-                color_np = (color.detach().cpu().numpy() * 255.0).round().clip(0, 255).astype(np.uint8)
+                color_np = (
+                    (color.detach().cpu().numpy() * 255.0)
+                    .round()
+                    .clip(0, 255)
+                    .astype(np.uint8)
+                )
                 depth_np = depth.detach().cpu().numpy().squeeze(-1).astype(np.float16)
                 color_cpu = torch.from_numpy(color_np)
                 depth_cpu = torch.from_numpy(depth_np)
@@ -873,7 +971,9 @@ def main() -> None:
 
     pbar.close()
     render_dt = time.perf_counter() - render_t0
-    print(f"[render] rendered={rendered} frames in {render_dt:.2f}s ({(render_dt/max(rendered,1)):.3f}s/frame)")
+    print(
+        f"[render] rendered={rendered} frames in {render_dt:.2f}s ({(render_dt/max(rendered,1)):.3f}s/frame)"
+    )
 
     # Flush pending disk writes before TSDF integration.
     for _ in range(write_workers):
@@ -882,10 +982,14 @@ def main() -> None:
     for t in writer_threads:
         t.join()
     if write_err:
-        raise RuntimeError(f"Failed to write cached frames (first error): {write_err[0]!r}")
+        raise RuntimeError(
+            f"Failed to write cached frames (first error): {write_err[0]!r}"
+        )
     if write_stats["count"] > 0:
         avg = float(write_stats["time"]) / float(write_stats["count"])
-        print(f"[cache] wrote {int(write_stats['count'])} frames to disk (avg {avg:.4f}s/frame)")
+        print(
+            f"[cache] wrote {int(write_stats['count'])} frames to disk (avg {avg:.4f}s/frame)"
+        )
 
     if rendered <= 0:
         raise RuntimeError("No frames rendered. Check --interval and --data_dir.")
@@ -918,7 +1022,9 @@ def main() -> None:
     o3d.io.write_triangle_mesh(str(out_raw), mesh_raw)
     print(f"Saved mesh: {out_raw}")
 
-    mesh_post = _post_process_mesh(mesh=mesh_raw, cluster_to_keep=int(args.post_process_clusters))
+    mesh_post = _post_process_mesh(
+        mesh=mesh_raw, cluster_to_keep=int(args.post_process_clusters)
+    )
     mesh_post.compute_vertex_normals()
 
     out_post = output_dir / "tsdf_mesh_post.ply"
