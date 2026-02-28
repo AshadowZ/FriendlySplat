@@ -1,4 +1,4 @@
-# Depth/Normal priors (MoGe)
+# Geometry priors (MoGe)
 
 This folder contains scripts for generating dense depth/normal priors that can be consumed by FriendlySplat via `DataConfig.depth_dir_name` / `DataConfig.normal_dir_name` / `DataConfig.sky_mask_dir_name`.
 
@@ -17,7 +17,7 @@ Suggested environment:
 Run from repo root:
 
 ```bash
-python3 tools/depth_prior/moge_infer.py --data-dir /path/to/scene \
+python3 tools/geometry_prior/moge_infer.py --data-dir /path/to/scene \
   --save-depth \
   --save-sky-mask
 ```
@@ -42,4 +42,6 @@ Set these in your training config:
 - `data.depth_dir_name="moge_depth"` (if you exported depth)
 - `data.sky_mask_dir_name="sky_mask"` (if you exported masks)
 
-Note: FriendlySplat currently requires `data_factor=1` when enabling auxiliary priors/masks.
+Note: When training with auxiliary priors/masks, the priors/masks must match the training image resolution.
+For example, if you train with `data_factor=2` (using `images_2/`), generate priors/masks at `images_2/` resolution
+or the dataset loader will raise a shape mismatch error.
