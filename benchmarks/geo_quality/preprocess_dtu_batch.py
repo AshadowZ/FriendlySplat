@@ -138,7 +138,7 @@ def _run_one_scene(
     dry_run: bool,
 ) -> None:
     repo_root = Path(__file__).resolve().parents[2]
-    moge_script = repo_root / "tools" / "depth_prior" / "moge_infer.py"
+    moge_script = repo_root / "tools" / "geometry_prior" / "moge_infer.py"
     if not moge_script.exists():
         raise FileNotFoundError(f"Missing script: {moge_script}")
 
