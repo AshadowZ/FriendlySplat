@@ -9,26 +9,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Tuple
-
-
-_DTU_SCANS_DEFAULT: tuple[str, ...] = (
-    "scan24",
-    "scan37",
-    "scan40",
-    "scan55",
-    "scan63",
-    "scan65",
-    "scan69",
-    "scan83",
-    "scan97",
-    "scan105",
-    "scan106",
-    "scan110",
-    "scan114",
-    "scan118",
-    "scan122",
-)
+from typing import Optional
 
 
 @dataclass(frozen=True)
@@ -44,36 +25,19 @@ def _format_cmd(cmd: list[str]) -> str:
     return " ".join(shlex.quote(c) for c in cmd)
 
 
-def _split_csv(value: Optional[str]) -> list[str]:
-    if value is None:
-        return []
-    items: list[str] = []
-    for part in value.split(","):
-        s = part.strip()
-        if not s:
-            continue
-        items.append(s)
-    return items
+def _safe_rmtree_under(*, path: Path, root: Path) -> None:
+    """Delete a directory tree only if it's under a given root (best-effort safety)."""
+    p = Path(path).expanduser().resolve()
+    r = Path(root).expanduser().resolve()
+    try:
+        p.relative_to(r)
+    except Exception as e:
+        raise ValueError(f"Refusing to delete path outside root (path={p}, root={r}).") from e
+    if p.exists() and p.is_dir():
+        shutil.rmtree(p)
 
 
-def _normalize_scan_name(name: str) -> str:
-    s = str(name).strip()
-    if not s:
-        raise ValueError("Empty scan name.")
-    s = s.lower()
-    if s.startswith("scan"):
-        return f"scan{int(s[4:]):d}"
-    return f"scan{int(s):d}"
-
-
-def _ply_path(*, result_dir: Path, max_steps: int) -> Path:
-    return result_dir / "ply" / f"splats_step{int(max_steps):06d}.ply"
-
-
-def _mesh_path(*, result_dir: Path) -> Path:
-    return result_dir / "mesh" / "tsdf_mesh_post.ply"
-
-def _load_K_Rt_from_P(*, P) -> Tuple["object", "object"]:
+def _load_K_Rt_from_P(*, P) -> tuple[object, object]:
     """Decompose a 3x4 projection matrix to intrinsics (4x4) and pose (4x4).
 
     Matches the convention used by common DTU eval scripts (cv2.decomposeProjectionMatrix).
@@ -128,6 +92,95 @@ def _build_mask_map(*, mask_dir: Path) -> dict[int, Path]:
             continue
         mask_by_id[int(stem)] = p
     return mask_by_id
+
+
+def _prepare_tsdf_mask_from_invalid_mask(
+    *,
+    scene_dir: Path,
+    result_dir: Path,
+    render_factor: int,
+    invalid_mask_dir_name: str = "invalid_mask",
+) -> Optional[Path]:
+    """Invert invalid_mask into a TSDF object mask (255=keep/foreground, 0=discard)."""
+    try:
+        import cv2  # noqa: WPS433
+        import numpy as np  # noqa: WPS433
+    except ModuleNotFoundError:  # pragma: no cover
+        print("[mask] disabled (missing dependency: cv2/numpy)", flush=True)
+        return None
+
+    invalid_dir = scene_dir / str(invalid_mask_dir_name)
+    if not invalid_dir.exists() or not invalid_dir.is_dir():
+        return None
+
+    # Build masks at the TSDF integration resolution to avoid downstream resizing.
+    factor = int(render_factor)
+    image_dir = scene_dir / (f"images_{factor}" if factor > 1 else "images")
+    if not image_dir.is_dir():
+        image_dir = scene_dir / "images"
+
+    exts = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
+    images = (
+        sorted(
+            p
+            for p in image_dir.iterdir()
+            if p.is_file() and p.suffix.lower() in exts
+        )
+        if image_dir.is_dir()
+        else []
+    )
+    if not images:
+        return None
+
+    out_dir = result_dir / "mesh" / "tsdf_obj_mask"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    missing = 0
+    for img in images:
+        stem = img.stem
+        src = invalid_dir / f"{stem}.png"
+        dst = out_dir / f"{stem}.png"
+
+        im = cv2.imread(str(img), cv2.IMREAD_UNCHANGED)
+        if im is None:
+            raise FileNotFoundError(f"Failed to read image to infer size: {img}")
+        h_src, w_src = int(im.shape[0]), int(im.shape[1])
+        if factor > 1 and image_dir.name != f"images_{factor}":
+            h = max(1, int(round(float(h_src) / float(factor))))
+            w = max(1, int(round(float(w_src) / float(factor))))
+        else:
+            h, w = h_src, w_src
+
+        if not src.exists():
+            missing += 1
+            # Keep all pixels if invalid mask is missing for this frame.
+            out = np.full((h, w), 255, dtype=np.uint8)
+        else:
+            m = cv2.imread(str(src), cv2.IMREAD_UNCHANGED)
+            if m is None:
+                raise FileNotFoundError(f"Failed to read invalid mask: {src}")
+            if m.ndim == 3:
+                m = m[:, :, 0]
+            if m.shape[0] != h or m.shape[1] != w:
+                m = cv2.resize(m, (w, h), interpolation=cv2.INTER_NEAREST)
+            # invalid_mask convention: 255=invalid, 0=valid.
+            valid = m.astype(np.uint8, copy=False) < 128
+            out = np.where(valid, 255, 0).astype(np.uint8)
+
+        if out.ndim == 3:
+            out = out[:, :, 0]
+        out = np.ascontiguousarray(out.astype(np.uint8, copy=False))
+        if not cv2.imwrite(str(dst), out):
+            raise RuntimeError(
+                f"Failed to write TSDF mask: {dst} "
+                f"(shape={tuple(out.shape)}, dtype={out.dtype}, contig={out.flags['C_CONTIGUOUS']})"
+            )
+
+    print(
+        f"[mask] enabled (invalid_mask inverted -> {out_dir}, missing={missing}/{len(images)})",
+        flush=True,
+    )
+    return out_dir
 
 
 def _cull_dtu_mesh(
@@ -312,14 +365,14 @@ def _run_tsdf_mesh(
     repo_root: Path,
     ply_path: Path,
     scene_dir: Path,
+    render_factor: int,
     device: str,
     interval: int,
     voxel_length: float,
     sdf_trunc: float,
     depth_trunc: float,
     post_process_clusters: int,
-    tsdf_mask_dir_name: Optional[str],
-    tsdf_mask_dilate: int,
+    tsdf_mask_dir: Optional[Path],
     dry_run: bool,
 ) -> None:
     mesh_script = repo_root / "tools" / "mesh" / "tsdf_mesh_from_ply.py"
@@ -327,13 +380,15 @@ def _run_tsdf_mesh(
         raise FileNotFoundError(f"Missing mesh script: {mesh_script}")
 
     output_dir = ply_path.parent.parent / "mesh"
-    cmd = [
+    cmd: list[str] = [
         sys.executable,
         str(mesh_script),
         "--ply_path",
         str(ply_path),
         "--data_dir",
         str(scene_dir),
+        "--render_factor",
+        str(int(render_factor)),
         "--device",
         str(device),
         "--interval",
@@ -348,16 +403,17 @@ def _run_tsdf_mesh(
         str(int(post_process_clusters)),
         "--output_dir",
         str(output_dir),
-    ]
-    if tsdf_mask_dir_name is not None:
-        cmd.extend(
+        *(
             [
                 "--mask_dir",
-                str(tsdf_mask_dir_name),
+                str(tsdf_mask_dir),
                 "--mask_dilate",
-                str(int(tsdf_mask_dilate)),
+                "0",
             ]
-        )
+            if tsdf_mask_dir is not None
+            else []
+        ),
+    ]
 
     print(f"[mesh] {_format_cmd(cmd)}", flush=True)
     if dry_run:
@@ -451,8 +507,8 @@ def main(argv: list[str]) -> int:
         description="Batch DTU geometry evaluation from FriendlySplat outputs.",
     )
     parser.add_argument("--data-root", type=str, required=True)
-    parser.add_argument("--dtu-dir-name", type=str, default="DTU")
-    parser.add_argument("--out-dir-name", type=str, default="geo_benchmark")
+    parser.add_argument("--dtu-dir-name", type=str, default="dtu_dataset/dtu")
+    parser.add_argument("--out-dir-name", type=str, default="benchmark/geo_benchmark/dtu_benchmark")
     parser.add_argument("--exp-name", type=str, default="dtu_moge_priors")
     parser.add_argument("--max-steps", type=int, default=30_000)
     parser.add_argument(
@@ -489,25 +545,24 @@ def main(argv: list[str]) -> int:
     # Mesh extraction params.
     parser.add_argument("--device", type=str, default="cuda:0")
     parser.add_argument("--interval", type=int, default=1)
+    parser.add_argument(
+        "--tsdf-render-factor",
+        type=int,
+        default=2,
+        help="Render downscale factor for TSDF meshing (default: 2, i.e. half-res).",
+    )
     # Defaults aligned with PGSR DTU TSDF fusion:
     # - voxel_size=0.002, sdf_trunc=4*voxel_size, max_depth=5.0
     parser.add_argument("--voxel-length", type=float, default=0.002)
     parser.add_argument("--sdf-trunc", type=float, default=0.008)
     parser.add_argument("--depth-trunc", type=float, default=5.0)
-    parser.add_argument("--post-process-clusters", type=int, default=2)
+    parser.add_argument("--post-process-clusters", type=int, default=1)
     parser.add_argument(
         "--tsdf-use-mask",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Apply per-frame object mask during TSDF fusion (default: on).",
+        help="Apply invalid_mask-derived object mask during TSDF fusion (default: on).",
     )
-    parser.add_argument(
-        "--tsdf-mask-dir-name",
-        type=str,
-        default="mask",
-        help="Mask dir name under each DTU scan scene dir (e.g. scan24/mask).",
-    )
-    parser.add_argument("--tsdf-mask-dilate", type=int, default=0)
     parser.add_argument(
         "--skip-existing-mesh",
         action=argparse.BooleanOptionalAction,
@@ -534,13 +589,38 @@ def main(argv: list[str]) -> int:
     if not dtu_dir.exists():
         raise FileNotFoundError(f"DTU dir not found: {dtu_dir}")
 
-    scans_raw = str(args.scans).strip().lower()
-    if scans_raw == "default":
-        scans = list(_DTU_SCANS_DEFAULT)
-    elif scans_raw == "all":
+    scans_raw = str(args.scans).strip()
+    if scans_raw.lower() == "default":
+        scans = [
+            "scan24",
+            "scan37",
+            "scan40",
+            "scan55",
+            "scan63",
+            "scan65",
+            "scan69",
+            "scan83",
+            "scan97",
+            "scan105",
+            "scan106",
+            "scan110",
+            "scan114",
+            "scan118",
+            "scan122",
+        ]
+    elif scans_raw.lower() == "all":
         scans = sorted({p.name for p in dtu_dir.iterdir() if p.is_dir() and p.name.startswith("scan")})
     else:
-        scans = [_normalize_scan_name(s) for s in _split_csv(args.scans)]
+        scans = []
+        for part in scans_raw.split(","):
+            s = part.strip()
+            if not s:
+                continue
+            s = s.lower()
+            if s.startswith("scan"):
+                scans.append(f"scan{int(s[4:]):d}")
+            else:
+                scans.append(f"scan{int(s):d}")
 
     if not scans:
         raise ValueError("No scans selected.")
@@ -548,10 +628,7 @@ def main(argv: list[str]) -> int:
     dtu_official_dir: Optional[Path] = None
     if args.dtu_official_dir is None:
         candidates = [
-            dtu_dir / "eval_dtu",
-            data_root / "DTU_Official",
-            data_root / "Official_DTU_Dataset",
-            data_root / "Offical_DTU_Dataset",  # common misspelling in some repos
+            data_root / "dtu_dataset" / "dtu_eval",
         ]
         for cand in candidates:
             if not cand.exists():
@@ -578,42 +655,51 @@ def main(argv: list[str]) -> int:
     eval_py = repo_root / "benchmarks" / "geo_quality" / "dtu_eval" / "eval.py"
     if not eval_py.exists():
         raise FileNotFoundError(f"DTU eval.py not found: {eval_py}")
-    results_root = data_root / str(args.out_dir_name) / "DTU"
+    results_root = data_root / str(args.out_dir_name)
 
     rows: list[_EvalRow] = []
     any_failed = False
+    tag = "dry-run" if bool(args.dry_run) else "run"
     for scan in scans:
         scene_dir = dtu_dir / scan
         result_dir = results_root / scan / str(args.exp_name)
-        ply = _ply_path(result_dir=result_dir, max_steps=int(args.max_steps))
+        if not scene_dir.exists():
+            print(f"[skip] missing scan dir: {scene_dir}", flush=True)
+            any_failed = True
+            continue
+
+        ply = result_dir / "ply" / f"splats_step{int(args.max_steps):06d}.ply"
         if not ply.exists():
             print(f"[skip] missing ply: {ply}", flush=True)
             any_failed = True
             continue
 
-        mesh = _mesh_path(result_dir=result_dir)
+        mesh = result_dir / "mesh" / "tsdf_mesh_post.ply"
         if not (bool(args.skip_existing_mesh) and mesh.exists()):
-            tsdf_mask_dir_name: Optional[str] = None
+            tsdf_mask_dir: Optional[Path] = None
             if bool(args.tsdf_use_mask):
-                cand = scene_dir / str(args.tsdf_mask_dir_name)
-                if cand.exists() and cand.is_dir():
-                    tsdf_mask_dir_name = str(args.tsdf_mask_dir_name)
-                else:
-                    print(f"[mask] disabled (missing dir): {cand}", flush=True)
+                tsdf_mask_dir = _prepare_tsdf_mask_from_invalid_mask(
+                    scene_dir=scene_dir,
+                    result_dir=result_dir,
+                    render_factor=int(args.tsdf_render_factor),
+                )
             _run_tsdf_mesh(
                 repo_root=repo_root,
                 ply_path=ply,
                 scene_dir=scene_dir,
+                render_factor=int(args.tsdf_render_factor),
                 device=str(args.device),
                 interval=int(args.interval),
                 voxel_length=float(args.voxel_length),
                 sdf_trunc=float(args.sdf_trunc),
                 depth_trunc=float(args.depth_trunc),
                 post_process_clusters=int(args.post_process_clusters),
-                tsdf_mask_dir_name=tsdf_mask_dir_name,
-                tsdf_mask_dilate=int(args.tsdf_mask_dilate),
+                tsdf_mask_dir=tsdf_mask_dir,
                 dry_run=bool(args.dry_run),
             )
+            if tsdf_mask_dir is not None and not bool(args.dry_run):
+                _safe_rmtree_under(path=tsdf_mask_dir, root=result_dir)
+                print(f"[mask] deleted {tsdf_mask_dir}", flush=True)
 
         eval_out_dir = result_dir / "eval_dtu"
         results_json = eval_out_dir / "results.json"
@@ -640,6 +726,7 @@ def main(argv: list[str]) -> int:
         culled_mesh = eval_out_dir / "culled_mesh.ply"
         if not bool(args.dry_run):
             eval_out_dir.mkdir(parents=True, exist_ok=True)
+        print(f"[{tag}] {scan} -> {eval_out_dir}", flush=True)
         print(f"[cull] {scan} -> {culled_mesh}", flush=True)
         if not bool(args.dry_run):
             _cull_dtu_mesh(

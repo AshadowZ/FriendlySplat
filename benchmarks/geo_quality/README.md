@@ -1,31 +1,96 @@
-# geo_quality (DTU)
+# geo_quality (DTU + TnT)
 
-This folder contains scripts for geometry-focused benchmarking workflows.
+This folder contains batch scripts for geometry-focused benchmarking on:
 
-## DTU MoGe priors
+- **TnT (Tanks & Temples)**: mesh + F1 eval
+- **DTU**: mesh + official DTU geometry eval
 
-Generate dense normal priors for each `DTU/scanXXX` scene by running `tools/depth_prior/moge_infer.py`:
+## Common assumptions
+
+### Data root layout
+
+All scripts take a `--data-root` that contains dataset folders in fixed locations:
+
+```
+<data-root>/
+  tnt_dataset/
+    tnt/
+      <Scene>/
+        images/            # input images (full res)
+        sparse/            # COLMAP sparse model
+        <Scene>_COLMAP_SfM.log
+        <Scene>_trans.txt
+        transforms.json    # (optional)
+        ...
+
+  dtu_dataset/
+    dtu/
+      scanXX/
+        images/            # input images (full res; often RGBA)
+        sparse/            # COLMAP sparse model
+        mask/              # DTU foreground masks (for DTU eval mesh culling)
+        cameras.npz        # DTU camera pack used by DTU eval/culling
+        ...
+    dtu_eval/              # official DTU eval assets
+      ObsMask/
+      Points/
+        stl/
+```
+
+Notes:
+
+- `preprocess_*.py` modifies the dataset folders in-place (writes `images_2/`, priors, masks).
+- DTU **evaluation** requires `scanXX/mask/` and `scanXX/cameras.npz` (mesh culling step before calling `eval.py`).
+
+### Output directory layout
+
+Training/eval outputs are written under `--data-root / --out-dir-name` (default paths shown):
+
+- TnT default: `<data-root>/benchmark/geo_benchmark/tnt_benchmark/<Scene>/<exp-name>/...`
+- DTU default: `<data-root>/benchmark/geo_benchmark/dtu_benchmark/scanXX/<exp-name>/...`
+
+Both runners append `extra_args` to the end of the `friendly_splat/trainer.py` command line (after `--`), so any
+trainer flag you pass there overrides the script defaults.
+
+## Resolution policy (matches prior baseline)
+
+This benchmark follows the same practice as the reference baselines:
+
+- **Training is half-resolution only**: `--data.data-factor 2` (i.e. use `images_2/`)
+- **TSDF meshing is half-resolution by default**: `--tsdf-render-factor 2` (renders depth at half-res before fusion)
+
+This is intentionally aligned with the 2DGS benchmark setup.
+
+## DTU
+
+### Preprocess (images_2 + MoGe normals + optional invalid_mask)
 
 ```bash
-python3 benchmarks/geo_quality/run_moge_priors_dtu_batch.py \
+python3 benchmarks/geo_quality/preprocess_dtu_batch.py \
   --data-root /path/to/data \
   --scans default
 ```
 
-If DTU images are RGBA and you want to mask out the alpha background during training, enable alpha-mask export:
+What it writes into each `dtu_dataset/dtu/scanXX/`:
+
+- `images_2/` (half-res, RGB only; generated from `images/`)
+- `moge_normal/` (half-res normal priors from MoGe)
+
+If DTU images are RGBA and you want an alpha-derived invalid/background mask:
 
 ```bash
-python3 benchmarks/geo_quality/run_moge_priors_dtu_batch.py \
+python3 benchmarks/geo_quality/preprocess_dtu_batch.py \
   --data-root /path/to/data \
   --scans default \
   --export-alpha-mask
 ```
 
-This writes `DTU/scanXXX/invalid_mask/*.png` where white (255) indicates background (`alpha<0.5`) and black (0) indicates foreground (`alpha>=0.5`). Use it as `data.sky_mask_dir_name="invalid_mask"` to ignore background pixels (and encourage transparency) during training.
+This writes `invalid_mask/*.png` (half-res) where:
 
-## DTU training (with priors + invalid_mask as sky_mask)
+- `255` = invalid/background (`alpha < 0.5`)
+- `0` = valid/foreground (`alpha >= 0.5`)
 
-Train each scan with `moge_normal/` enabled, and use `invalid_mask/` as `sky_mask_dir_name`:
+### Train
 
 ```bash
 python3 benchmarks/geo_quality/run_train_dtu_batch.py \
@@ -33,96 +98,54 @@ python3 benchmarks/geo_quality/run_train_dtu_batch.py \
   --scans default
 ```
 
-Defaults (can be overridden via CLI flags):
+Defaults are hardcoded in `benchmarks/geo_quality/run_train_dtu_batch.py`.
+To override ad-hoc, append trainer args after `--`, e.g.:
 
-- `--data-preload cuda`
-- `--postprocess.use-bilateral-grid` (requires `fused_bilagrid`)
-- `--strategy-impl improved`
-- `--densification-budget 1000000`
-- `--prune-opa 0.05`
-- `--prune-scale3d 0.1`
-- `--flat-reg-weight 1.0`
-- `--scale-ratio-reg-weight 1.0`
+```bash
+python3 benchmarks/geo_quality/run_train_dtu_batch.py \
+  --data-root /path/to/data \
+  --scans scan24 \
+  -- --strategy.grow-grad2d 0.0004
+```
 
-By default, the script enables invalid-mask sky masking.
-Use `--no-use-invalid-mask` to disable sky masking.
+Notes:
 
-This writes outputs under `<data-root>/geo_benchmark/DTU/scanXXX/<exp-name>/`.
+- Training uses `images_2/` (`--data.data-factor 2`) and MoGe normals (`--data.normal-dir-name moge_normal`).
+- By default this DTU runner does **not** pass `invalid_mask/` into the trainer; if you want to use it, override with:
+  `-- --data.sky-mask-dir-name invalid_mask`
 
-## DTU mesh + geometry evaluation
-
-Given trained splat PLYs, reconstruct a TSDF mesh and run the DTU geometry eval script:
+### Mesh + geometry evaluation
 
 ```bash
 python3 benchmarks/geo_quality/run_eval_dtu_batch.py \
   --data-root /path/to/data \
-  --scans default \
-  --dtu-official-dir /path/to/DTU_Official
+  --scans default
 ```
 
-If you have the DTU official eval assets bundled under `<data-root>/DTU/eval_dtu/` (i.e. it contains `ObsMask/` and `Points/stl/`),
-you can omit `--dtu-official-dir` and the script will auto-detect it.
+This does:
 
-By default, the script uses FriendlySplat's internal DTU mesh culling implementation and runs `eval.py` directly.
-The DTU `eval.py` script is vendored under `benchmarks/geo_quality/dtu_eval/`. `--dtu-official-dir` must point to a
-directory containing `ObsMask/` and `Points/stl/`.
+1) TSDF mesh reconstruction from the exported splat PLY via `tools/mesh/tsdf_mesh_from_ply.py`
+2) mesh culling using DTU `mask/` + `cameras.npz`
+3) official DTU eval via vendored `benchmarks/geo_quality/dtu_eval/eval.py` (uses `dtu_dataset/dtu_eval/`)
 
-The internal culling treats pixels with `alpha > 0.5` in `DTU/scanXXX/mask/*.png` as foreground.
+If your official DTU eval assets are not under `<data-root>/dtu_dataset/dtu_eval/`, pass `--dtu-official-dir` explicitly.
 
-By default, TSDF fusion applies the per-frame DTU object mask at `DTU/scanXXX/mask/` (PGSR-style: depth is set to 0 outside the mask).
-Use `--no-tsdf-use-mask` to disable or `--tsdf-mask-dir-name` to change the folder name.
-
-TSDF defaults are aligned with PGSR's DTU settings:
+DTU TSDF defaults (borrowed from **PGSR**-style DTU TSDF fusion):
 
 - `--voxel-length 0.002`
-- `--sdf-trunc 0.008` (i.e. `4 * voxel_length`)
+- `--sdf-trunc 0.008` (`4 * voxel_length`)
 - `--depth-trunc 5.0`
 
-Expected dataset layout:
+DTU TSDF mask policy:
 
-```
-<data-root>/
-  DTU/
-    scan24/
-      images/
-      mask/
-      sparse/
-    scan105/
-      images/
-      mask/
-      sparse/
-```
+- By default (`--tsdf-use-mask`), TSDF fusion uses an **object mask derived from `invalid_mask/`** (inverted) and
+  zeroes depth outside the mask.
 
-Outputs are written into each scan folder:
+Summary:
 
-- `DTU/scanXXX/moge_normal/` (PNG)
-
-Evaluation summary:
-
-- A Markdown summary table is written to `<data-root>/geo_benchmark/summary_<exp-name>.md`.
-- By default, per-scan TSDF cache files under `<result_dir>/mesh/cache/` are deleted after evaluation. Use `--no-delete-mesh-cache` to keep them.
-
-Notes:
-
-- The script is sequential (one scan at a time).
-- Use `--dry-run` to print the commands first.
-- Use `--no-skip-existing` to regenerate outputs.
+- A Markdown summary is written to `<data-root>/benchmark/geo_benchmark/dtu_benchmark/summary_<exp-name>.md`.
 
 ## TnT (Tanks & Temples)
-
-Assumes each scene folder contains a COLMAP reconstruction and the official evaluation assets:
-
-```
-<data-root>/
-  Tanks&Temples-Geo/
-    Barn/
-      images/
-      sparse/
-      Barn_COLMAP_SfM.log
-      Barn_trans.txt
-      Barn.json
-      Barn.ply
-```
 
 ### Preprocess (images_2 + MoGe priors)
 
@@ -132,12 +155,12 @@ python3 benchmarks/geo_quality/preprocess_tnt_batch.py \
   --scenes default
 ```
 
-This generates half-resolution images and writes priors into each `<Scene>/`:
+Writes into each `tnt_dataset/tnt/<Scene>/`:
 
-- `images_2/*` (half-res)
-- `moge_normal/*.png`
-- `moge_depth/*.npy`
-- `invalid_mask/*.png` (255=invalid, 0=valid)
+- `images_2/` (half-res)
+- `moge_normal/` (normal priors)
+- `moge_depth/` (depth priors)
+- `invalid_mask/` (sky/invalid mask, 255=invalid, 0=valid)
 
 ### Train
 
@@ -147,16 +170,7 @@ python3 benchmarks/geo_quality/run_train_tnt_batch.py \
   --scenes default
 ```
 
-By default, this script auto-generates (if missing) and enables:
-
-- half-resolution images: `images_2/` (generated from `images/`)
-- depth prior: `moge_depth/` (`--data.depth-dir-name moge_depth`)
-- normal prior: `moge_normal/` (`--data.normal-dir-name moge_normal`)
-- invalid mask: `invalid_mask/` (`--data.sky-mask-dir-name invalid_mask`)
-
-Use `--no-use-depth-prior` to disable the depth prior, or `--no-use-invalid-mask` to disable sky masking.
-
-Outputs are written under `<data-root>/geo_benchmark/TnT/<Scene>/<exp-name>/`.
+This runner follows the 2DGS baseline practice: half-res only (`--data.data-factor 2`) and enables MoGe priors by default.
 
 ### Mesh + F1 eval
 
@@ -166,23 +180,14 @@ python3 benchmarks/geo_quality/run_eval_tnt_batch.py \
   --scenes default
 ```
 
-This reconstructs a TSDF mesh from the exported splat PLY via `tools/mesh/tsdf_mesh_from_ply.py`,
-then runs a minimal TnT official toolbox evaluator under `benchmarks/geo_quality/tnt_eval/`.
+TnT evaluation is aligned with the **2DGS** setup:
 
-By default, TSDF hyperparameters use a single preset (unless you override them via CLI flags):
-
-- `voxel_length=0.002`, `sdf_trunc=0.008`, `depth_trunc=20.0`
-
-If a scene contains a `transforms.json` (or `transforms_train.json`) with an `aabb_range` field (PGSR-style),
-the evaluator adapts TSDF voxel size as:
-
-- `voxel_length = max(voxel_length, max_dis / 2048)`
-- `sdf_trunc = 4 * voxel_length` (unless `--sdf-trunc` is explicitly set)
-
-By default, TSDF meshing renders at half resolution:
-
-- `--tsdf-render-factor 2` (forwarded to `tools/mesh/tsdf_mesh_from_ply.py` as `--resolution`)
+- TSDF meshing uses `tools/mesh/tsdf_mesh_from_ply.py` at half resolution by default (`--tsdf-render-factor 2`).
+- TSDF hyperparameters use the 2DGS-style per-scene presets:
+  - Large-scale scenes (Meetingroom/Courthouse/Church): `voxel_length=0.006`, `sdf_trunc=0.024`, `depth_trunc=4.5`
+  - 360 scenes (Barn/Caterpillar/Ignatius/Truck): `voxel_length=0.004`, `sdf_trunc=0.016`, `depth_trunc=3.0`
+- TSDF fusion uses an object mask derived from `invalid_mask/` (inverted) when available.
 
 Summary:
 
-- A Markdown summary table is written to `<data-root>/geo_benchmark/summary_tnt_<exp-name>.md`.
+- A Markdown summary is written to `<data-root>/benchmark/geo_benchmark/tnt_benchmark/summary_<exp-name>.md`.

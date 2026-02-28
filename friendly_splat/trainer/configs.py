@@ -412,7 +412,7 @@ class StrategyConfig:
     # Gradient threshold (2D) for splitting/growing Gaussians.
     grow_grad2d: float = 0.0002
     # 3D scale threshold for pruning.
-    prune_scale3d: float = 0.08
+    prune_scale3d: float = 0.1
     # 2D projected scale threshold for pruning.
     prune_scale2d: float = 0.15
     # Stop refining 2D scale after this step.
@@ -550,12 +550,6 @@ def validate_train_config(cfg: TrainConfig) -> None:
             raise ValueError(
                 f"preload='cuda' requires io.device to be CUDA (e.g. 'cuda' or 'cuda:0'), got {cfg.io.device!r}"
             )
-        if cfg.data.prefetch_to_gpu:
-            raise ValueError(
-                "preload='cuda' is incompatible with prefetch_to_gpu=True."
-            )
-        if cfg.data.num_workers not in (None, 0):
-            raise ValueError("preload='cuda' requires data.num_workers=0.")
 
     if cfg.optim.sparse_grad and cfg.optim.visible_adam:
         raise ValueError(

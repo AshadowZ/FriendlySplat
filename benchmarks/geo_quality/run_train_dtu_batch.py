@@ -6,184 +6,50 @@ import os
 import shlex
 import subprocess
 import sys
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 
-_DTU_SCANS_DEFAULT: tuple[str, ...] = (
-    "scan24",
-    "scan37",
-    "scan40",
-    "scan55",
-    "scan63",
-    "scan65",
-    "scan69",
-    "scan83",
-    "scan97",
-    "scan105",
-    "scan106",
-    "scan110",
-    "scan114",
-    "scan118",
-    "scan122",
-)
-
-
-@dataclass(frozen=True)
-class _Counts:
-    images: int
-    normals: int
-    invalid_masks: int
+def _read_flag_value(*, extra_args: list[str], flag: str):
+    value = None
+    for i, a in enumerate(extra_args):
+        if a.startswith(f"{flag}="):
+            value = a.split("=", 1)[1]
+            continue
+        if a == flag and i + 1 < len(extra_args):
+            value = extra_args[i + 1]
+            continue
+    return value
 
 
 def _format_cmd(cmd: list[str]) -> str:
     return " ".join(shlex.quote(c) for c in cmd)
 
 
-def _split_csv(value: Optional[str]) -> list[str]:
-    if value is None:
-        return []
-    items: list[str] = []
-    for part in value.split(","):
-        s = part.strip()
-        if not s:
-            continue
-        items.append(s)
-    return items
-
-
-def _normalize_scan_name(name: str) -> str:
-    s = str(name).strip()
-    if not s:
-        raise ValueError("Empty scan name.")
-    s = s.lower()
-    if s.startswith("scan"):
-        return f"scan{int(s[4:]):d}"
-    return f"scan{int(s):d}"
-
-
-def _image_stems_flat(*, scene_dir: Path) -> list[str]:
-    image_dir = scene_dir / "images"
-    exts = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
-    if not image_dir.exists():
-        return []
-    files = sorted(
-        (p for p in image_dir.iterdir() if p.is_file() and p.suffix.lower() in exts),
-        key=lambda p: p.name,
-    )
-    return [p.stem for p in files]
-
-
-def _count_scene_priors(
-    *,
-    scene_dir: Path,
-    invalid_mask_dir_name: Optional[str],
-) -> _Counts:
-    stems = _image_stems_flat(scene_dir=scene_dir)
-    images = len(stems)
-
-    normal_dir = scene_dir / "moge_normal"
-    normals = sum(1 for s in stems if (normal_dir / f"{s}.png").is_file())
-
-    invalid_masks = 0
-    if invalid_mask_dir_name is not None:
-        mask_dir = scene_dir / str(invalid_mask_dir_name)
-        invalid_masks = sum(1 for s in stems if (mask_dir / f"{s}.png").is_file())
-
-    return _Counts(
-        images=int(images),
-        normals=int(normals),
-        invalid_masks=int(invalid_masks),
-    )
-
-
-def _priors_ready(
-    *,
-    scene_dir: Path,
-    invalid_mask_dir_name: Optional[str],
-) -> bool:
-    c = _count_scene_priors(
-        scene_dir=scene_dir,
-        invalid_mask_dir_name=invalid_mask_dir_name,
-    )
-    if c.images <= 0:
-        return False
-    if c.normals != c.images:
-        return False
-    if invalid_mask_dir_name is not None and c.invalid_masks != c.images:
-        return False
-    return True
-
-
-def _ply_done_path(*, result_dir: Path, max_steps: int) -> Path:
-    return result_dir / "ply" / f"splats_step{int(max_steps):06d}.ply"
-
-
-def _train_done(*, result_dir: Path, max_steps: int) -> bool:
-    return _ply_done_path(result_dir=result_dir, max_steps=max_steps).exists()
-
-
-def _prepare_priors(
-    *,
-    repo_root: Path,
-    data_root: Path,
-    scans: list[str],
-    python: str,
-    export_alpha_mask: bool,
-    verbose: bool,
-    dry_run: bool,
-) -> None:
-    prep_script = repo_root / "benchmarks" / "geo_quality" / "run_moge_priors_dtu_batch.py"
-    if not prep_script.exists():
-        raise FileNotFoundError(f"Missing prior script: {prep_script}")
-
-    cmd = [
-        str(python),
-        str(prep_script),
-        "--data-root",
-        str(data_root),
-        "--scans",
-        ",".join(scans),
-    ]
-    if export_alpha_mask:
-        cmd.append("--export-alpha-mask")
-    if verbose:
-        cmd.append("--verbose")
-    if dry_run:
-        cmd.append("--dry-run")
-
-    print(f"[prepare] {_format_cmd(cmd)}", flush=True)
-    if dry_run:
-        return
-    subprocess.run(cmd, check=True, cwd=str(repo_root))
-
-
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="run_train_dtu_batch.py",
-        description=(
-            "Batch runner for DTU training with MoGe normal priors. "
-            "Uses invalid_mask as sky_mask to ignore alpha background pixels."
-        ),
+        description="Batch runner for DTU training (half-res, priors).",
     )
     parser.add_argument(
         "--data-root",
         type=str,
         required=True,
-        help="Root directory containing DTU/ (e.g. /path/to/data).",
+        help=(
+            "Root directory containing the DTU dataset folders "
+            "(expects dtu_dataset/dtu/ under this root)."
+        ),
     )
     parser.add_argument(
         "--dtu-dir-name",
         type=str,
-        default="DTU",
-        help="DTU directory name under data-root (default: DTU).",
+        default="dtu_dataset/dtu",
+        help="DTU scene directory under data-root (default: dtu_dataset/dtu).",
     )
     parser.add_argument(
         "--out-dir-name",
         type=str,
-        default="geo_benchmark",
-        help="Output root directory name under data-root (default: geo_benchmark).",
+        default="benchmark/geo_benchmark/dtu_benchmark",
+        help="Output directory under data-root (default: benchmark/geo_benchmark/dtu_benchmark).",
     )
     parser.add_argument(
         "--exp-name",
@@ -192,86 +58,10 @@ def main(argv: list[str]) -> int:
         help="Experiment name under each scan output folder.",
     )
     parser.add_argument(
-        "--device",
-        type=str,
-        default="cuda:0",
-        help="Torch device string passed to trainer.",
-    )
-    parser.add_argument(
-        "--data-preload",
-        type=str,
-        choices=("none", "cuda"),
-        default="cuda",
-        help="DataLoader preload mode (default: cuda).",
-    )
-    parser.add_argument(
-        "--max-steps",
-        type=int,
-        default=30_000,
-        help="Training steps for each scan.",
-    )
-    parser.add_argument(
-        "--strategy-impl",
-        type=str,
-        default="improved",
-        help="Strategy impl forwarded to trainer (default: improved).",
-    )
-    parser.add_argument(
-        "--densification-budget",
-        type=int,
-        default=1_000_000,
-        help="Per-scan densification budget (approx. max gaussians; default: 1000000).",
-    )
-    parser.add_argument(
-        "--grow-grad2d",
-        type=float,
-        default=None,
-        help="Optional: forward to trainer as --strategy.grow-grad2d (default: unchanged).",
-    )
-    parser.add_argument(
-        "--prune-opa",
-        type=float,
-        default=0.05,
-        help="Strategy prune_opa forwarded to trainer (default: 0.05).",
-    )
-    parser.add_argument(
-        "--prune-scale3d",
-        type=float,
-        default=0.1,
-        help="Strategy prune_scale3d forwarded to trainer (default: 0.1).",
-    )
-    parser.add_argument(
-        "--flat-reg-weight",
-        type=float,
-        default=1.0,
-        help="Forward to trainer as --reg.flat-reg-weight (default: 1.0).",
-    )
-    parser.add_argument(
-        "--scale-ratio-reg-weight",
-        type=float,
-        default=1.0,
-        help="Forward to trainer as --reg.scale-ratio-reg-weight (default: 1.0).",
-    )
-    parser.add_argument(
         "--scans",
         type=str,
         default="default",
-        help=(
-            "Comma-separated scan ids/names to run (e.g. '24,37' or 'scan24,scan37'). "
-            "Use 'default' for the common 15-scan benchmark list, or 'all' to auto-discover."
-        ),
-    )
-    parser.add_argument(
-        "--use-invalid-mask",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Use invalid_mask as data.sky_mask_dir_name during training (default: on).",
-    )
-    parser.add_argument(
-        "--invalid-mask-dir-name",
-        type=str,
-        default="invalid_mask",
-        help="Per-scan mask folder name used as sky_mask_dir_name (default: invalid_mask).",
+        help="default|all|csv of scan ids/names (e.g. scan24,37).",
     )
     parser.add_argument(
         "--skip-existing",
@@ -279,20 +69,15 @@ def main(argv: list[str]) -> int:
         default=True,
         help="Skip a scan if its final PLY already exists under the output dir (default: on).",
     )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Print commands without executing.",
-    )
-    parser.add_argument(
-        "--verbose",
-        action="store_true",
-        help="Verbose logging.",
-    )
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--verbose", action="store_true")
     parser.add_argument(
         "extra_args",
         nargs=argparse.REMAINDER,
-        help="Extra args forwarded to friendly_splat/trainer.py (use after '--').",
+        help=(
+            "Extra args forwarded to friendly_splat/trainer.py (use after '--'). "
+            "These are appended after the script's default trainer hyperparameters."
+        ),
     )
     args = parser.parse_args(argv)
 
@@ -301,13 +86,38 @@ def main(argv: list[str]) -> int:
     if not dtu_dir.exists():
         raise FileNotFoundError(f"DTU dir not found: {dtu_dir}")
 
-    scans_raw = str(args.scans).strip().lower()
-    if scans_raw == "default":
-        scans = list(_DTU_SCANS_DEFAULT)
-    elif scans_raw == "all":
+    scans_raw = str(args.scans).strip()
+    if scans_raw.lower() == "default":
+        scans = [
+            "scan24",
+            "scan37",
+            "scan40",
+            "scan55",
+            "scan63",
+            "scan65",
+            "scan69",
+            "scan83",
+            "scan97",
+            "scan105",
+            "scan106",
+            "scan110",
+            "scan114",
+            "scan118",
+            "scan122",
+        ]
+    elif scans_raw.lower() == "all":
         scans = sorted({p.name for p in dtu_dir.iterdir() if p.is_dir() and p.name.startswith("scan")})
     else:
-        scans = [_normalize_scan_name(s) for s in _split_csv(args.scans)]
+        scans = []
+        for part in scans_raw.split(","):
+            s = part.strip()
+            if not s:
+                continue
+            s = s.lower()
+            if s.startswith("scan"):
+                scans.append(f"scan{int(s[4:]):d}")
+            else:
+                scans.append(f"scan{int(s):d}")
     if not scans:
         raise ValueError("No scans selected.")
 
@@ -316,73 +126,94 @@ def main(argv: list[str]) -> int:
     if not trainer_py.exists():
         raise FileNotFoundError(f"Trainer script not found: {trainer_py}")
 
+    preprocess_py = repo_root / "benchmarks" / "geo_quality" / "preprocess_dtu_batch.py"
+    if not preprocess_py.exists():
+        raise FileNotFoundError(f"Missing script: {preprocess_py}")
+
     extra_args = list(args.extra_args)
     if extra_args and extra_args[0] == "--":
         extra_args = extra_args[1:]
 
-    out_root = data_root / str(args.out_dir_name) / "DTU"
+    max_steps_override = _read_flag_value(extra_args=extra_args, flag="--optim.max-steps")
+    max_steps = int(max_steps_override) if max_steps_override is not None else 30_000
+
+    out_root = data_root / str(args.out_dir_name)
     if not bool(args.dry_run):
         out_root.mkdir(parents=True, exist_ok=True)
 
-    invalid_mask_dir_name = (
-        str(args.invalid_mask_dir_name) if bool(args.use_invalid_mask) else None
-    )
+    tag = "dry-run" if bool(args.dry_run) else "run"
 
-    missing_priors_scans: list[str] = []
+    exts_img = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
+    scans_need_preprocess: list[str] = []
     for scan in scans:
-        scene_dir = dtu_dir / scan
+        scene_dir = dtu_dir / str(scan)
         if not scene_dir.exists():
             continue
-        c = _count_scene_priors(
-            scene_dir=scene_dir,
-            invalid_mask_dir_name=invalid_mask_dir_name,
-        )
-        if c.images <= 0:
+
+        result_dir = out_root / str(scan) / str(args.exp_name)
+        final_ply = result_dir / "ply" / f"splats_step{int(max_steps):06d}.ply"
+        if bool(args.skip_existing) and final_ply.exists():
             continue
-        if not _priors_ready(scene_dir=scene_dir, invalid_mask_dir_name=invalid_mask_dir_name):
-            missing_priors_scans.append(scan)
+
+        images_2_dir = scene_dir / "images_2"
+        moge_normal_dir = scene_dir / "moge_normal"
+        invalid_mask_dir = scene_dir / "invalid_mask"
+
+        have_images_2 = images_2_dir.is_dir() and any(
+            p.is_file() and p.suffix.lower() in exts_img for p in images_2_dir.iterdir()
+        )
+        have_normals = moge_normal_dir.is_dir() and any(
+            p.is_file() and p.suffix.lower() == ".png" for p in moge_normal_dir.iterdir()
+        )
+        have_invalid = invalid_mask_dir.is_dir() and any(
+            p.is_file() and p.suffix.lower() == ".png" for p in invalid_mask_dir.iterdir()
+        )
+
+        if not (have_images_2 and have_normals and have_invalid):
+            scans_need_preprocess.append(str(scan))
+
+    if scans_need_preprocess:
+        preprocess_cmd = [
+            sys.executable,
+            str(preprocess_py),
+            "--data-root",
+            str(data_root),
+            "--dtu-dir-name",
+            str(args.dtu_dir_name),
+            "--scans",
+            ",".join(scans_need_preprocess),
+            "--skip-existing",
+            "--skip-existing-images-2",
+            "--export-alpha-mask",
+            *(["--verbose"] if bool(args.verbose) else []),
+            *(["--dry-run"] if bool(args.dry_run) else []),
+        ]
+        print(f"[{tag}] preprocess priors: {len(scans_need_preprocess)} scans", flush=True)
+        print(f"[cmd] {_format_cmd(preprocess_cmd)}", flush=True)
+        if not bool(args.dry_run):
+            proc = subprocess.run(preprocess_cmd, check=False, cwd=str(repo_root))
+            if proc.returncode != 0:
+                print(f"[warn] preprocess returned {proc.returncode}.", flush=True)
 
     any_failed = False
-    if missing_priors_scans:
-        try:
-            _prepare_priors(
-                repo_root=repo_root,
-                data_root=data_root,
-                scans=missing_priors_scans,
-                python=sys.executable,
-                export_alpha_mask=(invalid_mask_dir_name is not None),
-                verbose=bool(args.verbose),
-                dry_run=bool(args.dry_run),
-            )
-        except subprocess.CalledProcessError as e:
-            any_failed = True
-            print(f"[warn] prior generation failed (exit={e.returncode})", flush=True)
-
     for scan in scans:
-        scene_dir = dtu_dir / scan
+        scene_dir = dtu_dir / str(scan)
         if not scene_dir.exists():
             print(f"[skip] missing scan dir: {scene_dir}", flush=True)
+            any_failed = True
             continue
-
-        if not _priors_ready(
-            scene_dir=scene_dir,
-            invalid_mask_dir_name=invalid_mask_dir_name,
-        ):
-            c = _count_scene_priors(
-                scene_dir=scene_dir,
-                invalid_mask_dir_name=invalid_mask_dir_name,
-            )
-            print(
-                f"[skip] priors missing/incomplete: {scan} "
-                f"(images={c.images}, normals={c.normals}, invalid_masks={c.invalid_masks})",
-                flush=True,
-            )
+        if not (scene_dir / "images").exists():
+            print(f"[skip] missing images/: {scene_dir}", flush=True)
+            any_failed = True
+            continue
+        if not (scene_dir / "sparse").exists():
+            print(f"[skip] missing sparse/: {scene_dir}", flush=True)
             any_failed = True
             continue
 
-        result_dir = out_root / scan / str(args.exp_name)
-        done = _train_done(result_dir=result_dir, max_steps=int(args.max_steps))
-        if bool(args.skip_existing) and done:
+        result_dir = out_root / str(scan) / str(args.exp_name)
+        final_ply = result_dir / "ply" / f"splats_step{int(max_steps):06d}.ply"
+        if bool(args.skip_existing) and final_ply.exists():
             print(f"[done] {scan}: {result_dir}", flush=True)
             continue
 
@@ -395,59 +226,55 @@ def main(argv: list[str]) -> int:
         cmd: list[str] = [
             sys.executable,
             str(trainer_py),
-            "--io.data-dir",
-            str(scene_dir),
-            "--io.result-dir",
-            str(result_dir),
-            "--io.device",
-            str(args.device),
-            "--data.data-factor",
-            "1",
-            "--data.preload",
-            str(args.data_preload),
-            "--data.normal-dir-name",
-            "moge_normal",
-            "--postprocess.use-bilateral-grid",
-            "--optim.max-steps",
-            str(int(args.max_steps)),
-            "--strategy.impl",
-            str(args.strategy_impl),
-            "--strategy.densification-budget",
-            str(int(args.densification_budget)),
-            "--strategy.prune-opa",
-            str(float(args.prune_opa)),
-            "--strategy.prune-scale3d",
-            str(float(args.prune_scale3d)),
-            "--strategy.absgrad",
-            "--reg.flat-reg-weight",
-            str(float(args.flat_reg_weight)),
-            "--reg.scale-ratio-reg-weight",
-            str(float(args.scale_ratio_reg_weight)),
-            "--viewer.disable-viewer",
+            # ----------------------------
+            # I/O
+            # ----------------------------
+            "--io.data-dir", str(scene_dir),
+            "--io.result-dir", str(result_dir),
+            "--io.device", "cuda:0",
             "--io.export-ply",
-            "--io.ply-steps",
-            str(int(args.max_steps)),
+            "--io.ply-steps", str(int(max_steps)),
+            # ----------------------------
+            # Data
+            # ----------------------------
+            "--data.data-factor", "2",
+            "--data.preload", "cuda",
+            "--data.no-prefetch-to-gpu",
+            "--data.num-workers", "0",
+            "--data.normal-dir-name", "moge_normal",
+            # ----------------------------
+            # Postprocess
+            # ----------------------------
+            "--postprocess.use-bilateral-grid",
+            # ----------------------------
+            # Optim
+            # ----------------------------
+            "--optim.max-steps", str(int(max_steps)),
+            # ----------------------------
+            # Strategy
+            # ----------------------------
+            "--strategy.impl", "improved",
+            "--strategy.absgrad",
+            "--strategy.densification-budget", "1000000",
+            "--strategy.grow-grad2d", "0.0003",
+            "--strategy.prune-opa", "0.05",
+            "--strategy.prune-scale3d", "0.1",
+            # ----------------------------
+            # Regularization
+            # ----------------------------
+            "--reg.surf_normal_loss_activation_step", "1000",
+            "--reg.flat-reg-weight", "1.0",
+            "--reg.scale-ratio-reg-weight", "1.0",
+            # ----------------------------
+            # Viewer
+            # ----------------------------
+            "--viewer.disable-viewer",
+            # ----------------------------
+            # Extra overrides (appended last)
+            # ----------------------------
+            *extra_args,
         ]
-        if args.grow_grad2d is not None:
-            cmd += ["--strategy.grow-grad2d", str(float(args.grow_grad2d))]
-        if invalid_mask_dir_name is not None:
-            cmd += ["--data.sky-mask-dir-name", str(invalid_mask_dir_name)]
 
-        if str(args.data_preload) == "cuda":
-            cmd += [
-                "--data.no-prefetch-to-gpu",
-                "--data.num-workers",
-                "0",
-            ]
-
-        # Benchmark defaults:
-        # - enable bilateral-grid post-processing to absorb cross-frame photometric drift
-        # Note: random backgrounds are disabled by default in FriendlySplat (`optim.random_bkgd=False`).
-
-        if extra_args:
-            cmd += extra_args
-
-        tag = "dry-run" if bool(args.dry_run) else "run"
         print(f"[{tag}] {scan} -> {result_dir}", flush=True)
         print(f"[cmd] {_format_cmd(cmd)}", flush=True)
         if bool(args.dry_run):

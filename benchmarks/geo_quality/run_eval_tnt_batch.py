@@ -12,18 +12,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-import numpy as np
-
-
-_TNT_SCENES_DEFAULT: tuple[str, ...] = (
-    "Barn",
-    "Caterpillar",
-    "Courthouse",
-    "Ignatius",
-    "Meetingroom",
-    "Truck",
-)
-
 
 def _default_tsdf_params_2dgs(*, scene: str) -> tuple[float, float, float]:
     """Return (voxel_length, sdf_trunc, depth_trunc) default TSDF parameters."""
@@ -67,51 +55,6 @@ def _format_cmd(cmd: list[str]) -> str:
     return " ".join(shlex.quote(c) for c in cmd)
 
 
-def _split_csv(value: Optional[str]) -> list[str]:
-    if value is None:
-        return []
-    items: list[str] = []
-    for part in value.split(","):
-        s = part.strip()
-        if not s:
-            continue
-        items.append(s)
-    return items
-
-
-def _auto_tnt_dir(*, data_root: Path) -> Path:
-    candidates = [
-        data_root / "Tanks&Temples-Geo",
-        data_root / "TanksAndTemples-Geo",
-        data_root / "TanksAndTemples",
-        data_root / "TNT",
-        data_root / "tnt",
-    ]
-    for cand in candidates:
-        if cand.exists() and cand.is_dir():
-            return cand
-    tried = ", ".join(str(p) for p in candidates)
-    raise FileNotFoundError(
-        "TnT dir not found. Pass --tnt-dir explicitly. "
-        f"Tried: {tried}"
-    )
-
-
-def _ply_path(*, result_dir: Path, max_steps: int) -> Path:
-    return result_dir / "ply" / f"splats_step{int(max_steps):06d}.ply"
-
-
-def _mesh_path(*, result_dir: Path) -> Path:
-    return result_dir / "mesh" / "tsdf_mesh_post.ply"
-
-
-def _list_images_flat(*, image_dir: Path) -> list[Path]:
-    exts = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
-    if not image_dir.is_dir():
-        return []
-    return sorted(p for p in image_dir.iterdir() if p.is_file() and p.suffix.lower() in exts)
-
-
 def _safe_rmtree_under(*, path: Path, root: Path) -> None:
     """Delete a directory tree only if it's under a given root (best-effort safety)."""
     p = Path(path).expanduser().resolve()
@@ -128,6 +71,7 @@ def _prepare_tsdf_mask_from_invalid_mask(
     *,
     scene_dir: Path,
     result_dir: Path,
+    render_factor: int,
     invalid_mask_dir_name: str = "invalid_mask",
 ) -> Optional[Path]:
     """Invert invalid_mask into a TSDF object mask (255=keep/foreground, 0=discard)."""
@@ -135,14 +79,28 @@ def _prepare_tsdf_mask_from_invalid_mask(
         import cv2  # noqa: WPS433
         import numpy as np  # noqa: WPS433
     except ModuleNotFoundError:  # pragma: no cover
-        print("[mask] disabled (missing dependency: cv2)", flush=True)
+        print("[mask] disabled (missing dependency: cv2/numpy)", flush=True)
         return None
 
     invalid_dir = scene_dir / str(invalid_mask_dir_name)
     if not invalid_dir.exists() or not invalid_dir.is_dir():
         return None
 
-    images = _list_images_flat(image_dir=scene_dir / "images")
+    # Build masks at the TSDF integration resolution to avoid downstream resizing.
+    factor = int(render_factor)
+    image_dir = scene_dir / (f"images_{factor}" if factor > 1 else "images")
+    if not image_dir.is_dir():
+        image_dir = scene_dir / "images"
+    exts = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
+    images = (
+        sorted(
+            p
+            for p in image_dir.iterdir()
+            if p.is_file() and p.suffix.lower() in exts
+        )
+        if image_dir.is_dir()
+        else []
+    )
     if not images:
         return None
 
@@ -154,13 +112,13 @@ def _prepare_tsdf_mask_from_invalid_mask(
         stem = img.stem
         src = invalid_dir / f"{stem}.png"
         dst = out_dir / f"{stem}.png"
+        im = cv2.imread(str(img), cv2.IMREAD_UNCHANGED)
+        if im is None:
+            raise FileNotFoundError(f"Failed to read image to infer size: {img}")
+        h, w = int(im.shape[0]), int(im.shape[1])
         if not src.exists():
             missing += 1
             # Keep all pixels if invalid mask is missing for this frame.
-            im = cv2.imread(str(img), cv2.IMREAD_UNCHANGED)
-            if im is None:
-                raise FileNotFoundError(f"Failed to read image to infer size: {img}")
-            h, w = int(im.shape[0]), int(im.shape[1])
             out = np.full((h, w), 255, dtype=np.uint8)
         else:
             m = cv2.imread(str(src), cv2.IMREAD_UNCHANGED)
@@ -168,11 +126,19 @@ def _prepare_tsdf_mask_from_invalid_mask(
                 raise FileNotFoundError(f"Failed to read invalid mask: {src}")
             if m.ndim == 3:
                 m = m[:, :, 0]
+            if m.shape[0] != h or m.shape[1] != w:
+                m = cv2.resize(m, (w, h), interpolation=cv2.INTER_NEAREST)
             # invalid_mask convention: 255=invalid, 0=valid.
             valid = m.astype(np.uint8, copy=False) < 128
-            out = valid.astype(np.uint8) * 255
+            out = np.where(valid, 255, 0).astype(np.uint8)
+        if out.ndim == 3:
+            out = out[:, :, 0]
+        out = np.ascontiguousarray(out.astype(np.uint8, copy=False))
         if not cv2.imwrite(str(dst), out):
-            raise RuntimeError(f"Failed to write TSDF mask: {dst}")
+            raise RuntimeError(
+                f"Failed to write TSDF mask: {dst} "
+                f"(shape={tuple(out.shape)}, dtype={out.dtype}, contig={out.flags['C_CONTIGUOUS']})"
+            )
 
     print(
         f"[mask] enabled (invalid_mask inverted -> {out_dir}, missing={missing}/{len(images)})",
@@ -218,15 +184,27 @@ def _run_tsdf_mesh(
         str(int(post_process_clusters)),
         "--output_dir",
         str(output_dir),
+        *(
+            ["--voxel_length", str(float(voxel_length))]
+            if voxel_length is not None
+            else []
+        ),
+        *(
+            ["--sdf_trunc", str(float(sdf_trunc))]
+            if sdf_trunc is not None
+            else []
+        ),
+        *(
+            ["--depth_trunc", str(float(depth_trunc))]
+            if depth_trunc is not None
+            else []
+        ),
+        *(
+            ["--mask_dir", str(tsdf_mask_dir), "--mask_dilate", "0"]
+            if tsdf_mask_dir is not None
+            else []
+        ),
     ]
-    if voxel_length is not None:
-        cmd += ["--voxel_length", str(float(voxel_length))]
-    if sdf_trunc is not None:
-        cmd += ["--sdf_trunc", str(float(sdf_trunc))]
-    if depth_trunc is not None:
-        cmd += ["--depth_trunc", str(float(depth_trunc))]
-    if tsdf_mask_dir is not None:
-        cmd += ["--mask_dir", str(tsdf_mask_dir), "--mask_dilate", "0"]
 
     print(f"[mesh] {_format_cmd(cmd)}", flush=True)
     if dry_run:
@@ -248,7 +226,7 @@ def _run_tnt_eval(
     if not eval_py.exists():
         raise FileNotFoundError(f"Missing TnT eval script: {eval_py}")
 
-    cmd = [
+    cmd: list[str] = [
         sys.executable,
         str(eval_py),
         "--dataset-dir",
@@ -259,9 +237,8 @@ def _run_tnt_eval(
         str(mesh_path),
         "--out-dir",
         str(out_dir),
+        *(["--save-eval-vis"] if bool(save_eval_vis) else []),
     ]
-    if bool(save_eval_vis):
-        cmd.append("--save-eval-vis")
     print(f"[tnt] {_format_cmd(cmd)}", flush=True)
     if dry_run:
         return
@@ -317,14 +294,30 @@ def main(argv: list[str]) -> int:
         prog="run_eval_tnt_batch.py",
         description="Batch Tanks & Temples (TnT) mesh + F1 evaluation from FriendlySplat outputs.",
     )
-    parser.add_argument("--data-root", type=str, required=True)
+    parser.add_argument(
+        "--data-root",
+        type=str,
+        required=True,
+        help=(
+            "Root directory containing the TnT dataset folder "
+            "(expects tnt_dataset/tnt/ under this root) and the FriendlySplat outputs."
+        ),
+    )
     parser.add_argument(
         "--tnt-dir",
         type=str,
         default=None,
         help="Optional explicit TnT scene root dir. If omitted, auto-detect under --data-root.",
     )
-    parser.add_argument("--out-dir-name", type=str, default="geo_benchmark")
+    parser.add_argument(
+        "--out-dir-name",
+        type=str,
+        default="benchmark/geo_benchmark/tnt_benchmark",
+        help=(
+            "Output directory used by run_train_tnt_batch.py under data-root. "
+            "Default: benchmark/geo_benchmark/tnt_benchmark"
+        ),
+    )
     parser.add_argument("--exp-name", type=str, default="tnt_default")
     parser.add_argument("--max-steps", type=int, default=30_000)
     parser.add_argument("--scenes", type=str, default="default")
@@ -344,8 +337,8 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--save-eval-vis",
         action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Save precision/recall colored point clouds under each eval_tnt/ dir (default: off).",
+        default=True,
+        help="Save precision/recall colored point clouds under each eval_tnt/ dir (default: on).",
     )
 
     parser.add_argument(
@@ -371,7 +364,7 @@ def main(argv: list[str]) -> int:
 
     data_root = Path(str(args.data_root)).expanduser().resolve()
     if args.tnt_dir is None:
-        tnt_dir = _auto_tnt_dir(data_root=data_root)
+        tnt_dir = data_root / "tnt_dataset" / "tnt"
         print(f"[auto] using tnt_dir={tnt_dir}", flush=True)
     else:
         tnt_dir = Path(str(args.tnt_dir)).expanduser().resolve()
@@ -380,29 +373,35 @@ def main(argv: list[str]) -> int:
 
     scenes_raw = str(args.scenes).strip()
     if scenes_raw.lower() == "default":
-        scenes = list(_TNT_SCENES_DEFAULT)
+        scenes = [
+            "Barn",
+            "Caterpillar",
+            "Courthouse",
+            "Ignatius",
+            "Meetingroom",
+            "Truck",
+        ]
     elif scenes_raw.lower() == "all":
         scenes = sorted({p.name for p in tnt_dir.iterdir() if p.is_dir() and not p.name.startswith(".")})
     else:
-        scenes = _split_csv(scenes_raw)
+        scenes = [s.strip() for s in scenes_raw.split(",") if s.strip()]
     if not scenes:
         raise ValueError("No scenes selected.")
 
     repo_root = Path(__file__).resolve().parents[2]
-    results_root = data_root / str(args.out_dir_name) / "TnT"
-
     rows: list[_EvalRow] = []
     any_failed = False
+    results_root = data_root / str(args.out_dir_name)
     for scene in scenes:
         scene_dir = tnt_dir / str(scene)
         result_dir = results_root / str(scene) / str(args.exp_name)
-        ply = _ply_path(result_dir=result_dir, max_steps=int(args.max_steps))
+        ply = result_dir / "ply" / f"splats_step{int(args.max_steps):06d}.ply"
         if not ply.exists():
             print(f"[skip] missing ply: {ply}", flush=True)
             any_failed = True
             continue
 
-        mesh = _mesh_path(result_dir=result_dir)
+        mesh = result_dir / "mesh" / "tsdf_mesh_post.ply"
         if not (bool(args.skip_existing_mesh) and mesh.exists()):
             voxel_length = args.voxel_length
             sdf_trunc = args.sdf_trunc
@@ -416,7 +415,11 @@ def main(argv: list[str]) -> int:
                 if depth_trunc is None:
                     depth_trunc = d
 
-            tsdf_mask_dir = _prepare_tsdf_mask_from_invalid_mask(scene_dir=scene_dir, result_dir=result_dir)
+            tsdf_mask_dir = _prepare_tsdf_mask_from_invalid_mask(
+                scene_dir=scene_dir,
+                result_dir=result_dir,
+                render_factor=int(args.tsdf_render_factor),
+            )
             _run_tsdf_mesh(
                 repo_root=repo_root,
                 ply_path=ply,
@@ -499,7 +502,7 @@ def main(argv: list[str]) -> int:
                 shutil.rmtree(cache_dir)
                 print(f"[cache] deleted {cache_dir}", flush=True)
 
-    summary_path = data_root / str(args.out_dir_name) / f"summary_tnt_{args.exp_name}.md"
+    summary_path = data_root / str(args.out_dir_name) / f"summary_{args.exp_name}.md"
     if rows and not bool(args.dry_run):
         _write_summary_md(
             rows=rows,
