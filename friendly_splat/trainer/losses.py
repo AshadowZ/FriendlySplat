@@ -343,6 +343,7 @@ class LossOutput:
 def compute_losses(
     *,
     reg_cfg: RegConfig,
+    do_sky_loss: bool,
     do_depth_reg: bool,
     do_render_normal_reg: bool,
     do_surf_normal_reg: bool,
@@ -396,7 +397,11 @@ def compute_losses(
 
     # Sky supervision (encourage transparency on sky pixels).
     sky_loss = torch.tensor(0.0, device=device)
-    if float(reg_cfg.sky_loss_weight) > 0.0 and isinstance(sky_mask, torch.Tensor):
+    if (
+        do_sky_loss
+        and float(reg_cfg.sky_loss_weight) > 0.0
+        and isinstance(sky_mask, torch.Tensor)
+    ):
         sky_loss = sky_transparency_loss(
             alphas=alphas,
             sky_mask=sky_mask,

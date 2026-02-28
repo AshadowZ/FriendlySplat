@@ -249,7 +249,7 @@ class OptimConfig:
     sh_degree_interval: int = 1000
 
     # Use random backgrounds during training to discourage transparency.
-    random_bkgd: bool = True
+    random_bkgd: bool = False
     # Use packed rasterization mode (lower memory, slightly slower).
     packed: bool = False
     # Enable anti-aliasing in rasterization (may affect quantitative metrics).
@@ -306,6 +306,8 @@ class RegConfig:
 
     # Weight for sky supervision loss (encourage transparency in sky pixels).
     sky_loss_weight: float = 0.05
+    # Apply sky supervision loss once every N steps.
+    sky_loss_every_n: int = 10
 
     # Apply depth regularization once every N steps.
     depth_reg_every_n: int = 4
@@ -313,14 +315,16 @@ class RegConfig:
     depth_loss_weight: float = 0.25
     # Starting step for depth regularization.
     depth_loss_activation_step: int = 1000
+    # Stop applying depth regularization at this step.
+    depth_loss_stop_step: int = 15_000
 
     # Normal supervision weights:
     # - `normal_loss_*`: supervise rendered normals (from gsplat) w.r.t. the normal prior.
     # - `surf_normal_loss_*`: supervise normals implied by depth w.r.t. the normal prior.
     # - `consistency_normal_loss_*`: encourage rendered normals to match depth-implied normals.
 
-    # Apply normal regularization once every N steps.
-    normal_reg_every_n: int = 8
+    # Apply normal-prior regularizations once every N steps.
+    prior_normal_reg_every_n: int = 8
     # Weight of the rendered-normal loss.
     normal_loss_weight: float = 0.1
     # Starting step for rendered-normal regularization.
@@ -329,10 +333,12 @@ class RegConfig:
     surf_normal_loss_weight: float = 0.1
     # Starting step for surface-normal regularization.
     surf_normal_loss_activation_step: int = 7000
+    # Apply normal-consistency regularization once every N steps.
+    consistency_normal_reg_every_n: int = 1
     # Weight of the normal consistency loss (rendered normals vs depth-implied normals).
     consistency_normal_loss_weight: float = 0.0
     # Starting step for normal consistency regularization.
-    consistency_normal_loss_activation_step: int = 7000
+    consistency_normal_loss_activation_step: int = 15000
 
 
 @dataclass(frozen=True)
@@ -406,7 +412,7 @@ class StrategyConfig:
     # Gradient threshold (2D) for splitting/growing Gaussians.
     grow_grad2d: float = 0.0002
     # 3D scale threshold for pruning.
-    prune_scale3d: float = 0.08
+    prune_scale3d: float = 0.1
     # 2D projected scale threshold for pruning.
     prune_scale2d: float = 0.15
     # Stop refining 2D scale after this step.
@@ -518,6 +524,10 @@ def validate_train_config(cfg: TrainConfig) -> None:
         raise ValueError(f"world_size must be > 0, got {cfg.world_size}")
     if cfg.optim.max_steps <= 0:
         raise ValueError(f"optim.max_steps must be > 0, got {cfg.optim.max_steps}")
+    if int(cfg.reg.depth_loss_stop_step) != -1 and int(cfg.reg.depth_loss_stop_step) < 0:
+        raise ValueError(
+            f"reg.depth_loss_stop_step must be -1 or >= 0, got {cfg.reg.depth_loss_stop_step}"
+        )
     if cfg.eval.max_images is not None and int(cfg.eval.max_images) <= 0:
         raise ValueError(
             f"eval.max_images must be > 0 or None, got {cfg.eval.max_images}"
@@ -540,12 +550,6 @@ def validate_train_config(cfg: TrainConfig) -> None:
             raise ValueError(
                 f"preload='cuda' requires io.device to be CUDA (e.g. 'cuda' or 'cuda:0'), got {cfg.io.device!r}"
             )
-        if cfg.data.prefetch_to_gpu:
-            raise ValueError(
-                "preload='cuda' is incompatible with prefetch_to_gpu=True."
-            )
-        if cfg.data.num_workers not in (None, 0):
-            raise ValueError("preload='cuda' requires data.num_workers=0.")
 
     if cfg.optim.sparse_grad and cfg.optim.visible_adam:
         raise ValueError(

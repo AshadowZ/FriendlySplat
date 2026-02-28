@@ -272,21 +272,43 @@ class DataLoader:
 
         # Optional dataset-wide preloading to CUDA is owned by the loader, not the dataset.
         if self.preload == "cuda":
-            # TrainConfig validation is the primary source of truth for these constraints.
-            # Keep lightweight defensive assertions here for direct DataLoader usage.
             assert (
                 device.type == "cuda"
             ), f"preload='cuda' requires a CUDA device, got {device}."
-            assert (
-                not self.prefetch_to_gpu
-            ), "preload='cuda' is incompatible with prefetch_to_gpu=True."
-            assert self.num_workers in (
-                None,
-                0,
-            ), "preload='cuda' requires num_workers=0 (workers + CUDA tensors)."
-            assert not bool(
-                self.pin_memory
-            ), "preload='cuda' is incompatible with pin_memory=True."
+
+            # When the dataset is already on CUDA, "prefetch to GPU" becomes a no-op
+            # with extra stream sync overhead. Ignore it to keep behavior stable.
+            if self.prefetch_to_gpu:
+                print(
+                    "warning: preload='cuda' ignores prefetch_to_gpu=True (data is already on CUDA).",
+                    flush=True,
+                )
+                self.prefetch_to_gpu = False
+
+            # Worker processes cannot safely handle CUDA tensors; force single-process.
+            if self.num_workers not in (None, 0):
+                print(
+                    f"warning: preload='cuda' forces num_workers=0 (got {self.num_workers}).",
+                    flush=True,
+                )
+                self.num_workers = 0
+
+            # pin_memory is only useful for CPU->CUDA transfers; disable it for preload.
+            if bool(self.pin_memory):
+                print(
+                    "warning: preload='cuda' forces pin_memory=False (data is already on CUDA).",
+                    flush=True,
+                )
+                self.pin_memory = False
+
+            # persistent_workers requires num_workers > 0; disable for preload.
+            if bool(self.persistent_workers):
+                print(
+                    "warning: preload='cuda' forces persistent_workers=False (num_workers=0).",
+                    flush=True,
+                )
+                self.persistent_workers = False
+
             dataset = _PreloadedDataset(dataset, device=device)
 
         self.dataset = dataset
