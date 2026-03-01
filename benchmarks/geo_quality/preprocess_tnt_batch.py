@@ -35,10 +35,15 @@ def _ensure_images_2(
 
     try:
         import cv2  # noqa: WPS433
+        import numpy as np  # noqa: WPS433
+        from PIL import Image  # noqa: WPS433
     except ModuleNotFoundError as exc:  # pragma: no cover
         raise ModuleNotFoundError(
-            "OpenCV is required to generate images_2. Install it (e.g. `pip install opencv-python`)."
+            "OpenCV and Pillow are required to generate images_2. "
+            "Install them (e.g. `pip install opencv-python pillow`)."
         ) from exc
+    pil_resampling = getattr(Image, "Resampling", Image)
+    pil_lanczos = pil_resampling.LANCZOS
 
     wrote = 0
     for p in images:
@@ -48,10 +53,18 @@ def _ensure_images_2(
         img = cv2.imread(str(p), cv2.IMREAD_UNCHANGED)
         if img is None:
             raise FileNotFoundError(f"Failed to read image: {p}")
+        if img.ndim != 3 or int(img.shape[-1]) != 4:
+            raise ValueError(
+                f"TnT preprocess expects RGBA images (4 channels), got shape={img.shape} for {p}"
+            )
         h, w = int(img.shape[0]), int(img.shape[1])
         new_w = max(1, int(round(float(w) / 2.0)))
         new_h = max(1, int(round(float(h) / 2.0)))
-        resized = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        img_rgba = cv2.cvtColor(img, cv2.COLOR_BGRA2RGBA)
+        resized_rgba = np.asarray(
+            Image.fromarray(img_rgba).resize((new_w, new_h), resample=pil_lanczos)
+        )
+        resized = cv2.cvtColor(resized_rgba, cv2.COLOR_RGBA2BGRA)
 
         ext = out.suffix.lower()
         params: list[int] = []

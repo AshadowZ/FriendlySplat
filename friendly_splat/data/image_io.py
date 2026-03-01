@@ -5,6 +5,7 @@ from typing import List
 
 import cv2
 import numpy as np
+from PIL import Image
 
 
 def get_rel_paths(path_dir: str) -> List[str]:
@@ -42,6 +43,8 @@ def imread_gray(path: str) -> np.ndarray:
 
 
 def resize_image_folder(image_dir: str, resized_dir: str, factor: int) -> str:
+    pil_resampling = getattr(Image, "Resampling", Image)
+    pil_lanczos = pil_resampling.LANCZOS
     os.makedirs(resized_dir, exist_ok=True)
     image_files = get_rel_paths(image_dir)
     for image_file in image_files:
@@ -57,8 +60,8 @@ def resize_image_folder(image_dir: str, resized_dir: str, factor: int) -> str:
             int(round(image_arr.shape[1] / factor)),
             int(round(image_arr.shape[0] / factor)),
         )
-        resized_image = cv2.resize(
-            image_arr, resized_size, interpolation=cv2.INTER_CUBIC
+        resized_image = np.asarray(
+            Image.fromarray(image_arr).resize(resized_size, resample=pil_lanczos)
         )
         resized_bgr = cv2.cvtColor(resized_image, cv2.COLOR_RGB2BGR)
         if not cv2.imwrite(resized_path, resized_bgr):
