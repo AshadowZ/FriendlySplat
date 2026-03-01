@@ -28,10 +28,15 @@ def _ensure_images_2(
 
     try:
         import cv2  # noqa: WPS433
+        import numpy as np  # noqa: WPS433
+        from PIL import Image  # noqa: WPS433
     except ModuleNotFoundError as exc:  # pragma: no cover
         raise ModuleNotFoundError(
-            "OpenCV is required to generate images_2. Install it (e.g. `pip install opencv-python`)."
+            "OpenCV and Pillow are required to generate images_2. "
+            "Install them (e.g. `pip install opencv-python pillow`)."
         ) from exc
+    pil_resampling = getattr(Image, "Resampling", Image)
+    pil_lanczos = pil_resampling.LANCZOS
 
     exts = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
     images = sorted(
@@ -78,14 +83,15 @@ def _ensure_images_2(
         new_h = max(1, int(round(float(h) / 2.0)))
         resized_bgr = None
         if need_image:
-            resized_bgr = cv2.resize(
-                img_bgr, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4
+            resized_rgb = np.asarray(
+                Image.fromarray(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)).resize(
+                    (new_w, new_h), resample=pil_lanczos
+                )
             )
+            resized_bgr = cv2.cvtColor(resized_rgb, cv2.COLOR_RGB2BGR)
 
         mask_u8 = None
         if need_mask:
-            import numpy as np
-
             # Default: no alpha -> treat all pixels as valid (mask=0).
             mask_u8 = np.zeros((new_h, new_w), dtype=np.uint8)
             if alpha is not None:
