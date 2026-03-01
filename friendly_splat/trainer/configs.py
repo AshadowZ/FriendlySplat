@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Literal, Optional, Tuple
 
 
@@ -239,6 +239,9 @@ class OptimizersConfig:
 
 @dataclass(frozen=True)
 class OptimConfig:
+    # Scale training schedules by this factor (e.g. 0.25 for 4 GPUs with 4x effective batch).
+    # This is applied by `apply_steps_scaler(...)` in the training entrypoint.
+    steps_scaler: float = 1.0
     # Number of training steps.
     max_steps: int = 30_000
 
@@ -502,6 +505,151 @@ class TrainConfig:
     world_rank: int = 0
     # Distributed world size (reserved; must be 1).
     world_size: int = 1
+
+
+def apply_steps_scaler(*, cfg: TrainConfig, steps_scaler: float) -> TrainConfig:
+    """Return a new config with step-based schedules scaled by `steps_scaler`.
+
+    This intentionally scales only a curated set of *time-based* hyperparameters
+    (steps/iters/intervals). It does not scale learning rates, weights, or budgets.
+    """
+    s = float(steps_scaler)
+    if not (s > 0.0):
+        raise ValueError(f"steps_scaler must be > 0, got {steps_scaler}")
+    if abs(s - 1.0) <= 1e-12:
+        return cfg
+
+    def scale(
+        value: int,
+        *,
+        min_value: int = 0,
+        keep_minus_one: bool = False,
+    ) -> int:
+        if keep_minus_one and int(value) == -1:
+            return -1
+        return max(int(min_value), int(round(float(value) * s)))
+
+    def scale_steps(values: Tuple[int, ...], *, max_step: int) -> Tuple[int, ...]:
+        scaled = {
+            max(1, min(int(max_step), scale(int(v), min_value=1)))
+            for v in values
+            if int(v) > 0
+        }
+        return tuple(sorted(scaled))
+
+    def scale_scheduler(
+        sch: ExponentialDecaySchedulerConfig,
+    ) -> ExponentialDecaySchedulerConfig:
+        return replace(
+            sch,
+            warmup_steps=scale(int(sch.warmup_steps), min_value=0),
+            max_steps=scale(int(sch.max_steps), min_value=1)
+            if sch.max_steps is not None
+            else None,
+        )
+
+    # 1) Scale `optim.max_steps` first (others may clamp against it).
+    new_max_steps = scale(int(cfg.optim.max_steps), min_value=1)
+
+    # 2) IO steps (1-based).
+    io_cfg = replace(
+        cfg.io,
+        ply_steps=scale_steps(cfg.io.ply_steps, max_step=new_max_steps),
+        save_steps=scale_steps(cfg.io.save_steps, max_step=new_max_steps),
+    )
+
+    # 3) Optim schedules.
+    optim_cfg = cfg.optim
+    sh_degree_interval = int(optim_cfg.sh_degree_interval)
+    if sh_degree_interval > 0:
+        sh_degree_interval = scale(sh_degree_interval, min_value=1)
+    optim_cfg = replace(
+        optim_cfg,
+        max_steps=int(new_max_steps),
+        sh_degree_interval=int(sh_degree_interval),
+        mu_start_iter=scale(int(optim_cfg.mu_start_iter), min_value=1),
+        mu_end_iter=scale(int(optim_cfg.mu_end_iter), min_value=1),
+    )
+
+    # 4) Per-optimizer warmup (and explicit scheduler max_steps when set).
+    optim_cfg = replace(
+        optim_cfg,
+        optimizers=OptimizersConfig(
+            **{
+                name: (
+                    replace(entry, scheduler=scale_scheduler(entry.scheduler))
+                    if entry.scheduler is not None
+                    else entry
+                )
+                for name, entry in optim_cfg.optimizers.as_dict().items()
+            }
+        ),
+    )
+
+    # 5) Regularizer activation/stop windows (0-based; keep -1 sentinels).
+    reg_cfg = replace(
+        cfg.reg,
+        depth_loss_activation_step=scale(
+            int(cfg.reg.depth_loss_activation_step),
+            min_value=0,
+        ),
+        depth_loss_stop_step=scale(
+            int(cfg.reg.depth_loss_stop_step),
+            min_value=0,
+            keep_minus_one=True,
+        ),
+        normal_loss_activation_step=scale(
+            int(cfg.reg.normal_loss_activation_step),
+            min_value=0,
+        ),
+        surf_normal_loss_activation_step=scale(
+            int(cfg.reg.surf_normal_loss_activation_step),
+            min_value=0,
+        ),
+        consistency_normal_loss_activation_step=scale(
+            int(cfg.reg.consistency_normal_loss_activation_step),
+            min_value=0,
+        ),
+    )
+
+    # 6) Strategy time-based params (mostly 0-based; keep -1 sentinel for mcmc stop).
+    strategy_cfg = replace(
+        cfg.strategy,
+        refine_scale2d_stop_iter=scale(int(cfg.strategy.refine_scale2d_stop_iter)),
+        refine_start_iter=scale(int(cfg.strategy.refine_start_iter)),
+        refine_stop_iter=scale(int(cfg.strategy.refine_stop_iter)),
+        reset_every=scale(int(cfg.strategy.reset_every), min_value=1),
+        refine_every=scale(int(cfg.strategy.refine_every), min_value=1),
+        pause_refine_after_reset=scale(int(cfg.strategy.pause_refine_after_reset)),
+        mcmc_noise_injection_stop_iter=scale(
+            int(cfg.strategy.mcmc_noise_injection_stop_iter),
+            min_value=0,
+            keep_minus_one=True,
+        ),
+    )
+
+    # 7) Pruning schedules (1-based).
+    gns_cfg = replace(
+        cfg.gns,
+        reg_start=scale(int(cfg.gns.reg_start), min_value=1),
+        reg_end=scale(int(cfg.gns.reg_end), min_value=1),
+    )
+    hard_prune_cfg = replace(
+        cfg.hard_prune,
+        start_step=scale(int(cfg.hard_prune.start_step), min_value=1),
+        every_n=scale(int(cfg.hard_prune.every_n), min_value=1),
+        stop_step=scale(int(cfg.hard_prune.stop_step), min_value=1),
+    )
+
+    return replace(
+        cfg,
+        io=io_cfg,
+        optim=optim_cfg,
+        reg=reg_cfg,
+        strategy=strategy_cfg,
+        gns=gns_cfg,
+        hard_prune=hard_prune_cfg,
+    )
 
 
 def validate_train_config(cfg: TrainConfig) -> None:

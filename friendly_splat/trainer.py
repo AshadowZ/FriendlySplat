@@ -41,7 +41,11 @@ from friendly_splat.trainer.step_runtime import (
     render_from_prepared_batch,
 )
 
-from friendly_splat.trainer.configs import TrainConfig, validate_train_config
+from friendly_splat.trainer.configs import (
+    TrainConfig,
+    apply_steps_scaler,
+    validate_train_config,
+)
 from friendly_splat.trainer.io_utils import (
     init_output_paths,
     save_train_config_snapshot,
@@ -323,4 +327,6 @@ def _parse_args() -> TrainConfig:
 
 
 if __name__ == "__main__":
-    Trainer(_parse_args()).train()
+    cfg = _parse_args()
+    cfg = apply_steps_scaler(cfg=cfg, steps_scaler=float(cfg.optim.steps_scaler))
+    Trainer(cfg).train()
