@@ -1,66 +1,66 @@
 # Pruning Visual Quality Benchmarks
 
-This folder contains scripts/utilities for benchmarking FriendlySplat visual quality
-under different **post-densification pruning** methods.
+This folder contains scripts for benchmarking FriendlySplat visual quality under
+post-densification pruning on **360v2 only**.
 
-The benchmark runs the same densification preset and then prunes down to a target
-`final_budget` using either:
+Dataset layout assumption:
 
-- Pure densification baseline (`pure_densify`): cap densification to `final_budget` (no pruning).
-- GNS pruning (`gns.gns_enable=True`)
-- Speedy-style hard pruning (`hard_prune.enable=True`)
+- `<data-root>/360v2/<scene>/{images/, sparse/, ...}`
 
-All outputs (logs/TensorBoard/PLYs/summaries) are written under:
+Output layout:
 
-- `<data-root>/pruning_benchmark/`
+- `<data-root>/benchmark/pruning_benchmark/<scene>/<pruner>/...`
+
+Pruners:
+
+- `pure_densify`
+- `gns`
+- `speedy`
 
 ## Batch training
 
-Single-GPU, sequential batch training:
+Run training sequentially on one GPU:
 
 ```bash
 python3 benchmarks/pruning_visual_quality/run_train_batch.py \
   --data-root /media/joker/HV/3DGS/PublicDataset \
-  --datasets mipnerf360,deepblending \
-  --scenes bicycle,bonsai,drjohnson \
-  --device cuda:0 \
-  --max-steps 30000
+  --scenes bicycle,bonsai \
+  --pruners all
 ```
 
-By default, the script:
+`--scenes` supports `all|csv`.
+`--pruners` supports `all|csv` (`pure_densify,gns,speedy`).
 
-- Uses `strategy.impl=improved`.
-- Sets `strategy.densification_budget = 3 * final_budget` for pruning runs (and `final_budget` for `pure_densify` baseline).
-- Forces pruning to start strictly after densification (`strategy.refine_stop_iter`).
-- Exports the final PLY (`ply/splats_stepXXXXXX.ply`) and enables TensorBoard logging.
+The script hardcodes baseline trainer/pruning hyperparameters (device, preload,
+max steps, pruning schedule, TB cadence, etc.). To override temporarily, pass
+trainer flags after `--`.
 
-By default, it uses per-scene budgets aligned with the upstream GNS benchmark defaults
-(600k/300k per scene). Use `--final-budget` or `--scene-final-budget` to override.
-
-Notes:
-
-- `strategy.refine_stop_iter` is 0-based (internal `step`).
-- GNS `gns.reg_start/reg_end` and hard-prune `hard_prune.start_step/stop_step` are 1-based (train steps).
-- `--densify-stop-step` is 1-based and matches the GNS repo's common schedule (default: 15000).
-
-List available dataset keys/scenes:
+Example:
 
 ```bash
-python3 benchmarks/pruning_visual_quality/run_train_batch.py --list --data-root .
+python3 benchmarks/pruning_visual_quality/run_train_batch.py \
+  --data-root /media/joker/HV/3DGS/PublicDataset \
+  --scenes kitchen \
+  --pruners gns -- \
+  --optim.max-steps 50000
 ```
 
 ## Batch evaluation
 
-Evaluate PSNR/SSIM/LPIPS from exported PLYs and write a summary table under
-`<data-root>/pruning_benchmark/summary.md`:
+Evaluate PSNR/SSIM/LPIPS from exported PLYs:
 
 ```bash
 python3 benchmarks/pruning_visual_quality/run_eval_batch.py \
   --data-root /media/joker/HV/3DGS/PublicDataset \
-  --datasets mipnerf360 \
-  --scenes garden \
+  --scenes kitchen \
+  --pruners all \
   --device cuda:0
 ```
 
+Summary output:
+
+- `<data-root>/benchmark/pruning_benchmark/summary_all.md` (when `--pruners all`)
+- `<data-root>/benchmark/pruning_benchmark/summary.md` (single or custom pruner set)
+
 The evaluator automatically picks the latest `ply/splats_step*.ply` under each
-scene output directory. Use `--step` to evaluate a specific training step.
+scene output directory. Use `--step` to evaluate a specific step.
