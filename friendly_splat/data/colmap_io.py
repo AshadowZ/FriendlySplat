@@ -75,6 +75,106 @@ def detect_model_format(path, ext):
     return False
 
 
+_PLY_DTYPE_MAP = {
+    "char": np.dtype("i1"),
+    "int8": np.dtype("i1"),
+    "uchar": np.dtype("u1"),
+    "uint8": np.dtype("u1"),
+    "short": np.dtype("<i2"),
+    "int16": np.dtype("<i2"),
+    "ushort": np.dtype("<u2"),
+    "uint16": np.dtype("<u2"),
+    "int": np.dtype("<i4"),
+    "int32": np.dtype("<i4"),
+    "uint": np.dtype("<u4"),
+    "uint32": np.dtype("<u4"),
+    "float": np.dtype("<f4"),
+    "float32": np.dtype("<f4"),
+    "double": np.dtype("<f8"),
+    "float64": np.dtype("<f8"),
+}
+
+
+def read_points3d_ply(path_to_ply_file: str):
+    """Read a point cloud from `points3D.ply` (binary_little_endian only).
+
+    This is a lightweight fallback for datasets that ship `points3D.ply` instead of
+    COLMAP's `points3D.txt/.bin`. Track information is not available and will be empty.
+    """
+    with open(path_to_ply_file, "rb") as f:
+        fmt = None
+        num_vertices = None
+        in_vertex = False
+        vertex_props = []
+        while True:
+            line = f.readline()
+            if line == b"":
+                raise ValueError("Unexpected EOF while reading PLY header.")
+            s = line.decode("utf-8", errors="strict").strip()
+            if s == "end_header":
+                break
+            parts = s.split()
+            if not parts:
+                continue
+            if parts[0] == "format" and len(parts) >= 3:
+                fmt = " ".join(parts[1:])
+                continue
+            if parts[0] == "element" and len(parts) >= 3:
+                in_vertex = parts[1] == "vertex"
+                if in_vertex:
+                    num_vertices = int(parts[2])
+                continue
+            if parts[0] == "property" and in_vertex:
+                if len(parts) >= 5 and parts[1] == "list":
+                    raise ValueError(
+                        "Unsupported PLY vertex property (list). Expected scalar properties only."
+                    )
+                if len(parts) < 3:
+                    continue
+                typ, name = parts[1], parts[2]
+                if typ not in _PLY_DTYPE_MAP:
+                    raise ValueError(f"Unsupported PLY property type: {typ}")
+                vertex_props.append((name, _PLY_DTYPE_MAP[typ]))
+
+        if fmt is None or fmt.strip() != "binary_little_endian 1.0":
+            raise ValueError(
+                f"Unsupported PLY format: {fmt!r}. Only 'binary_little_endian 1.0' is supported."
+            )
+        if num_vertices is None or int(num_vertices) <= 0:
+            raise ValueError(f"Invalid PLY vertex count: {num_vertices!r}")
+        if not vertex_props:
+            raise ValueError("PLY has no vertex properties.")
+
+        dtype = np.dtype(vertex_props)
+        raw = f.read(int(num_vertices) * int(dtype.itemsize))
+        expected_nbytes = int(num_vertices) * int(dtype.itemsize)
+        if int(len(raw)) != expected_nbytes:
+            raise ValueError(
+                f"PLY vertex data truncated: expected {expected_nbytes} bytes, got {len(raw)}."
+            )
+        arr = np.frombuffer(raw, dtype=dtype, count=int(num_vertices))
+
+    required = {"x", "y", "z", "red", "green", "blue"}
+    missing = required - set(arr.dtype.names or ())
+    if missing:
+        raise KeyError(f"PLY is missing required properties: {sorted(missing)}")
+
+    xyz = np.stack([arr["x"], arr["y"], arr["z"]], axis=1).astype(np.float32)
+    rgb = np.stack([arr["red"], arr["green"], arr["blue"]], axis=1).astype(np.uint8)
+    empty_i = np.empty((0,), dtype=np.int64)
+    return {
+        int(i): Point3D(
+            id=int(i),
+            xyz=xyz[int(i)],
+            rgb=rgb[int(i)],
+            error=float(0.0),
+            image_ids=empty_i,
+            point2D_idxs=empty_i,
+        )
+        for i in range(int(num_vertices))
+    }
+
+
 def read_next_bytes(fid, num_bytes, format_char_sequence, endian_character="<"):
     data = fid.read(num_bytes)
     return struct.unpack(endian_character + format_char_sequence, data)
@@ -264,24 +364,45 @@ def read_points3d_text(path):
 
 
 def read_model(path, ext=""):
+    path = str(path)
     if ext == "":
-        if detect_model_format(path, ".bin"):
+        if os.path.isfile(os.path.join(path, "cameras.bin")) and os.path.isfile(
+            os.path.join(path, "images.bin")
+        ):
             ext = ".bin"
-        elif detect_model_format(path, ".txt"):
+        elif os.path.isfile(os.path.join(path, "cameras.txt")) and os.path.isfile(
+            os.path.join(path, "images.txt")
+        ):
             ext = ".txt"
         else:
             raise FileNotFoundError(
-                "Cannot find cameras/images/points3D with .bin or .txt under: " + path
+                "Cannot find cameras/images with .bin or .txt under: " + path
             )
 
     if ext == ".bin":
         cameras = read_cameras_binary(os.path.join(path, "cameras" + ext))
         images = read_images_binary(os.path.join(path, "images" + ext))
-        points3d = read_points3d_binary(os.path.join(path, "points3D" + ext))
+        points3d_path = os.path.join(path, "points3D" + ext)
+        if os.path.isfile(points3d_path):
+            points3d = read_points3d_binary(points3d_path)
+        elif os.path.isfile(os.path.join(path, "points3D.ply")):
+            points3d = read_points3d_ply(os.path.join(path, "points3D.ply"))
+        else:
+            raise FileNotFoundError(
+                "Cannot find points3D.bin/.txt/.ply under: " + path
+            )
     elif ext == ".txt":
         cameras = read_cameras_text(os.path.join(path, "cameras" + ext))
         images = read_images_text(os.path.join(path, "images" + ext))
-        points3d = read_points3d_text(os.path.join(path, "points3D" + ext))
+        points3d_path = os.path.join(path, "points3D" + ext)
+        if os.path.isfile(points3d_path):
+            points3d = read_points3d_text(points3d_path)
+        elif os.path.isfile(os.path.join(path, "points3D.ply")):
+            points3d = read_points3d_ply(os.path.join(path, "points3D.ply"))
+        else:
+            raise FileNotFoundError(
+                "Cannot find points3D.bin/.txt/.ply under: " + path
+            )
     else:
         raise ValueError(f"Unknown model extension: {ext}")
 

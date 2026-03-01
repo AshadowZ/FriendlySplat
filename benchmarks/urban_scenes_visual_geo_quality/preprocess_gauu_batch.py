@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import argparse
+import os
 import shlex
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 
@@ -30,6 +32,7 @@ def _ensure_images_downsampled(
     scene_dir: Path,
     factor: float,
     skip_existing: bool,
+    workers: int,
     dry_run: bool,
 ) -> list[str]:
     src_dir = scene_dir / "images"
@@ -63,14 +66,24 @@ def _ensure_images_downsampled(
     pil_resampling = getattr(Image, "Resampling", Image)
     pil_lanczos = pil_resampling.LANCZOS
 
-    wrote = 0
-    stems: list[str] = []
+    stems = [p.stem for p in images]
+    jobs: list[tuple[Path, Path]] = []
     for p in images:
-        stems.append(p.stem)
         out = dst_dir / p.name
         if bool(skip_existing) and out.exists():
             continue
+        jobs.append((p, out))
 
+    if dry_run:
+        wrote = len(jobs)
+        print(
+            f"[{dst_dir.name}] {scene_dir.name}: wrote={wrote} (skip_existing={bool(skip_existing)})",
+            flush=True,
+        )
+        return stems
+
+    def _resize_and_write(job: tuple[Path, Path]) -> None:
+        p, out = job
         img = cv2.imread(str(p), cv2.IMREAD_UNCHANGED)
         if img is None:
             raise FileNotFoundError(f"Failed to read image: {p}")
@@ -110,15 +123,27 @@ def _ensure_images_downsampled(
         if ext in {".jpg", ".jpeg"}:
             params = [int(cv2.IMWRITE_JPEG_QUALITY), 95]
         elif ext == ".png":
-            params = [int(cv2.IMWRITE_PNG_COMPRESSION), 3]
+            params = [int(cv2.IMWRITE_PNG_COMPRESSION), 1]
 
-        if dry_run:
-            wrote += 1
-            continue
         ok = cv2.imwrite(str(out), resized, params)
         if not ok:
             raise RuntimeError(f"Failed to write downsampled image: {out}")
-        wrote += 1
+
+    workers_i = int(workers)
+    if workers_i <= 0:
+        workers_i = os.cpu_count() or 8
+    wrote = 0
+    total = len(jobs)
+    with ThreadPoolExecutor(max_workers=int(workers_i)) as ex:
+        futs = [ex.submit(_resize_and_write, j) for j in jobs]
+        for fut in as_completed(futs):
+            fut.result()
+            wrote += 1
+            if wrote == 1 or wrote == total or wrote % 100 == 0:
+                print(
+                    f"[{dst_dir.name}] {scene_dir.name}: progress {wrote}/{total}",
+                    flush=True,
+                )
 
     print(
         f"[{dst_dir.name}] {scene_dir.name}: wrote={wrote} (skip_existing={bool(skip_existing)})",
@@ -240,6 +265,12 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--write-threads", type=int, default=8)
     parser.add_argument("--queue-size", type=int, default=32)
     parser.add_argument(
+        "--workers",
+        type=int,
+        default=0,
+        help="Parallel workers for resize+write (0: auto).",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print actions without executing.",
@@ -277,6 +308,7 @@ def main(argv: list[str]) -> int:
                 scene_dir=scene_dir,
                 factor=factor,
                 skip_existing=bool(args.skip_existing_images),
+                workers=int(args.workers),
                 dry_run=bool(args.dry_run),
             )
             _run_moge_normals(
