@@ -245,7 +245,7 @@ class Trainer:
                     meta=meta,
                 )
 
-            # Optional Speedy-Splat-style hard pruning (post-densification only).
+            # Optional Speedy-Splat-style hard pruning (typically post-densification).
             # Runs after `viewer_runtime.after_step()` so the viewer lock isn't held during scoring.
             maybe_hard_prune_after_densify(
                 step=int(step),

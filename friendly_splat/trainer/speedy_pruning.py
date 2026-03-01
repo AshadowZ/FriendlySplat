@@ -181,43 +181,54 @@ def maybe_hard_prune_after_densify(
     if n_before <= 1:
         return
 
-    target_budget = int(hard_prune_cfg.final_budget)
     train_step = int(step) + 1
-    first_due, _last_due, num_events = _hard_prune_event_bounds(
-        start_step=int(hard_prune_cfg.start_step),
-        stop_step=int(hard_prune_cfg.stop_step),
-        every_n=int(hard_prune_cfg.every_n),
-    )
-    if num_events <= 0:
-        return
-    event_index = (int(train_step) - int(first_due)) // int(hard_prune_cfg.every_n)
-    if event_index < 0:
-        return
 
-    # Track the Gaussian count at the first pruning event so we can linearly
-    # schedule pruning to `final_budget` across the configured window.
-    start_count_key = "hard_prune_start_count"
-    start_count_obj = strategy_state.get(start_count_key)
-    if start_count_obj is None:
-        strategy_state[start_count_key] = int(n_before)
-        start_count = int(n_before)
+    policy = str(hard_prune_cfg.policy)
+    if policy == "fixed_percent":
+        frac = float(hard_prune_cfg.percent_per_event)
+        n_prune = max(1, int(float(n_before) * frac))
+        n_prune = min(n_prune, n_before - 1)
+        if n_prune <= 0:
+            return
+        target_count = int(n_before - n_prune)
+        budget_label = "N/A"
     else:
-        start_count = int(start_count_obj)
+        target_budget = int(hard_prune_cfg.final_budget)
+        if n_before <= target_budget:
+            return
+        first_due, _last_due, num_events = _hard_prune_event_bounds(
+            start_step=int(hard_prune_cfg.start_step),
+            stop_step=int(hard_prune_cfg.stop_step),
+            every_n=int(hard_prune_cfg.every_n),
+        )
+        if num_events <= 0:
+            return
+        event_index = (int(train_step) - int(first_due)) // int(hard_prune_cfg.every_n)
+        if event_index < 0:
+            return
 
-    if start_count <= target_budget:
-        return
+        start_count_key = "hard_prune_start_count"
+        start_count_obj = strategy_state.get(start_count_key)
+        if start_count_obj is None:
+            strategy_state[start_count_key] = int(n_before)
+            start_count = int(n_before)
+        else:
+            start_count = int(start_count_obj)
 
-    # Linear target: reach final_budget at the last pruning event.
-    frac = float(event_index + 1) / float(num_events)
-    target_count = int(
-        round(float(start_count) - float(start_count - target_budget) * frac)
-    )
-    target_count = max(int(target_budget), min(int(start_count), int(target_count)))
+        if start_count <= target_budget:
+            return
 
-    n_prune = int(max(0, int(n_before) - int(target_count)))
-    n_prune = min(n_prune, n_before - 1)
-    if n_prune <= 0:
-        return
+        frac = float(event_index + 1) / float(num_events)
+        target_count = int(
+            round(float(start_count) - float(start_count - target_budget) * frac)
+        )
+        target_count = max(int(target_budget), min(int(start_count), int(target_count)))
+
+        n_prune = int(max(0, int(n_before) - int(target_count)))
+        n_prune = min(n_prune, n_before - 1)
+        if n_prune <= 0:
+            return
+        budget_label = str(int(target_budget))
 
     device = gaussian_model.device
     parsed_scene = train_dataset.parsed_scene
@@ -276,10 +287,11 @@ def maybe_hard_prune_after_densify(
     n_after = int(gaussian_model.num_gaussians)
     print(
         "[HardPrune] "
+        f"policy={policy} "
         f"step={int(step) + 1} "
         f"pruned={int(n_prune)} "
         f"num_gs={int(n_after)} "
-        f"budget={int(target_budget)} "
+        f"budget={budget_label} "
         f"target={int(target_count)}",
         flush=True,
     )

@@ -362,26 +362,25 @@ class GNSConfig:
 
 @dataclass(frozen=True)
 class HardPruneConfig:
-    """Speedy-Splat-style hard pruning (post-densification only).
+    """Hard pruning (score-based).
 
-    This performs periodic, score-based *budget pruning* after densification finishes.
-    When the current Gaussian count exceeds `final_budget`, the lowest-score Gaussians
-    are removed until the budget is met.
-
-    Notes:
-      - Cadences use **1-based** train step numbers (like eval/tensorboard).
-      - This is independent from (and can be combined with) strategy pruning (e.g. prune_opa)
-        and GNS pruning.
+    At configured events, compute per-Gaussian scores and remove the lowest ones.
+    Cadence uses 1-based training steps.
     """
 
-    # Enable post-densification hard pruning.
+    # Enable hard pruning.
     enable: bool = False
+
+    # How to choose the per-event prune count.
+    policy: Literal["uniform_to_budget", "fixed_percent"] = "uniform_to_budget"
+    # For `policy="fixed_percent"` only.
+    percent_per_event: float = 0.1
+
     # First (1-based) training step at which hard pruning is allowed.
-    # This must be strictly greater than `strategy.refine_stop_iter` (which is expressed
-    # in 0-based trainer `step` units) to guarantee pruning starts after densification.
+    # For policy="uniform_to_budget", must satisfy start_step > strategy.refine_stop_iter.
     start_step: int = 15_001
-    # Target Gaussian budget. When current count exceeds this value, hard pruning
-    # removes the lowest-score Gaussians until the budget is met.
+    # Final target count for policy="uniform_to_budget" only.
+    # Ignored when policy="fixed_percent".
     final_budget: int = 1_000_000
     # Run hard pruning every N (1-based) training steps.
     every_n: int = 2500
@@ -485,7 +484,7 @@ class TrainConfig:
     strategy: StrategyConfig = field(default_factory=StrategyConfig)
     # Natural Selection (GNS) configuration.
     gns: GNSConfig = field(default_factory=GNSConfig)
-    # Speedy-Splat-style hard pruning (post-densification only).
+    # Speedy-Splat-style hard pruning (score-based budget pruning).
     hard_prune: HardPruneConfig = field(default_factory=HardPruneConfig)
     # Pose optimization / noise configuration.
     pose: PoseConfig = field(default_factory=PoseConfig)
@@ -744,24 +743,34 @@ def validate_train_config(cfg: TrainConfig) -> None:
                 f"strategy.refine_stop_iter={int(cfg.strategy.refine_stop_iter)} (0-based)."
             )
 
-    # Hard prune config (post-densification Speedy-Splat-style pruning).
+    # Hard prune config.
     hp = cfg.hard_prune
     if bool(hp.enable):
+        policy = str(hp.policy)
         if int(hp.start_step) <= 0:
             raise ValueError(f"hard_prune.start_step must be > 0, got {hp.start_step}")
-        # `strategy.refine_stop_iter` uses 0-based `step` units. Hard prune uses 1-based
-        # training steps, so the strict "after densification" condition is:
-        #   start_step >= refine_stop_iter + 1  <=>  start_step > refine_stop_iter
-        if int(hp.start_step) <= int(cfg.strategy.refine_stop_iter):
+        # `strategy.refine_stop_iter` uses 0-based `step` units, while hard-prune
+        # config uses 1-based train-step numbers.
+        if policy == "uniform_to_budget" and int(hp.start_step) <= int(
+            cfg.strategy.refine_stop_iter
+        ):
             raise ValueError(
-                "hard_prune.start_step must be strictly after densification. "
+                "hard_prune.start_step must be strictly after densification when "
+                "hard_prune.policy='uniform_to_budget'. "
                 f"Got hard_prune.start_step={int(hp.start_step)} (1-based) and "
                 f"strategy.refine_stop_iter={int(cfg.strategy.refine_stop_iter)} (0-based)."
             )
-        if int(hp.final_budget) <= 0:
+        if policy == "uniform_to_budget" and int(hp.final_budget) <= 0:
             raise ValueError(
-                f"hard_prune.final_budget must be > 0, got {hp.final_budget}"
+                f"hard_prune.final_budget must be > 0 when policy='uniform_to_budget', got {hp.final_budget}"
             )
+        if policy == "fixed_percent":
+            if not (0.0 < float(hp.percent_per_event) < 1.0):
+                raise ValueError(
+                    "hard_prune.percent_per_event must be in (0, 1) when "
+                    "hard_prune.policy='fixed_percent', "
+                    f"got {hp.percent_per_event}"
+                )
         if int(hp.every_n) <= 0:
             raise ValueError(f"hard_prune.every_n must be > 0, got {hp.every_n}")
         if int(hp.stop_step) <= 0:
