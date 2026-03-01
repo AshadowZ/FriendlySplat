@@ -99,16 +99,16 @@ def main(argv: list[str]) -> int:
     # - bicycle/flowers/garden/stump/treehill: 1/4 resolution (factor=4)
     # - bonsai/counter/kitchen/room: 1/2 resolution (factor=2)
     # - others: full resolution (factor=1)
-    scene_data_factors: dict[str, int] = {
-        "bicycle": 4,
-        "flowers": 4,
-        "garden": 4,
-        "stump": 4,
-        "treehill": 4,
-        "bonsai": 2,
-        "counter": 2,
-        "kitchen": 2,
-        "room": 2,
+    scene_data_factors: dict[str, float] = {
+        "bicycle": 4.0,
+        "flowers": 4.0,
+        "garden": 4.0,
+        "stump": 4.0,
+        "treehill": 4.0,
+        "bonsai": 2.0,
+        "counter": 2.0,
+        "kitchen": 2.0,
+        "room": 2.0,
     }
 
     # Improved-GS scene budgets (see Improved-GS/budget.txt).
@@ -161,8 +161,8 @@ def main(argv: list[str]) -> int:
             any_failed = True
             continue
 
-        data_factor = int(scene_data_factors.get(scene, 1))
-        if data_factor <= 0:
+        data_factor = float(scene_data_factors.get(scene, 1.0))
+        if not (data_factor > 0.0):
             raise ValueError(
                 f"data_factor must be > 0, got {data_factor} (scene={scene!r})."
             )
@@ -294,7 +294,7 @@ def main(argv: list[str]) -> int:
                 "--data.num-workers",
                 "0",
                 "--data.data-factor",
-                str(int(data_factor)),
+                str(float(data_factor)),
                 "--optim.max-steps",
                 str(int(max_steps)),
                 "--strategy.impl",

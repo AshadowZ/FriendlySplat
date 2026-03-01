@@ -36,12 +36,45 @@ _SCENES_360V2: tuple[str, ...] = (
     "treehill",
 )
 
-def _infer_data_factor_from_scene_dir(scene_data_dir: Path) -> Optional[int]:
+def _parse_images_suffix(suffix: str) -> Optional[float]:
+    s = str(suffix).strip()
+    if not s:
+        return None
+    # Accept our canonical "2p5" as well as a literal "2.5" directory name.
+    s = s.replace("p", ".")
+    try:
+        v = float(s)
+    except ValueError:
+        return None
+    if not (v > 0.0):
+        return None
+    return v
+
+
+def _infer_data_factor_from_scene_dir(scene_data_dir: Path) -> Optional[float]:
+    factors: list[float] = []
+    if scene_data_dir.exists():
+        for p in scene_data_dir.iterdir():
+            if not p.is_dir():
+                continue
+            if not p.name.startswith("images_"):
+                continue
+            suffix = p.name[len("images_") :]
+            v = _parse_images_suffix(suffix)
+            if v is None:
+                continue
+            factors.append(float(v))
+    factors = sorted(set(factors))
+    if factors:
+        if len(factors) > 1:
+            print(
+                f"[warn] multiple images_* directories found under {scene_data_dir}; "
+                f"guessing factor={factors[0]} from {factors}",
+                flush=True,
+            )
+        return float(factors[0])
     if (scene_data_dir / "images").exists():
-        return 1
-    for factor in (2, 4, 8):
-        if (scene_data_dir / f"images_{factor}").exists():
-            return factor
+        return 1.0
     return None
 
 
@@ -368,6 +401,8 @@ def _write_summary_md(*, md_path: Path, rows: list[dict[str, object]]) -> None:
         if x is None:
             return ""
         if isinstance(x, float):
+            if float(x).is_integer():
+                return str(int(x))
             return f"{x:.4f}"
         return str(x)
 
@@ -615,8 +650,10 @@ def main(argv: list[str]) -> int:
 
                 if data_factor is None:
                     inferred = _infer_data_factor_from_scene_dir(scene_data_dir)
-                    data_factor = int(inferred) if inferred is not None else 1
-                data_factor = int(data_factor)
+                    data_factor = float(inferred) if inferred is not None else 1.0
+                data_factor = float(data_factor)
+                if not (data_factor > 0.0):
+                    raise ValueError(f"data_factor must be > 0, got {data_factor}")
 
                 if args.step is None:
                     ply_path, ply_step = _find_latest_ply_path(scene_out_dir)
@@ -637,7 +674,7 @@ def main(argv: list[str]) -> int:
 
                 dataparser = ColmapDataParser(
                     data_dir=str(scene_data_dir),
-                    factor=int(data_factor),
+                    factor=float(data_factor),
                     normalize_world_space=bool(normalize_world_space_for_eval),
                     align_world_axes=bool(align_world_axes),
                     test_every=int(test_every),
@@ -714,7 +751,7 @@ def main(argv: list[str]) -> int:
                     "scene": scene,
                     "strategy": str(strategy_impl),
                     "step": int(ply_step),
-                    "data_factor": int(data_factor),
+                    "data_factor": float(data_factor),
                     "psnr": float(stats["psnr"]),
                     "ssim": float(stats["ssim"]),
                     "lpips": float(stats["lpips"]),

@@ -13,6 +13,19 @@ from .image_io import get_rel_paths, imread_rgb, resize_image_folder
 from .scene_transform import transform_cameras_and_points
 
 
+_FACTOR_EPS = 1e-6
+
+
+def format_factor_dir_suffix(factor: float) -> str:
+    factor_f = float(factor)
+    if factor_f <= 0.0:
+        raise ValueError(f"factor must be > 0, got {factor_f}")
+    rounded = int(round(factor_f))
+    if abs(factor_f - float(rounded)) <= _FACTOR_EPS:
+        return str(rounded)
+    return f"{factor_f:.8f}".rstrip("0").rstrip(".").replace(".", "p")
+
+
 class ColmapDataParser(DataParser):
     """COLMAP dataparser.
 
@@ -23,7 +36,7 @@ class ColmapDataParser(DataParser):
         self,
         *,
         data_dir: str,
-        factor: int = 1,
+        factor: float = 1.0,
         normalize_world_space: bool = False,
         align_world_axes: bool = False,
         test_every: int = 8,
@@ -34,7 +47,9 @@ class ColmapDataParser(DataParser):
         sky_mask_dir_name: Optional[str] = None,
     ):
         self.data_dir = str(data_dir)
-        self.factor = int(factor)
+        self.factor = float(factor)
+        if self.factor <= 0.0:
+            raise ValueError(f"factor must be > 0, got {self.factor}")
         self.normalize_world_space = bool(normalize_world_space)
         self.align_world_axes = bool(align_world_axes)
         self.test_every = int(test_every)
@@ -102,7 +117,7 @@ class ColmapDataParser(DataParser):
         # This avoids scoring-time image I/O when the trainer needs resolution info.
         self.image_sizes = image_sizes
 
-        if int(self.factor) > 1:
+        if self._is_downsample_factor():
             configured_priors = [
                 name
                 for name, value in [
@@ -116,7 +131,7 @@ class ColmapDataParser(DataParser):
             if configured_priors:
                 warnings.warn(
                     "Using auxiliary priors with factor>1 requires the priors/masks to be stored at the same "
-                    f"resolution as images_{int(self.factor)}/. Configured priors: {', '.join(configured_priors)}. "
+                    f"resolution as images_{self._factor_dir_suffix()}/. Configured priors: {', '.join(configured_priors)}. "
                     "FriendlySplat will validate shapes when loading priors at runtime.",
                     category=UserWarning,
                     stacklevel=2,
@@ -156,7 +171,7 @@ class ColmapDataParser(DataParser):
         Dict[int, np.ndarray],
         Dict[int, tuple[int, int]],
     ]:
-        factor = int(self.factor)
+        factor = float(self.factor)
 
         c2w_mats = []
         camera_ids: List[int] = []
@@ -174,11 +189,11 @@ class ColmapDataParser(DataParser):
 
             cam = cameras[camera_id]
             K = get_intrinsics(cam)
-            K[:2, :] /= float(factor)
+            K[:2, :] /= factor
             Ks_dict[camera_id] = K
             imsize_dict[camera_id] = (
-                int(round(float(cam.width) / float(factor))),
-                int(round(float(cam.height) / float(factor))),
+                int(round(float(cam.width) / factor)),
+                int(round(float(cam.height) / factor)),
             )
 
             type_ = cam.model
@@ -238,28 +253,31 @@ class ColmapDataParser(DataParser):
         return float(np.max(dists))
 
     def _resolve_image_dirs(self) -> tuple[Path, Path]:
-        factor = int(self.factor)
         data_dir = Path(self.data_dir)
         colmap_image_dir = data_dir / "images"
-        image_dir = data_dir / f"images_{factor}" if factor > 1 else colmap_image_dir
+        image_dir = (
+            data_dir / f"images_{self._factor_dir_suffix()}"
+            if self._is_downsample_factor()
+            else colmap_image_dir
+        )
 
         if not colmap_image_dir.exists():
             # Benchmarking convenience: some datasets keep only downsampled images on disk
             # (e.g. `images_4/`) while still using a COLMAP model reconstructed from the
             # original resolution. In this case, we treat `images_<factor>/` as the
             # reference image folder for COLMAP name resolution checks.
-            if factor > 1 and image_dir.exists():
+            if self._is_downsample_factor() and image_dir.exists():
                 colmap_image_dir = image_dir
             else:
                 raise FileNotFoundError(
                     f"Image folder {colmap_image_dir} does not exist."
                 )
-        if factor <= 1 and not image_dir.exists():
+        if not self._is_downsample_factor() and not image_dir.exists():
             raise FileNotFoundError(f"Image folder {image_dir} does not exist.")
         return colmap_image_dir, image_dir
 
     def _resolve_image_paths(self, *, image_names: List[str]) -> List[str]:
-        factor = int(self.factor)
+        factor = float(self.factor)
         colmap_image_dir, image_dir = self._resolve_image_dirs()
 
         image_files = (
@@ -267,7 +285,7 @@ class ColmapDataParser(DataParser):
         )
         # For downsampled data, reuse existing `images_{factor}` when available.
         # Otherwise, generate it from source images.
-        if factor > 1 and len(image_files) == 0:
+        if self._is_downsample_factor() and len(image_files) == 0:
             resized_dir = resize_image_folder(
                 str(colmap_image_dir),
                 str(image_dir),
@@ -357,7 +375,7 @@ class ColmapDataParser(DataParser):
                 f"idx=0, camera_id={camera_id}, image={image_path}, "
                 f"expected=({expected_width}, {expected_height}), "
                 f"actual=({actual_width}, {actual_height}), "
-                f"factor={int(self.factor)}. "
+                f"factor={float(self.factor):g}. "
                 "Please regenerate COLMAP or use matching images/intrinsics."
             )
 
@@ -522,3 +540,8 @@ class ColmapDataParser(DataParser):
                 "image_sizes": self.image_sizes,
             },
         )
+    def _is_downsample_factor(self) -> bool:
+        return float(self.factor) > 1.0 + _FACTOR_EPS
+
+    def _factor_dir_suffix(self) -> str:
+        return format_factor_dir_suffix(self.factor)

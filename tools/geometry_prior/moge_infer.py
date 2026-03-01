@@ -21,7 +21,10 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from friendly_splat.data.colmap_dataparser import ColmapDataParser
+from friendly_splat.data.colmap_dataparser import (
+    ColmapDataParser,
+    format_factor_dir_suffix,
+)
 from friendly_splat.data.colmap_io import get_extrinsic, read_model
 
 
@@ -222,7 +225,7 @@ class _SaveItem:
 def run_moge_infer(
     *,
     data_dir: str,
-    factor: int,
+    factor: float,
     model_id: str,
     read_threads: int,
     write_threads: int,
@@ -244,10 +247,15 @@ def run_moge_infer(
     verbose: bool,
 ) -> None:
     data_dir = str(data_dir)
-    factor = int(factor)
-    if factor != 1:
+    factor = float(factor)
+    if factor <= 0.0:
+        raise ValueError(f"factor must be > 0, got {factor}")
+    if abs(factor - 1.0) > 1e-6:
+        image_dir_name = (
+            f"images_{format_factor_dir_suffix(factor)}" if factor > 1.0 else "images"
+        )
         print(
-            f"[WARN] factor={factor}: priors will be generated at images_{factor}/ resolution (if present). "
+            f"[WARN] factor={factor:g}: priors will be generated at {image_dir_name}/ resolution (if present). "
             "Ensure training uses the same --data.data-factor so priors match the rendered image size."
         )
 
@@ -689,9 +697,9 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--factor",
-        type=int,
-        default=1,
-        help="Image downsample factor (uses images_{factor} if present). Priors are intended for factor=1.",
+        type=float,
+        default=1.0,
+        help="Image downsample factor (e.g. 2, 2.5 -> images_2p5 if present). Priors are intended for factor=1.",
     )
     p.add_argument(
         "--model-id",

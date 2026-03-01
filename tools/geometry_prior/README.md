@@ -43,5 +43,7 @@ Set these in your training config:
 - `data.sky_mask_dir_name="sky_mask"` (if you exported masks)
 
 Note: When training with auxiliary priors/masks, the priors/masks must match the training image resolution.
-For example, if you train with `data_factor=2` (using `images_2/`), generate priors/masks at `images_2/` resolution
+For example, if you train with `data_factor=2` (using `images_2/`), generate priors/masks at `images_2/` resolution.
+If you train with a non-integer factor like `data_factor=2.5`, FriendlySplat uses `images_2p5/` (dot replaced by `p`),
+so generate priors/masks at `images_2p5/` resolution as well.
 or the dataset loader will raise a shape mismatch error.

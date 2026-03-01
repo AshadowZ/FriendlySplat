@@ -31,7 +31,7 @@ class IOConfig:
 @dataclass(frozen=True)
 class DataConfig:
     # Downsample factor for the dataset images.
-    data_factor: int = 1
+    data_factor: float = 1.0
     # Normalize the world space based on COLMAP points/cameras.
     normalize_world_space: bool = True
     # Whether to align world axes during normalization (z-up + PCA principal axes).

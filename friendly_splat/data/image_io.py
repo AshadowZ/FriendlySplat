@@ -42,7 +42,10 @@ def imread_gray(path: str) -> np.ndarray:
     return img
 
 
-def resize_image_folder(image_dir: str, resized_dir: str, factor: int) -> str:
+def resize_image_folder(image_dir: str, resized_dir: str, factor: float) -> str:
+    factor = float(factor)
+    if factor <= 0.0:
+        raise ValueError(f"factor must be > 0, got {factor}")
     pil_resampling = getattr(Image, "Resampling", Image)
     pil_lanczos = pil_resampling.LANCZOS
     os.makedirs(resized_dir, exist_ok=True)

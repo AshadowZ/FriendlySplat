@@ -536,8 +536,8 @@ def main() -> None:
         "--resolution",
         "-r",
         dest="render_factor",
-        type=int,
-        default=1,
+        type=float,
+        default=1.0,
         help=(
             "Additional render downscale factor applied during TSDF meshing. "
             "For example, --render_factor 2 renders at half resolution. "
@@ -728,18 +728,18 @@ def main() -> None:
     h0, w0 = _infer_hw_from_image(
         image_path=parsed_scene.image_paths[first_image_index]
     )
-    render_factor = int(args.render_factor)
-    if render_factor <= 0:
+    render_factor = float(args.render_factor)
+    if not (render_factor > 0.0):
         raise ValueError(f"--render_factor must be > 0, got {render_factor}")
-    if render_factor != 1:
-        h_render = max(1, int(round(float(h0) / float(render_factor))))
-        w_render = max(1, int(round(float(w0) / float(render_factor))))
+    if abs(render_factor - 1.0) > 1e-6:
+        h_render = max(1, int(round(float(h0) / render_factor)))
+        w_render = max(1, int(round(float(w0) / render_factor)))
     else:
         h_render, w_render = int(h0), int(w0)
     kx = float(w_render) / max(float(w0), 1.0)
     ky = float(h_render) / max(float(h0), 1.0)
     print(
-        f"[render] render_factor={render_factor} (H,W)=({h_render},{w_render}) from ({h0},{w0})",
+        f"[render] render_factor={render_factor:g} (H,W)=({h_render},{w_render}) from ({h0},{w0})",
         flush=True,
     )
 

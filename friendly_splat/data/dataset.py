@@ -9,21 +9,24 @@ from .base_dataparser import DataparserOutputs
 from .image_io import imread_gray, imread_rgb
 
 
-def _infer_data_factor_from_image_path(path: str) -> int:
-    # Best-effort: parse ".../images_2/..." -> 2. Default to 1.
+def _infer_image_variant_from_path(path: str) -> str:
+    # Best-effort parse:
+    # - ".../images/..." -> "1"
+    # - ".../images_2/..." -> "2"
+    # - ".../images_2p5/..." -> "2p5"
     try:
         parts = str(path).replace("\\", "/").split("/")
         if len(parts) >= 2:
             parent = parts[-2]
+            if parent == "images":
+                return "1"
             if parent.startswith("images_"):
                 suffix = parent[len("images_") :]
-                if suffix.isdigit():
-                    v = int(suffix)
-                    if v > 0:
-                        return v
+                if suffix:
+                    return suffix
     except Exception:  # noqa: BLE001
         pass
-    return 1
+    return "1"
 
 
 def _raise_prior_shape_mismatch(
@@ -35,11 +38,13 @@ def _raise_prior_shape_mismatch(
     image_path: str,
 ) -> None:
     h_exp, w_exp = int(expected_hw[0]), int(expected_hw[1])
-    factor = _infer_data_factor_from_image_path(image_path)
+    image_variant = _infer_image_variant_from_path(image_path)
+    factor = image_variant.replace("p", ".")
+    image_dir = "images" if image_variant == "1" else f"images_{image_variant}"
     raise ValueError(
         f"{modality} prior shape mismatch for image={image_path!r} (factor={factor}). "
         f"Expected (H,W)=({h_exp},{w_exp}) but got {got_shape} from {path!r}. "
-        f"Fix: generate priors/masks at images_{factor}/ resolution, or train with factor=1."
+        f"Fix: generate priors/masks at {image_dir}/ resolution, or train with factor=1."
     )
 
 

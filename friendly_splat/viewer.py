@@ -30,7 +30,7 @@ class ViewerScriptConfig:
 @dataclass(frozen=True)
 class ViewerDatasetConfig:
     data_dir: str
-    data_factor: int = 1
+    data_factor: float = 1.0
     normalize_world_space: bool = True
     align_world_axes: bool = True
     test_every: int = 8
@@ -54,6 +54,13 @@ def _coerce_int(value: Any, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return int(default)
+
+
+def _coerce_float(value: Any, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
 
 
 def _coerce_bool(value: Any, default: bool) -> bool:
@@ -184,7 +191,7 @@ def _parse_ckpt_settings(ckpt_obj: dict[str, Any]) -> ViewerCkptSettings:
 
     dataset_cfg = ViewerDatasetConfig(
         data_dir=data_dir,
-        data_factor=_coerce_int(data_raw.get("data_factor", 1), 1),
+        data_factor=_coerce_float(data_raw.get("data_factor", 1.0), 1.0),
         normalize_world_space=_coerce_bool(
             data_raw.get("normalize_world_space", True),
             True,
@@ -240,7 +247,7 @@ def _build_train_dataset_from_ckpt_settings(
     try:
         dataparser = ColmapDataParser(
             data_dir=dataset_cfg.data_dir,
-            factor=int(dataset_cfg.data_factor),
+            factor=float(dataset_cfg.data_factor),
             normalize_world_space=bool(dataset_cfg.normalize_world_space),
             align_world_axes=bool(dataset_cfg.align_world_axes),
             test_every=int(dataset_cfg.test_every),
