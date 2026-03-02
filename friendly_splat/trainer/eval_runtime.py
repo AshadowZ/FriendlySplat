@@ -154,7 +154,7 @@ def _get_eval_metrics(
 
 @dataclass(frozen=True)
 class EvalOutput:
-    stats: Dict[str, float | int]
+    stats: Dict[str, float | int | str]
 
 
 def build_eval_summary(*, eval_step: int, stats: Mapping[str, object]) -> str:
@@ -333,15 +333,13 @@ def run_evaluation(
     ssim_v = float((total_ssim / float(total_images)).item())
     lpips_v = float((total_lpips / float(total_images)).item())
 
-    stats: Dict[str, float | int] = {
+    stats: Dict[str, float | int | str] = {
         "step": int(step),
         "train_step": int(step) + 1,
+        "metrics_backend": backend,
         "psnr": psnr_v,
         "ssim": ssim_v,
         "lpips": lpips_v,
-        f"psnr_{backend}": psnr_v,
-        f"ssim_{backend}": ssim_v,
-        f"lpips_{backend}": lpips_v,
         "seconds_per_image": float(elapsed / float(total_images)),
         "num_eval_images": int(total_images),
         "num_gaussians": int(gaussian_model.num_gaussians),
@@ -354,7 +352,4 @@ def run_evaluation(
         stats["cc_psnr"] = cc_psnr_v
         stats["cc_ssim"] = cc_ssim_v
         stats["cc_lpips"] = cc_lpips_v
-        stats[f"cc_psnr_{backend}"] = cc_psnr_v
-        stats[f"cc_ssim_{backend}"] = cc_ssim_v
-        stats[f"cc_lpips_{backend}"] = cc_lpips_v
     return EvalOutput(stats=stats)
