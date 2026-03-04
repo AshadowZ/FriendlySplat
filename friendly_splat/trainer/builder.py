@@ -64,6 +64,7 @@ def build_dataset_and_loader(
         align_world_axes=data_cfg.align_world_axes,
         test_every=data_cfg.test_every,
         benchmark_train_split=data_cfg.benchmark_train_split,
+        train_image_list_file=data_cfg.train_image_list_file,
         depth_dir_name=data_cfg.depth_dir_name,
         normal_dir_name=data_cfg.normal_dir_name,
         dynamic_mask_dir_name=data_cfg.dynamic_mask_dir_name,
