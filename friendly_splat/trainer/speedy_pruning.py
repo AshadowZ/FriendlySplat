@@ -13,9 +13,10 @@ from gsplat.rendering import rasterization
 from gsplat.strategy.ops import remove
 
 
-def _train_step_due(*, step: int, every_n: int) -> bool:
-    train_step = int(step) + 1
-    return (train_step % int(every_n)) == 0
+def _train_step_due(*, train_step: int, start_step: int, every_n: int) -> bool:
+    # Hard-prune cadence is anchored at `start_step`:
+    # trigger at start_step, start_step + every_n, ...
+    return ((int(train_step) - int(start_step)) % int(every_n)) == 0
 
 
 def _is_prune_window_active(
@@ -26,9 +27,14 @@ def _is_prune_window_active(
     if not bool(hard_prune_cfg.enable):
         return False
     train_step = int(step) + 1
-    if train_step < int(hard_prune_cfg.start_step):
+    start_step = int(hard_prune_cfg.start_step)
+    if train_step < start_step:
         return False
-    if not _train_step_due(step=int(step), every_n=int(hard_prune_cfg.every_n)):
+    if not _train_step_due(
+        train_step=int(train_step),
+        start_step=start_step,
+        every_n=int(hard_prune_cfg.every_n),
+    ):
         return False
     if train_step > int(hard_prune_cfg.stop_step):
         return False
@@ -50,10 +56,10 @@ def _hard_prune_event_bounds(
     if stop_step < start_step:
         raise ValueError("stop_step must be >= start_step.")
 
-    # First multiple of every_n that is >= start_step.
-    first_due = ((start_step + every_n - 1) // every_n) * every_n
-    # Last multiple of every_n that is <= stop_step.
-    last_due = (stop_step // every_n) * every_n
+    # First event is exactly at start_step. Subsequent events occur every `every_n`.
+    first_due = int(start_step)
+    span = int(stop_step) - int(start_step)
+    last_due = int(start_step) + (span // int(every_n)) * int(every_n)
     if last_due < first_due:
         return first_due, last_due, 0
     num_events = ((last_due - first_due) // every_n) + 1

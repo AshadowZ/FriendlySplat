@@ -221,7 +221,10 @@ class GaussianModel(torch.nn.Module):
         ckpt_path: str,
         device: torch.device,
     ) -> "GaussianModel":
-        ckpt = torch.load(str(ckpt_path), map_location="cpu")
+        try:
+            ckpt = torch.load(str(ckpt_path), map_location="cpu", weights_only=True)
+        except TypeError:
+            ckpt = torch.load(str(ckpt_path), map_location="cpu")
         if not isinstance(ckpt, dict):
             raise ValueError(
                 f"Invalid checkpoint format (expected dict): {ckpt_path}"

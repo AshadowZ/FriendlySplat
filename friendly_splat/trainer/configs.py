@@ -391,7 +391,8 @@ class HardPruneConfig:
     # Final target count for policy="uniform_to_budget" only.
     # Ignored when policy="fixed_percent".
     final_budget: int = 1_000_000
-    # Run hard pruning every N (1-based) training steps.
+    # Run hard pruning every N (1-based) training steps, anchored at `start_step`.
+    # Example: start_step=1000, every_n=2500 -> 1000, 3500, 6000, ...
     every_n: int = 2500
     # Last (1-based) training step to allow pruning (inclusive).
     stop_step: int = 25000
