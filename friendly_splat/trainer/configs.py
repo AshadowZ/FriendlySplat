@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Literal, Optional, Tuple
 
 
@@ -75,8 +76,13 @@ class DataConfig:
 
 @dataclass(frozen=True)
 class InitConfig:
-    # Initialization strategy: "sfm" (COLMAP points) or "random".
+    # Initialization strategy:
+    # - "sfm": initialize from COLMAP sparse points.
+    # - "random": initialize from random points in scene bounds.
+    # - "from_ckpt": initialize directly from checkpoint splats.
     init_type: str = "sfm"
+    # Checkpoint path used when init_type="from_ckpt".
+    init_ckpt_path: Optional[str] = None
     # Initial number of Gaussians (ignored when init_type="sfm").
     init_num_pts: int = 100_000
     # Initial extent for random init, as a multiple of scene scale (ignored for "sfm").
@@ -703,6 +709,25 @@ def validate_train_config(cfg: TrainConfig) -> None:
             raise ValueError(
                 f"preload='cuda' requires io.device to be CUDA (e.g. 'cuda' or 'cuda:0'), got {cfg.io.device!r}"
             )
+
+    init_type = str(cfg.init.init_type).strip().lower()
+    if init_type not in ("sfm", "random", "from_ckpt"):
+        raise ValueError(
+            f"init.init_type must be 'sfm', 'random', or 'from_ckpt', got {cfg.init.init_type!r}"
+        )
+    if init_type == "from_ckpt":
+        if cfg.init.init_ckpt_path is None or str(cfg.init.init_ckpt_path).strip() == "":
+            raise ValueError(
+                "init.init_type='from_ckpt' requires init.init_ckpt_path to be set."
+            )
+        ckpt_path = Path(str(cfg.init.init_ckpt_path))
+        if not ckpt_path.exists():
+            raise FileNotFoundError(f"init checkpoint not found: {ckpt_path}")
+    elif cfg.init.init_ckpt_path is not None:
+        raise ValueError(
+            "init.init_ckpt_path is set but init.init_type is not 'from_ckpt'. "
+            f"Got init.init_type={cfg.init.init_type!r}."
+        )
 
     if cfg.optim.sparse_grad and cfg.optim.visible_adam:
         raise ValueError(

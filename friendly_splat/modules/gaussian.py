@@ -6,6 +6,9 @@ from typing import Dict
 import torch
 
 
+_REQUIRED_SPLAT_KEYS = ("means", "scales", "quats", "opacities", "sh0", "shN")
+
+
 def _logit(x: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
     x = x.clamp(float(eps), 1.0 - float(eps))
     return torch.log(x / (1.0 - x))
@@ -210,6 +213,59 @@ class GaussianModel(torch.nn.Module):
             init_opacity=float(init_opacity),
             device=device,
         )
+
+    @classmethod
+    def from_ckpt(
+        cls,
+        *,
+        ckpt_path: str,
+        device: torch.device,
+    ) -> "GaussianModel":
+        ckpt = torch.load(str(ckpt_path), map_location="cpu")
+        if not isinstance(ckpt, dict):
+            raise ValueError(
+                f"Invalid checkpoint format (expected dict): {ckpt_path}"
+            )
+        splats = ckpt.get("splats", None)
+        if not isinstance(splats, dict):
+            raise ValueError(
+                f"Checkpoint missing 'splats' dict for initialization: {ckpt_path}"
+            )
+
+        missing = [k for k in _REQUIRED_SPLAT_KEYS if k not in splats]
+        if missing:
+            raise ValueError(
+                f"Checkpoint splats missing required keys {missing}: {ckpt_path}"
+            )
+
+        tensors: Dict[str, torch.Tensor] = {}
+        for key in _REQUIRED_SPLAT_KEYS:
+            value = splats[key]
+            if isinstance(value, torch.nn.Parameter):
+                value = value.detach()
+            if not torch.is_tensor(value):
+                raise ValueError(
+                    f"Checkpoint splats['{key}'] is not a tensor: {type(value)!r}"
+                )
+            tensors[key] = value.to(device=device, dtype=torch.float32).contiguous()
+
+        n = int(tensors["means"].shape[0])
+        expected_shapes = {
+            "means": (n, 3),
+            "scales": (n, 3),
+            "quats": (n, 4),
+            "opacities": (n,),
+        }
+        for key, shape in expected_shapes.items():
+            if tuple(tensors[key].shape) != tuple(shape):
+                raise ValueError(f"Invalid {key} shape: {tuple(tensors[key].shape)}")
+
+        for key in ("sh0", "shN"):
+            if tensors[key].dim() != 3 or int(tensors[key].shape[0]) != n:
+                raise ValueError(f"Invalid {key} shape: {tuple(tensors[key].shape)}")
+
+        params = {k: torch.nn.Parameter(v.clone()) for k, v in tensors.items()}
+        return cls(params=params)
 
     @classmethod
     def _build_from_points(
