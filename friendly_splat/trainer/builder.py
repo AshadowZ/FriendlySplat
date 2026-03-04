@@ -196,7 +196,12 @@ def build_training_context(cfg: TrainConfig) -> TrainingContext:
     natural_selection_policy: Optional[NaturalSelectionPolicy] = None
     if cfg.gns.gns_enable:
         # GNS regularizes opacity and influences which Gaussians survive/densify.
-        gns_reg_interval = auto_gns_reg_interval(num_train_images=len(dataset))
+        base_gns_reg_interval = auto_gns_reg_interval(num_train_images=len(dataset))
+        gns_reg_interval = int(base_gns_reg_interval)
+        gns_reg_interval = max(
+            1,
+            int(round(float(gns_reg_interval) * float(cfg.optim.steps_scaler))),
+        )
         natural_selection_policy = NaturalSelectionPolicy(
             cfg=cfg.gns,
             densify_stop_step=int(cfg.strategy.refine_stop_iter),
