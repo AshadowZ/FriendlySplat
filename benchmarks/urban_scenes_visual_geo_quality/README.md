@@ -9,3 +9,18 @@ Planned stages (scripts will live here):
 - Partition: split into spatial blocks and assign images per block (optional visibility/content).
 - Train: per-partition fine-tuning and exports.
 
+## MatrixCity coarse training
+
+Use:
+
+```bash
+bash benchmarks/urban_scenes_visual_geo_quality/run_matrixcity_coarse.sh aerial
+# or
+bash benchmarks/urban_scenes_visual_geo_quality/run_matrixcity_coarse.sh street
+```
+
+Environment overrides:
+
+- `DATA_ROOT` (default: `/media/joker/p3500/3DGS_Dataset`)
+- `DEVICE` (default: `cuda:0`)
+- `FORCE_TRAIN=1` to ignore existing final checkpoint and retrain.
