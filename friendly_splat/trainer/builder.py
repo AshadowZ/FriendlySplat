@@ -97,9 +97,16 @@ def build_gaussian_model(
     sh_degree = int(optim_cfg.sh_degree)
     init_scale = float(init_cfg.init_scale)
     init_opacity = float(init_cfg.init_opacity)
+    init_type = str(init_cfg.init_type).strip().lower()
+
+    if init_type == "from_ckpt":
+        return GaussianModel.from_ckpt(
+            ckpt_path=str(init_cfg.init_ckpt_path),
+            device=device,
+        )
 
     # Prefer SFM (COLMAP points) init when available; otherwise fall back to random.
-    if init_cfg.init_type == "sfm" and int(parsed_scene.points.shape[0]) > 0:
+    if init_type == "sfm" and int(parsed_scene.points.shape[0]) > 0:
         return GaussianModel.from_sfm(
             points=torch.from_numpy(parsed_scene.points),
             points_rgb=torch.from_numpy(parsed_scene.points_rgb),
@@ -109,7 +116,7 @@ def build_gaussian_model(
             device=device,
         )
 
-    if init_cfg.init_type == "random":
+    if init_type == "random":
         return GaussianModel.from_random(
             num_points=int(init_cfg.init_num_pts),
             scene_scale=float(parsed_scene.scene_scale),
@@ -121,7 +128,9 @@ def build_gaussian_model(
         )
 
     raise ValueError(
-        f"Unsupported init_type={init_cfg.init_type!r} (sfm requires COLMAP points3D)."
+        f"Unsupported init_type={init_cfg.init_type!r} "
+        "(expected 'sfm', 'random', or 'from_ckpt'; "
+        "and 'sfm' requires COLMAP points3D)."
     )
 
 
