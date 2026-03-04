@@ -45,6 +45,9 @@ class DataConfig:
     # - False: `split="train"` uses all images.
     # - True: `split="train"` excludes every `test_every`-th image (train/test are disjoint).
     benchmark_train_split: bool = False
+    # Optional text file listing training images (one entry per line).
+    # When provided, this whitelist is applied only to `split="train"`.
+    train_image_list_file: Optional[str] = None
     # DataLoader preload mode: "none" or "cuda".
     # - "none": load samples on-demand on CPU; batches are moved to the training device each step.
     # - "cuda": preload the entire dataset to CUDA once inside DataLoader (uses GPU memory).
