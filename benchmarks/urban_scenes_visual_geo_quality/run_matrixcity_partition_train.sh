@@ -4,10 +4,10 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  bash benchmarks/urban_scenes_visual_geo_quality/run_matrixcity_partition_train.sh <scene> [--data-root PATH] [--device cuda:0]
+  bash benchmarks/urban_scenes_visual_geo_quality/run_matrixcity_partition_train.sh [aerial] [--data-root PATH] [--device cuda:0]
 
 Arguments:
-  scene: aerial | street
+  scene: aerial
 
 Optional:
   --data-root PATH      Dataset root. Default: /media/joker/p3500/3DGS_Dataset
@@ -39,15 +39,13 @@ die() {
   exit 1
 }
 
-scene="${1:-}"
-if [[ -z "${scene}" ]]; then
-  usage
-  exit 2
+scene="aerial"
+if [[ "${1:-}" != "" && "${1:0:1}" != "-" ]]; then
+  scene="$1"
+  shift || true
 fi
-shift || true
-
-if [[ "${scene}" != "aerial" && "${scene}" != "street" ]]; then
-  die "scene must be 'aerial' or 'street', got '${scene}'"
+if [[ "${scene}" != "aerial" ]]; then
+  die "scene must be 'aerial', got '${scene}'"
 fi
 
 data_root="/media/joker/p3500/3DGS_Dataset"
@@ -142,6 +140,7 @@ train_one_block() {
     --io.device "${device}" \
     --io.export-ply \
     --io.save-ckpt \
+    --tb.enable \
     --data.data-factor 1 \
     --data.preload none \
     --data.depth-dir-name moge_depth \
