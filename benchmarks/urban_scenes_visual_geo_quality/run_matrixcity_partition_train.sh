@@ -14,6 +14,7 @@ Optional:
   --device DEVICE       Default: cuda:0
   --coarse-ckpt PATH    Default: auto-pick latest ckpt_step*.pt under coarse/ckpts
   --force               Train even if final ckpt exists
+  --viewer              Enable online viewer (default: off)
 
 Hyperparams (optional overrides):
   --max-steps N                 Default: 30000
@@ -53,11 +54,12 @@ data_root="/media/joker/p3500/3DGS_Dataset"
 device="cuda:0"
 coarse_ckpt=""
 force="0"
+disable_viewer="1"
 
 max_steps="30000"
 steps_scaler="3.0"
 sh_degree="2"
-densification_budget="12000000"
+densification_budget="11000000"
 refine_stop_iter="20000"
 
 hard_prune_start_step="1000"
@@ -66,7 +68,7 @@ hard_prune_percent="0.3"
 
 gns_reg_start="20001"
 gns_reg_end="27000"
-gns_final_budget="6000000"
+gns_final_budget="5500000"
 
 only_blocks=()
 
@@ -77,6 +79,7 @@ while [[ $# -gt 0 ]]; do
     --device) device="${2:?}"; shift 2 ;;
     --coarse-ckpt) coarse_ckpt="${2:?}"; shift 2 ;;
     --force) force="1"; shift ;;
+    --viewer) disable_viewer="0"; shift ;;
     --max-steps) max_steps="${2:?}"; shift 2 ;;
     --steps-scaler) steps_scaler="${2:?}"; shift 2 ;;
     --sh-degree) sh_degree="${2:?}"; shift 2 ;;
@@ -162,7 +165,8 @@ train_one_block() {
     --gns.reg-end "${gns_reg_end}" \
     --gns.final_budget "${gns_final_budget}" \
     --init.init-type from_ckpt \
-    --init.init-ckpt-path "${coarse_ckpt}"
+    --init.init-ckpt-path "${coarse_ckpt}" \
+    $([[ "${disable_viewer}" == "1" ]] && echo --viewer.disable-viewer)
 }
 
 want_only() {
@@ -183,6 +187,25 @@ shopt -s nullglob
 lists=( "${blocks_dir}"/block_*_train_images.txt )
 shopt -u nullglob
 [[ "${#lists[@]}" -gt 0 ]] || die "no *_train_images.txt found under: ${blocks_dir}"
+
+if [[ "${force}" != "1" ]]; then
+  all_done="1"
+  for list_path in "${lists[@]}"; do
+    fname="$(basename "${list_path}")"
+    block_id="${fname%_train_images.txt}"
+    if ! want_only "${block_id}"; then
+      continue
+    fi
+    if [[ ! -f "${result_root}/${block_id}/ckpts/${final_ckpt_name}" ]]; then
+      all_done="0"
+      break
+    fi
+  done
+  if [[ "${all_done}" == "1" ]]; then
+    echo "[skip] ${scene}: all blocks already trained under ${result_root}"
+    exit 0
+  fi
+fi
 
 trained=0
 skipped=0
