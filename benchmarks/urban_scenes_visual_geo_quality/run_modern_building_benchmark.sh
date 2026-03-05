@@ -68,7 +68,7 @@ run_one() {
   fi
 
   # 2) Final offline evaluation from the latest checkpoint: compute both metrics + cc_metrics.
-  python benchmarks/urban_scenes_visual_geo_quality/eval_single_scene_ckpt.py \
+  python benchmarks/urban_scenes_visual_geo_quality/eval_single_scene.py \
     --result-dir "${result_dir}" \
     --device "${DEVICE}" \
     --split test \
