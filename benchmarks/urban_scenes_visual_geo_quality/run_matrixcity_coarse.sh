@@ -1,19 +1,49 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCENE="${1:-aerial}"
+SCENE="aerial"
+if [[ "${1:-}" != "" && "${1:0:1}" != "-" ]]; then
+  SCENE="$1"
+  shift || true
+fi
+
 DATA_ROOT="${DATA_ROOT:-/media/joker/p3500/3DGS_Dataset}"
 DEVICE="${DEVICE:-cuda:0}"
 FORCE_TRAIN="${FORCE_TRAIN:-0}"
 
 case "${SCENE}" in
-  aerial|street)
+  aerial)
     ;;
   *)
-    echo "Usage: $0 [aerial|street]" >&2
+    echo "Usage: $0 [aerial] [--data-root PATH] [--device cuda:0]" >&2
     exit 1
     ;;
 esac
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help)
+      echo "Usage: $0 [aerial] [--data-root PATH] [--device cuda:0]" >&2
+      exit 0
+      ;;
+    --data-root)
+      DATA_ROOT="${2:?}"
+      shift 2
+      ;;
+    --device)
+      DEVICE="${2:?}"
+      shift 2
+      ;;
+    --force)
+      FORCE_TRAIN="1"
+      shift
+      ;;
+    *)
+      echo "[error] unknown arg: $1" >&2
+      exit 2
+      ;;
+  esac
+done
 
 DATA_DIR="${DATA_ROOT}/MatrixCity/${SCENE}_train"
 RESULT_DIR="${DATA_ROOT}/benchmark/urban_benchmark/matrix_benchmark/${SCENE}/coarse"
@@ -58,6 +88,7 @@ python friendly_splat/trainer.py \
   --io.device "${DEVICE}" \
   --io.export-ply \
   --io.save-ckpt \
+  --tb.enable \
   --data.data-factor 1 \
   --data.preload none \
   --data.normal-dir-name moge_normal \
