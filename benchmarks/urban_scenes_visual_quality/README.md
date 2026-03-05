@@ -1,6 +1,6 @@
-# Urban Scenes Visual + Geometry Quality Benchmark
+# Urban Scenes Visual Quality Benchmark
 
-This folder is reserved for an end-to-end benchmarking pipeline on large-scale urban
+This folder is reserved for an end-to-end visual-quality benchmarking pipeline on large-scale urban
 scenes (e.g. GauU-Scene / MatrixCity style datasets).
 
 Partitioning/merging algorithm references are adapted from CityGaussian.
@@ -37,12 +37,12 @@ DEVICE=cuda:0
 #   --out-normal-dir moge_normal
 
 # (1) Train coarse model.
-bash benchmarks/urban_scenes_visual_geo_quality/run_matrixcity_coarse.sh aerial \
+bash benchmarks/urban_scenes_visual_quality/run_matrixcity_coarse.sh aerial \
   --data-root "${DATA_ROOT}" \
   --device "${DEVICE}"
 
 # (2) Partition from coarse.
-python benchmarks/urban_scenes_visual_geo_quality/partition_from_coarse.py \
+python benchmarks/urban_scenes_visual_quality/partition_from_coarse.py \
   --data-dir "${DATA_ROOT}/MatrixCity/aerial_train" \
   --coarse-dir "${DATA_ROOT}/benchmark/urban_benchmark/matrix_benchmark/aerial/coarse" \
   --out-dir "${DATA_ROOT}/benchmark/urban_benchmark/matrix_benchmark/aerial/partition" \
@@ -50,17 +50,17 @@ python benchmarks/urban_scenes_visual_geo_quality/partition_from_coarse.py \
   --content-threshold 0.05
 
 # (3) Train all partitions (skips blocks that already have the final ckpt).
-bash benchmarks/urban_scenes_visual_geo_quality/run_matrixcity_partition_train.sh aerial \
+bash benchmarks/urban_scenes_visual_quality/run_matrixcity_partition_train.sh aerial \
   --data-root "${DATA_ROOT}" \
   --device "${DEVICE}"
 
 # (4) Merge blocks into a single model (ckpt + PLY).
-python benchmarks/urban_scenes_visual_geo_quality/merge_partitions_ckpt.py \
+python benchmarks/urban_scenes_visual_quality/merge_partitions_ckpt.py \
   --partition-dir "${DATA_ROOT}/benchmark/urban_benchmark/matrix_benchmark/aerial/partition" \
   --trained-blocks-dir "${DATA_ROOT}/benchmark/urban_benchmark/matrix_benchmark/aerial/partition/trained_blocks"
 
 # (5) Evaluate on aerial_test (uses all test images; writes metrics to result_dir/eval/).
-python benchmarks/urban_scenes_visual_geo_quality/eval_single_scene.py \
+python benchmarks/urban_scenes_visual_quality/eval_single_scene.py \
   --result-dir "${DATA_ROOT}/benchmark/urban_benchmark/matrix_benchmark/aerial/merged" \
   --eval-data-dir "${DATA_ROOT}/MatrixCity/aerial_test" \
   --use-ply \
@@ -68,7 +68,7 @@ python benchmarks/urban_scenes_visual_geo_quality/eval_single_scene.py \
   --lpips-net vgg
 
 # (6) Write a one-page summary.md under matrix_benchmark/.
-python benchmarks/urban_scenes_visual_geo_quality/summarize_matrixcity_benchmark.py \
+python benchmarks/urban_scenes_visual_quality/summarize_matrixcity_benchmark.py \
   --benchmark-root "${DATA_ROOT}/benchmark/urban_benchmark/matrix_benchmark"
 ```
 
@@ -87,24 +87,24 @@ DATA_ROOT=/media/joker/p3500/3DGS_Dataset
 DEVICE=cuda:0
 
 # (0) [Optional] Ensure GauU priors/downsampled images are ready.
-# python benchmarks/urban_scenes_visual_geo_quality/preprocess_gauu_batch.py \
+# python benchmarks/urban_scenes_visual_quality/preprocess_gauu_batch.py \
 #   --gauu-root "${DATA_ROOT}/GauU-Scene" \
 #   --factor 3.4175 \
 #   --save-normal \
 #   --skip-existing
 
 # (1) Train + evaluate all 3 GauU scenes (Modern_Building / Residence / Russian_Building).
-bash benchmarks/urban_scenes_visual_geo_quality/run_gauu_benchmark.sh all \
+bash benchmarks/urban_scenes_visual_quality/run_gauu_benchmark.sh all \
   --data-root "${DATA_ROOT}" \
   --device "${DEVICE}"
 
 # (2) [Optional] Run only one scene.
-# bash benchmarks/urban_scenes_visual_geo_quality/run_gauu_benchmark.sh Modern_Building \
+# bash benchmarks/urban_scenes_visual_quality/run_gauu_benchmark.sh Modern_Building \
 #   --data-root "${DATA_ROOT}" \
 #   --device "${DEVICE}"
 
 # (3) Summarize GauU results into a single table.
-python benchmarks/urban_scenes_visual_geo_quality/summarize_gauu_benchmark.py \
+python benchmarks/urban_scenes_visual_quality/summarize_gauu_benchmark.py \
   --benchmark-root "${DATA_ROOT}/benchmark/urban_benchmark/gauu_benchmark"
 ```
 
@@ -119,7 +119,7 @@ Function:
 
 Interface:
 ```bash
-bash benchmarks/urban_scenes_visual_geo_quality/run_matrixcity_coarse.sh [aerial] \
+bash benchmarks/urban_scenes_visual_quality/run_matrixcity_coarse.sh [aerial] \
   [--data-root PATH] \
   [--device cuda:0] \
   [--force]
@@ -135,7 +135,7 @@ Function:
 
 Interface:
 ```bash
-bash benchmarks/urban_scenes_visual_geo_quality/run_gauu_benchmark.sh \
+bash benchmarks/urban_scenes_visual_quality/run_gauu_benchmark.sh \
   [all|Modern_Building|Residence|Russian_Building] \
   [--data-root PATH] \
   [--result-root PATH] \
@@ -154,7 +154,7 @@ Function:
 
 Interface:
 ```bash
-python benchmarks/urban_scenes_visual_geo_quality/partition_from_coarse.py \
+python benchmarks/urban_scenes_visual_quality/partition_from_coarse.py \
   --data-dir /path/to/scene_train \
   --coarse-dir /path/to/coarse_result \
   [--out-dir /path/to/partition_result] \
@@ -176,7 +176,7 @@ Function:
 
 Interface:
 ```bash
-bash benchmarks/urban_scenes_visual_geo_quality/run_matrixcity_partition_train.sh [aerial] \
+bash benchmarks/urban_scenes_visual_quality/run_matrixcity_partition_train.sh [aerial] \
   [--data-root PATH] \
   [--device cuda:0] \
   [--coarse-ckpt /path/to/ckpt_stepXXXXXX.pt] \
@@ -204,7 +204,7 @@ Function:
 
 Interface:
 ```bash
-python benchmarks/urban_scenes_visual_geo_quality/merge_partitions_ckpt.py \
+python benchmarks/urban_scenes_visual_quality/merge_partitions_ckpt.py \
   --partition-dir /path/to/partition \
   --trained-blocks-dir /path/to/partition/trained_blocks \
   [--out-dir /path/to/merged] \
@@ -220,7 +220,7 @@ Function:
 
 Interface:
 ```bash
-python benchmarks/urban_scenes_visual_geo_quality/eval_single_scene.py \
+python benchmarks/urban_scenes_visual_quality/eval_single_scene.py \
   --result-dir /path/to/result_dir \
   [--eval-data-dir /path/to/eval_dataset] \
   [--use-ply] \
@@ -243,7 +243,7 @@ Function:
 
 Interface:
 ```bash
-python benchmarks/urban_scenes_visual_geo_quality/summarize_matrixcity_benchmark.py \
+python benchmarks/urban_scenes_visual_quality/summarize_matrixcity_benchmark.py \
   --benchmark-root /path/to/matrix_benchmark \
   [--out /path/to/summary.md] \
   [--scene aerial --scene another_scene]
@@ -259,7 +259,7 @@ Function:
 
 Interface:
 ```bash
-python benchmarks/urban_scenes_visual_geo_quality/summarize_gauu_benchmark.py \
+python benchmarks/urban_scenes_visual_quality/summarize_gauu_benchmark.py \
   [--benchmark-root /path/to/gauu_benchmark] \
   [--out /path/to/summary.md] \
   [--scene Modern_Building --scene Residence]

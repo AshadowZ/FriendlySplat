@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  bash benchmarks/urban_scenes_visual_geo_quality/run_matrixcity_partition_train.sh [aerial] [--data-root PATH] [--device cuda:0]
+  bash benchmarks/urban_scenes_visual_quality/run_matrixcity_partition_train.sh [aerial] [--data-root PATH] [--device cuda:0]
 
 Arguments:
   scene: aerial
