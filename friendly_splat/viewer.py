@@ -6,6 +6,7 @@ from typing import Any, Optional
 
 import torch
 import tyro
+import yaml
 
 from friendly_splat.data.colmap_dataparser import ColmapDataParser
 from friendly_splat.data.dataset import InputDataset
@@ -17,6 +18,9 @@ from friendly_splat.viewer.viewer_runtime import ViewerRuntime
 class ViewerScriptConfig:
     # Path to checkpoint file (.pt). If omitted, load from `result_dir/ckpts`.
     ckpt_path: Optional[str] = None
+    # Path to a gsplat/FriendlySplat splat PLY export (`splats_step*.ply`).
+    # If omitted, load from `result_dir/ply`.
+    ply_path: Optional[str] = None
     # Training result directory that contains `ckpts/`.
     result_dir: str = "results"
     # Optional 1-based checkpoint step to load, e.g. 30000 -> ckpt_step030000.pt.
@@ -92,6 +96,12 @@ def _infer_result_dir_from_ckpt(ckpt_path: Path) -> Path:
     return ckpt_path.parent
 
 
+def _infer_result_dir_from_ply(ply_path: Path) -> Path:
+    if ply_path.parent.name == "ply":
+        return ply_path.parent.parent
+    return ply_path.parent
+
+
 def _find_checkpoint_from_result_dir(result_dir: Path, step: Optional[int]) -> Path:
     ckpt_dir = result_dir / "ckpts"
     if not ckpt_dir.is_dir():
@@ -112,37 +122,49 @@ def _find_checkpoint_from_result_dir(result_dir: Path, step: Optional[int]) -> P
     return candidates[-1]
 
 
-def _resolve_checkpoint(cfg: ViewerScriptConfig) -> tuple[Path, Path]:
+def _find_ply_from_result_dir(result_dir: Path, step: Optional[int]) -> Path:
+    ply_dir = result_dir / "ply"
+    if not ply_dir.is_dir():
+        raise FileNotFoundError(f"PLY directory not found: {ply_dir}")
+
+    if step is not None:
+        step_i = int(step)
+        if step_i <= 0:
+            raise ValueError(f"`step` must be > 0, got {step_i}")
+        ply_path = ply_dir / f"splats_step{step_i:06d}.ply"
+        if not ply_path.is_file():
+            raise FileNotFoundError(f"PLY not found: {ply_path}")
+        return ply_path
+
+    candidates = sorted(ply_dir.glob("splats_step*.ply"))
+    if len(candidates) == 0:
+        raise FileNotFoundError(f"No splat PLYs found under: {ply_dir}")
+    return candidates[-1]
+
+
+def _resolve_source(cfg: ViewerScriptConfig) -> tuple[str, Path, Path]:
+    # Returns (kind, path, result_dir)
+    if cfg.ply_path is not None and str(cfg.ply_path).strip() != "":
+        ply_path = Path(cfg.ply_path).expanduser().resolve()
+        if not ply_path.is_file():
+            raise FileNotFoundError(f"PLY not found: {ply_path}")
+        result_dir = _infer_result_dir_from_ply(ply_path)
+        return "ply", ply_path, result_dir
+
     if cfg.ckpt_path is not None and str(cfg.ckpt_path).strip() != "":
         ckpt_path = Path(cfg.ckpt_path).expanduser().resolve()
         if not ckpt_path.is_file():
             raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
         result_dir = _infer_result_dir_from_ckpt(ckpt_path)
-        return ckpt_path, result_dir
+        return "ckpt", ckpt_path, result_dir
 
     result_dir = Path(cfg.result_dir).expanduser().resolve()
-    ckpt_path = _find_checkpoint_from_result_dir(result_dir, cfg.step)
-    return ckpt_path, result_dir
-
-
-def _build_gaussian_model_from_state_dict(
-    splat_state: dict[str, Any], device: torch.device
-) -> GaussianModel:
-    required = {"means", "scales", "quats", "opacities", "sh0", "shN"}
-    missing = required - set(splat_state.keys())
-    if len(missing) > 0:
-        missing_keys = ", ".join(sorted(missing))
-        raise KeyError(f"Checkpoint splats are missing keys: {missing_keys}")
-
-    params: dict[str, torch.nn.Parameter] = {}
-    for name, value in splat_state.items():
-        if not isinstance(value, torch.Tensor):
-            raise TypeError(f"splats[{name!r}] is not a tensor: {type(value)!r}")
-        params[name] = torch.nn.Parameter(
-            value.to(device=device),
-            requires_grad=False,
-        )
-    return GaussianModel(params=params).to(device)
+    try:
+        ckpt_path = _find_checkpoint_from_result_dir(result_dir, cfg.step)
+        return "ckpt", ckpt_path, result_dir
+    except FileNotFoundError:
+        ply_path = _find_ply_from_result_dir(result_dir, cfg.step)
+        return "ply", ply_path, result_dir
 
 
 def _parse_ckpt_settings(ckpt_obj: dict[str, Any]) -> ViewerCkptSettings:
@@ -224,6 +246,17 @@ def _parse_ckpt_settings(ckpt_obj: dict[str, Any]) -> ViewerCkptSettings:
     )
 
 
+def _load_cfg_yml(result_dir: Path) -> dict[str, Any]:
+    cfg_path = result_dir / "cfg.yml"
+    if not cfg_path.is_file():
+        raise FileNotFoundError(f"cfg.yml not found under result_dir: {cfg_path}")
+    with open(cfg_path, "r", encoding="utf-8") as f:
+        obj = yaml.safe_load(f)
+    if not isinstance(obj, dict):
+        raise TypeError(f"cfg.yml must be a dict, got {type(obj)!r}: {cfg_path}")
+    return obj
+
+
 def _load_checkpoint_safely(ckpt_path: Path) -> dict[str, Any]:
     # Prefer `weights_only=True` to avoid the FutureWarning and reduce pickle risk.
     try:
@@ -239,6 +272,8 @@ def _load_checkpoint_safely(ckpt_path: Path) -> dict[str, Any]:
 
 def _build_train_dataset_from_ckpt_settings(
     settings: ViewerCkptSettings,
+    *,
+    normalize_world_space_override: Optional[bool] = None,
 ) -> Optional[InputDataset]:
     dataset_cfg = settings.dataset_cfg
     if dataset_cfg is None:
@@ -248,7 +283,11 @@ def _build_train_dataset_from_ckpt_settings(
         dataparser = ColmapDataParser(
             data_dir=dataset_cfg.data_dir,
             factor=float(dataset_cfg.data_factor),
-            normalize_world_space=bool(dataset_cfg.normalize_world_space),
+            normalize_world_space=bool(
+                dataset_cfg.normalize_world_space
+                if normalize_world_space_override is None
+                else normalize_world_space_override
+            ),
             align_world_axes=bool(dataset_cfg.align_world_axes),
             test_every=int(dataset_cfg.test_every),
             benchmark_train_split=bool(dataset_cfg.benchmark_train_split),
@@ -272,17 +311,37 @@ def main(cfg: ViewerScriptConfig) -> None:
     if device.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA requested but torch.cuda.is_available() is False.")
 
-    ckpt_path, result_dir = _resolve_checkpoint(cfg)
-    ckpt_obj = _load_checkpoint_safely(ckpt_path)
-    splat_state = ckpt_obj.get("splats")
-    if not isinstance(splat_state, dict):
-        raise KeyError("Checkpoint does not contain `splats` state dict.")
+    kind, src_path, result_dir = _resolve_source(cfg)
+    if kind == "ckpt":
+        ckpt_obj = _load_checkpoint_safely(src_path)
+        splat_state = ckpt_obj.get("splats")
+        if not isinstance(splat_state, dict):
+            raise KeyError("Checkpoint does not contain `splats` state dict.")
+        gaussian_model = GaussianModel.from_ckpt(
+            ckpt_path=str(src_path),
+            device=device,
+            requires_grad=False,
+        )
+        settings = _parse_ckpt_settings(ckpt_obj)
+        train_dataset = _build_train_dataset_from_ckpt_settings(settings)
+        print(f"Loaded checkpoint: {src_path}", flush=True)
+    elif kind == "ply":
+        gaussian_model = GaussianModel.from_splat_ply(
+            ply_path=str(src_path),
+            device=device,
+            requires_grad=False,
+        )
+        cfg_dict = _load_cfg_yml(result_dir)
+        settings = _parse_ckpt_settings({"cfg": cfg_dict})
+        # PLY exports are written in the original (COLMAP) coordinate system.
+        train_dataset = _build_train_dataset_from_ckpt_settings(
+            settings,
+            normalize_world_space_override=False,
+        )
+        print(f"Loaded splat PLY: {src_path}", flush=True)
+    else:
+        raise ValueError(f"Unknown source kind: {kind!r}")
 
-    gaussian_model = _build_gaussian_model_from_state_dict(splat_state, device)
-    settings = _parse_ckpt_settings(ckpt_obj)
-    train_dataset = _build_train_dataset_from_ckpt_settings(settings)
-
-    print(f"Loaded checkpoint: {ckpt_path}", flush=True)
     print(f"Loaded gaussians: {int(gaussian_model.num_gaussians)}", flush=True)
     print(
         "Render flags: "
