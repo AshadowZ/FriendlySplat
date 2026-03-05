@@ -249,9 +249,7 @@ def run_evaluation(
     total_cc_ssim = torch.zeros((), device=device)
     total_cc_lpips = torch.zeros((), device=device)
     total_images = 0
-    compute_cc_metrics = bool(cfg.eval.compute_cc_metrics) and (
-        bilateral_grid is not None
-    )
+    compute_cc_metrics = bool(cfg.eval.compute_cc_metrics)
 
     # Synchronize around the timer for accurate seconds/image measurement.
     if device.type == "cuda":
