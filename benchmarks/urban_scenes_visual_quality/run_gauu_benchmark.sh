@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  bash benchmarks/urban_scenes_visual_geo_quality/run_gauu_benchmark.sh [all|Modern_Building|Residence|Russian_Building] [--data-root PATH] [--result-root PATH] [--device cuda:0]
+  bash benchmarks/urban_scenes_visual_quality/run_gauu_benchmark.sh [all|Modern_Building|Residence|Russian_Building] [--data-root PATH] [--result-root PATH] [--device cuda:0]
 
 Optional:
   --data-root PATH        Default: /media/joker/p3500/3DGS_Dataset
@@ -117,7 +117,7 @@ run_scene() {
       $([[ "${disable_viewer}" == "1" ]] && echo --viewer.disable-viewer)
   fi
 
-  python benchmarks/urban_scenes_visual_geo_quality/eval_single_scene.py \
+  python benchmarks/urban_scenes_visual_quality/eval_single_scene.py \
     --result-dir "${result_dir}" \
     --device "${device}" \
     --split test \
