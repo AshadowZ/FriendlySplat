@@ -174,8 +174,8 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--split", type=str, default="test")
     parser.add_argument("--device", type=str, default="cuda:0")
     parser.add_argument("--max-images", type=int, default=None)
-    parser.add_argument("--metrics-backend", type=str, default="inria", choices=("gsplat", "inria"))
-    parser.add_argument("--lpips-net", type=str, default="vgg", choices=("alex", "vgg"))
+    parser.add_argument("--metrics-backend", type=str, default="gsplat", choices=("gsplat", "inria"))
+    parser.add_argument("--lpips-net", type=str, default="alex", choices=("alex", "vgg"))
     parser.add_argument("--compute-cc-metrics", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument(
         "--progress-every",

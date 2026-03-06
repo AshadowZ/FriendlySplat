@@ -5,6 +5,23 @@ scenes (e.g. GauU-Scene / MatrixCity style datasets).
 
 Partitioning/merging algorithm references are adapted from CityGaussian.
 
+## Notes
+
+- Evaluation in this folder is aligned with the CityGaussian v2 visual-metric setting: `gsplat`
+  metric backend with LPIPS-`alex`.
+- On a single `RTX 4090`, the GauU-Scene pipeline reaches roughly paper-level visual quality in about
+  `1.5h` per full benchmark run.
+- On a single `RTX 4090`, the MatrixCity aerial pipeline with `2x2` partitioning reaches a level above
+  the original paper in about `6h`.
+- Typical GauU-Scene result from `gauu_benchmark/summary.md`: mean train time `3920.6s` (`1.089h`),
+  `6.0M` gaussians, `cc_psnr=24.382`, `cc_ssim=0.7943`, `cc_lpips=0.1843`.
+- Typical MatrixCity aerial result from `matrix_benchmark/summary.md`: merged step `90000`,
+  `13.59M` gaussians, `cc_psnr=28.761`, `cc_ssim=0.8642`, `cc_lpips=0.1570`.
+- GauU-Scene does not ship a usable `points3D.bin` model point cloud in the current local setup, and
+  COLMAP was not rerun here, so depth prior is not enabled for GauU training in this repo.
+- Because of that GauU results can still contain some floaters; if COLMAP is rerun and depth prior
+  is restored, the metrics should improve further.
+
 Planned stages (scripts will live here):
 - Preprocess: image downsample + prior generation (e.g. MoGe normal/depth).
 - Train: coarse/global model.
@@ -64,8 +81,8 @@ python benchmarks/urban_scenes_visual_quality/eval_single_scene.py \
   --result-dir "${DATA_ROOT}/benchmark/urban_benchmark/matrix_benchmark/aerial/merged" \
   --eval-data-dir "${DATA_ROOT}/MatrixCity/aerial_test" \
   --use-ply \
-  --metrics-backend inria \
-  --lpips-net vgg
+  --metrics-backend gsplat \
+  --lpips-net alex
 
 # (6) Write a one-page summary.md under matrix_benchmark/.
 python benchmarks/urban_scenes_visual_quality/summarize_matrixcity_benchmark.py \
@@ -217,6 +234,7 @@ python benchmarks/urban_scenes_visual_quality/merge_partitions_ckpt.py \
 Function:
 - Evaluate a trained/merged scene with checkpoint or exported PLY.
 - Save metrics JSON under `${result_dir}/eval/`.
+- Default metric backend is `gsplat`; default LPIPS net is `alex`.
 
 Interface:
 ```bash
