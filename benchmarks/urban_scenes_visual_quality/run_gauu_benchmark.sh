@@ -119,10 +119,11 @@ run_scene() {
 
   python benchmarks/urban_scenes_visual_quality/eval_single_scene.py \
     --result-dir "${result_dir}" \
+    --data-dir "${data_dir}" \
     --device "${device}" \
     --split test \
-    --metrics-backend inria \
-    --lpips-net vgg \
+    --metrics-backend gsplat \
+    --lpips-net alex \
     --compute-cc-metrics
 }
 
