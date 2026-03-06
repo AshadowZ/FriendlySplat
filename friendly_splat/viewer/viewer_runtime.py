@@ -11,6 +11,11 @@ from friendly_splat.viewer import viewer_panels
 from friendly_splat.viewer.viewer_renderer import ViewerRenderer
 
 try:
+    import imageio.v3 as iio  # type: ignore
+except ImportError:  # pragma: no cover
+    iio = None  # type: ignore[assignment]
+
+try:
     import numpy as np  # type: ignore
 except ImportError:  # pragma: no cover
     np = None  # type: ignore[assignment]
@@ -142,6 +147,7 @@ class ViewerRuntime:
 
         def _on_render_tab_populated(viewer: Any) -> None:
             self._install_frustum_visibility_toggle(viewer)
+            self._install_snapshot_panel(viewer)
             self._install_metrics_panel(viewer)
 
         self.viewer = GsplatViewer(
@@ -391,6 +397,79 @@ class ViewerRuntime:
             if self.show_camera_frustums:
                 self._frustums_hidden_for_sync = False
             self._apply_frustum_visibility_state()
+
+    def _install_snapshot_panel(self, viewer: Any) -> None:
+        if self.server is None:
+            return
+        handles = viewer_panels.add_snapshot_panel(
+            server=self.server,
+            viewer=viewer,
+        )
+
+        @handles.save_button.on_click
+        def _(event: Any) -> None:
+            self._save_current_render_png(event=event)
+
+    def _save_current_render_png(self, *, event: Any) -> None:
+        if (
+            self.viewer is None
+            or self.renderer is None
+            or np is None
+            or iio is None
+        ):
+            return
+
+        client = getattr(event, "client", None)
+        if client is None:
+            return
+
+        notification = None
+        if hasattr(client, "add_notification"):
+            notification = client.add_notification(
+                "Save PNG",
+                "Rendering current view...",
+                loading=True,
+                with_close_button=True,
+            )
+
+        try:
+            camera_state = self.viewer.get_camera_state(client)
+            with self.viewer.lock:
+                image = self.renderer.render(camera_state, self.viewer.render_tab_state)
+
+            if not isinstance(image, np.ndarray):
+                raise TypeError(
+                    f"Expected renderer to return a numpy array, got {type(image)!r}."
+                )
+
+            if image.dtype != np.uint8:
+                image = (np.clip(image, 0.0, 1.0) * 255.0).astype(np.uint8)
+
+            screenshots_dir = self.output_dir / "screenshots"
+            screenshots_dir.mkdir(parents=True, exist_ok=True)
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            render_mode = str(
+                getattr(self.viewer.render_tab_state, "render_mode", "render")
+            ).strip() or "render"
+            filename = f"{timestamp}_{render_mode}.png"
+            out_path = screenshots_dir / filename
+            iio.imwrite(out_path, image)
+            print(f"Saved viewer snapshot: {out_path}", flush=True)
+
+            if notification is not None:
+                notification.loading = False
+                notification.color = "green"
+                notification.body = f"Saved to {out_path.name}"
+                notification.auto_close_seconds = 3.0
+        except Exception as exc:
+            print(f"Failed to save viewer snapshot: {exc}", flush=True)
+            if notification is not None:
+                notification.loading = False
+                notification.color = "red"
+                notification.body = str(exc)
+        finally:
+            if notification is not None and notification.loading:
+                notification.loading = False
 
     def _install_metrics_panel(self, viewer: Any) -> None:
         if self.server is None or np is None or uplot is None:
