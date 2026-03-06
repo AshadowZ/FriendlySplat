@@ -64,6 +64,7 @@ def build_dataset_and_loader(
         align_world_axes=data_cfg.align_world_axes,
         test_every=data_cfg.test_every,
         benchmark_train_split=data_cfg.benchmark_train_split,
+        train_image_list_file=data_cfg.train_image_list_file,
         depth_dir_name=data_cfg.depth_dir_name,
         normal_dir_name=data_cfg.normal_dir_name,
         dynamic_mask_dir_name=data_cfg.dynamic_mask_dir_name,
@@ -96,9 +97,16 @@ def build_gaussian_model(
     sh_degree = int(optim_cfg.sh_degree)
     init_scale = float(init_cfg.init_scale)
     init_opacity = float(init_cfg.init_opacity)
+    init_type = str(init_cfg.init_type).strip().lower()
+
+    if init_type == "from_ckpt":
+        return GaussianModel.from_ckpt(
+            ckpt_path=str(init_cfg.init_ckpt_path),
+            device=device,
+        )
 
     # Prefer SFM (COLMAP points) init when available; otherwise fall back to random.
-    if init_cfg.init_type == "sfm" and int(parsed_scene.points.shape[0]) > 0:
+    if init_type == "sfm" and int(parsed_scene.points.shape[0]) > 0:
         return GaussianModel.from_sfm(
             points=torch.from_numpy(parsed_scene.points),
             points_rgb=torch.from_numpy(parsed_scene.points_rgb),
@@ -108,7 +116,7 @@ def build_gaussian_model(
             device=device,
         )
 
-    if init_cfg.init_type == "random":
+    if init_type == "random":
         return GaussianModel.from_random(
             num_points=int(init_cfg.init_num_pts),
             scene_scale=float(parsed_scene.scene_scale),
@@ -120,7 +128,9 @@ def build_gaussian_model(
         )
 
     raise ValueError(
-        f"Unsupported init_type={init_cfg.init_type!r} (sfm requires COLMAP points3D)."
+        f"Unsupported init_type={init_cfg.init_type!r} "
+        "(expected 'sfm', 'random', or 'from_ckpt'; "
+        "and 'sfm' requires COLMAP points3D)."
     )
 
 
@@ -186,7 +196,12 @@ def build_training_context(cfg: TrainConfig) -> TrainingContext:
     natural_selection_policy: Optional[NaturalSelectionPolicy] = None
     if cfg.gns.gns_enable:
         # GNS regularizes opacity and influences which Gaussians survive/densify.
-        gns_reg_interval = auto_gns_reg_interval(num_train_images=len(dataset))
+        base_gns_reg_interval = auto_gns_reg_interval(num_train_images=len(dataset))
+        gns_reg_interval = int(base_gns_reg_interval)
+        gns_reg_interval = max(
+            1,
+            int(round(float(gns_reg_interval) * float(cfg.optim.steps_scaler))),
+        )
         natural_selection_policy = NaturalSelectionPolicy(
             cfg=cfg.gns,
             densify_stop_step=int(cfg.strategy.refine_stop_iter),
