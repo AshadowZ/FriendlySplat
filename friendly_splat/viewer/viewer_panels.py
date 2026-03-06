@@ -5,6 +5,11 @@ from typing import Any, Sequence, Tuple
 
 
 @dataclass(frozen=True)
+class SnapshotPanelHandles:
+    save_button: Any
+
+
+@dataclass(frozen=True)
 class UniversalPlotHandles:
     dropdown: Any
     window_slider: Any
@@ -45,6 +50,32 @@ def add_frustum_visibility_toggle(
             hint="Show or hide all camera frustums.",
             order=toggle_order,
         )
+
+
+def add_snapshot_panel(
+    *,
+    server: Any,
+    viewer: Any,
+) -> SnapshotPanelHandles:
+    save_order = None
+    viewer_res_key = getattr(
+        viewer,
+        "HANDLE_VIEWER_RES_SLIDER",
+        "viewer_res_slider",
+    )
+    viewer_res_handle = viewer._rendering_tab_handles.get(viewer_res_key)
+    if viewer_res_handle is not None:
+        try:
+            save_order = float(viewer_res_handle.order) + 0.01
+        except Exception:
+            save_order = None
+    with viewer._rendering_folder:
+        save_button = server.gui.add_button(
+            "Save PNG",
+            hint="Render the current view once and save it as a PNG under screenshots/.",
+            order=save_order,
+        )
+    return SnapshotPanelHandles(save_button=save_button)
 
 
 def add_universal_plot_panel(
