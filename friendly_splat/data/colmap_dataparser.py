@@ -45,6 +45,7 @@ class ColmapDataParser(DataParser):
         normal_dir_name: Optional[str] = None,
         dynamic_mask_dir_name: Optional[str] = None,
         sky_mask_dir_name: Optional[str] = None,
+        train_image_list_file: Optional[str] = None,
     ):
         self.data_dir = str(data_dir)
         self.factor = float(factor)
@@ -58,6 +59,8 @@ class ColmapDataParser(DataParser):
         self.normal_dir_name = normal_dir_name
         self.dynamic_mask_dir_name = dynamic_mask_dir_name
         self.sky_mask_dir_name = sky_mask_dir_name
+        self.train_image_list_file = train_image_list_file
+        self._train_allow_mask: Optional[np.ndarray] = None
         self._parse()
 
     def _parse(self) -> None:
@@ -113,6 +116,7 @@ class ColmapDataParser(DataParser):
         self.image_paths = image_paths
         self.camtoworlds = camtoworlds.astype(np.float32)
         self.Ks = Ks_per_image
+        self._train_allow_mask = self._build_train_allow_mask(image_names=image_names)
         # Per-image (width, height) aligned with sorted `image_names`.
         # This avoids scoring-time image I/O when the trainer needs resolution info.
         self.image_sizes = image_sizes
@@ -141,6 +145,83 @@ class ColmapDataParser(DataParser):
         self.normal_paths = self._build_paths(self.normal_dir_name, ext=".png")
         self.dynamic_mask_paths = self._build_mask_paths(self.dynamic_mask_dir_name)
         self.sky_mask_paths = self._build_mask_paths(self.sky_mask_dir_name)
+
+    def _load_train_image_whitelist(self) -> Optional[List[str]]:
+        if self.train_image_list_file is None:
+            return None
+        list_path = Path(self.train_image_list_file)
+        if not list_path.is_absolute():
+            list_path = Path(self.data_dir) / list_path
+        if not list_path.exists():
+            raise FileNotFoundError(f"train image list file does not exist: {list_path}")
+
+        items: List[str] = []
+        seen = set()
+        with open(list_path, "r", encoding="utf-8") as f:
+            for line in f:
+                raw = line.strip()
+                if raw == "" or raw.startswith("#"):
+                    continue
+                normalized = raw.replace("\\", "/")
+                if normalized.startswith("./"):
+                    normalized = normalized[2:]
+                if normalized in seen:
+                    continue
+                seen.add(normalized)
+                items.append(normalized)
+
+        if len(items) == 0:
+            raise ValueError(f"train image list is empty: {list_path}")
+
+        return items
+
+    def _build_train_allow_mask(self, *, image_names: List[str]) -> Optional[np.ndarray]:
+        whitelist = self._load_train_image_whitelist()
+        if whitelist is None:
+            return None
+
+        name_to_idx: Dict[str, int] = {}
+        for i, name in enumerate(image_names):
+            normalized = str(name).replace("\\", "/")
+            name_to_idx[normalized] = int(i)
+
+        allow = np.zeros((len(image_names),), dtype=bool)
+        unmatched: List[str] = []
+
+        def _candidates(x: str) -> List[str]:
+            out = [x]
+            if x.startswith("images/"):
+                out.append(x[len("images/") :])
+            return out
+
+        for raw_item in whitelist:
+            matched = False
+            for c in _candidates(raw_item):
+                if c in name_to_idx:
+                    allow[name_to_idx[c]] = True
+                    matched = True
+                    break
+            if matched:
+                continue
+            unmatched.append(raw_item)
+
+        if unmatched:
+            list_path = self.train_image_list_file
+            raise ValueError(
+                "train image whitelist has unmatched entries: "
+                f"{len(unmatched)}/{len(whitelist)}. "
+                f"examples={unmatched[:5]}. "
+                f"list={list_path}"
+            )
+
+        num_allowed = int(np.count_nonzero(allow))
+        if num_allowed == 0:
+            raise ValueError(
+                f"Train whitelist matched zero images under data_dir={self.data_dir}. "
+                f"list={self.train_image_list_file}"
+            )
+
+        return allow
 
     def _resolve_colmap_dir(self, data_dir: str) -> Path:
         root = Path(data_dir)
@@ -509,6 +590,8 @@ class ColmapDataParser(DataParser):
         if split == "train":
             if bool(self.benchmark_train_split):
                 indices = indices[indices % test_every != 0]
+            if self._train_allow_mask is not None:
+                indices = indices[self._train_allow_mask[indices]]
         else:
             indices = indices[indices % test_every == 0]
 

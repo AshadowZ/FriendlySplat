@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Literal, Optional, Tuple
 
 
@@ -45,6 +46,9 @@ class DataConfig:
     # - False: `split="train"` uses all images.
     # - True: `split="train"` excludes every `test_every`-th image (train/test are disjoint).
     benchmark_train_split: bool = False
+    # Optional text file listing training images (one entry per line).
+    # When provided, this whitelist is applied only to `split="train"`.
+    train_image_list_file: Optional[str] = None
     # DataLoader preload mode: "none" or "cuda".
     # - "none": load samples on-demand on CPU; batches are moved to the training device each step.
     # - "cuda": preload the entire dataset to CUDA once inside DataLoader (uses GPU memory).
@@ -72,8 +76,13 @@ class DataConfig:
 
 @dataclass(frozen=True)
 class InitConfig:
-    # Initialization strategy: "sfm" (COLMAP points) or "random".
+    # Initialization strategy:
+    # - "sfm": initialize from COLMAP sparse points.
+    # - "random": initialize from random points in scene bounds.
+    # - "from_ckpt": initialize directly from checkpoint splats.
     init_type: str = "sfm"
+    # Checkpoint path used when init_type="from_ckpt".
+    init_ckpt_path: Optional[str] = None
     # Initial number of Gaussians (ignored when init_type="sfm").
     init_num_pts: int = 100_000
     # Initial extent for random init, as a multiple of scene scale (ignored for "sfm").
@@ -362,28 +371,28 @@ class GNSConfig:
 
 @dataclass(frozen=True)
 class HardPruneConfig:
-    """Speedy-Splat-style hard pruning (post-densification only).
+    """Hard pruning (score-based).
 
-    This performs periodic, score-based *budget pruning* after densification finishes.
-    When the current Gaussian count exceeds `final_budget`, the lowest-score Gaussians
-    are removed until the budget is met.
-
-    Notes:
-      - Cadences use **1-based** train step numbers (like eval/tensorboard).
-      - This is independent from (and can be combined with) strategy pruning (e.g. prune_opa)
-        and GNS pruning.
+    At configured events, compute per-Gaussian scores and remove the lowest ones.
+    Cadence uses 1-based training steps.
     """
 
-    # Enable post-densification hard pruning.
+    # Enable hard pruning.
     enable: bool = False
+
+    # How to choose the per-event prune count.
+    policy: Literal["uniform_to_budget", "fixed_percent"] = "uniform_to_budget"
+    # For `policy="fixed_percent"` only.
+    percent_per_event: float = 0.1
+
     # First (1-based) training step at which hard pruning is allowed.
-    # This must be strictly greater than `strategy.refine_stop_iter` (which is expressed
-    # in 0-based trainer `step` units) to guarantee pruning starts after densification.
+    # For policy="uniform_to_budget", must satisfy start_step > strategy.refine_stop_iter.
     start_step: int = 15_001
-    # Target Gaussian budget. When current count exceeds this value, hard pruning
-    # removes the lowest-score Gaussians until the budget is met.
+    # Final target count for policy="uniform_to_budget" only.
+    # Ignored when policy="fixed_percent".
     final_budget: int = 1_000_000
-    # Run hard pruning every N (1-based) training steps.
+    # Run hard pruning every N (1-based) training steps, anchored at `start_step`.
+    # Example: start_step=1000, every_n=2500 -> 1000, 3500, 6000, ...
     every_n: int = 2500
     # Last (1-based) training step to allow pruning (inclusive).
     stop_step: int = 25000
@@ -485,7 +494,7 @@ class TrainConfig:
     strategy: StrategyConfig = field(default_factory=StrategyConfig)
     # Natural Selection (GNS) configuration.
     gns: GNSConfig = field(default_factory=GNSConfig)
-    # Speedy-Splat-style hard pruning (post-densification only).
+    # Speedy-Splat-style hard pruning (score-based budget pruning).
     hard_prune: HardPruneConfig = field(default_factory=HardPruneConfig)
     # Pose optimization / noise configuration.
     pose: PoseConfig = field(default_factory=PoseConfig)
@@ -702,6 +711,25 @@ def validate_train_config(cfg: TrainConfig) -> None:
                 f"preload='cuda' requires io.device to be CUDA (e.g. 'cuda' or 'cuda:0'), got {cfg.io.device!r}"
             )
 
+    init_type = str(cfg.init.init_type).strip().lower()
+    if init_type not in ("sfm", "random", "from_ckpt"):
+        raise ValueError(
+            f"init.init_type must be 'sfm', 'random', or 'from_ckpt', got {cfg.init.init_type!r}"
+        )
+    if init_type == "from_ckpt":
+        if cfg.init.init_ckpt_path is None or str(cfg.init.init_ckpt_path).strip() == "":
+            raise ValueError(
+                "init.init_type='from_ckpt' requires init.init_ckpt_path to be set."
+            )
+        ckpt_path = Path(str(cfg.init.init_ckpt_path))
+        if not ckpt_path.exists():
+            raise FileNotFoundError(f"init checkpoint not found: {ckpt_path}")
+    elif cfg.init.init_ckpt_path is not None:
+        raise ValueError(
+            "init.init_ckpt_path is set but init.init_type is not 'from_ckpt'. "
+            f"Got init.init_type={cfg.init.init_type!r}."
+        )
+
     if cfg.optim.sparse_grad and cfg.optim.visible_adam:
         raise ValueError(
             "optim.sparse_grad and optim.visible_adam are mutually exclusive."
@@ -744,24 +772,34 @@ def validate_train_config(cfg: TrainConfig) -> None:
                 f"strategy.refine_stop_iter={int(cfg.strategy.refine_stop_iter)} (0-based)."
             )
 
-    # Hard prune config (post-densification Speedy-Splat-style pruning).
+    # Hard prune config.
     hp = cfg.hard_prune
     if bool(hp.enable):
+        policy = str(hp.policy)
         if int(hp.start_step) <= 0:
             raise ValueError(f"hard_prune.start_step must be > 0, got {hp.start_step}")
-        # `strategy.refine_stop_iter` uses 0-based `step` units. Hard prune uses 1-based
-        # training steps, so the strict "after densification" condition is:
-        #   start_step >= refine_stop_iter + 1  <=>  start_step > refine_stop_iter
-        if int(hp.start_step) <= int(cfg.strategy.refine_stop_iter):
+        # `strategy.refine_stop_iter` uses 0-based `step` units, while hard-prune
+        # config uses 1-based train-step numbers.
+        if policy == "uniform_to_budget" and int(hp.start_step) <= int(
+            cfg.strategy.refine_stop_iter
+        ):
             raise ValueError(
-                "hard_prune.start_step must be strictly after densification. "
+                "hard_prune.start_step must be strictly after densification when "
+                "hard_prune.policy='uniform_to_budget'. "
                 f"Got hard_prune.start_step={int(hp.start_step)} (1-based) and "
                 f"strategy.refine_stop_iter={int(cfg.strategy.refine_stop_iter)} (0-based)."
             )
-        if int(hp.final_budget) <= 0:
+        if policy == "uniform_to_budget" and int(hp.final_budget) <= 0:
             raise ValueError(
-                f"hard_prune.final_budget must be > 0, got {hp.final_budget}"
+                f"hard_prune.final_budget must be > 0 when policy='uniform_to_budget', got {hp.final_budget}"
             )
+        if policy == "fixed_percent":
+            if not (0.0 < float(hp.percent_per_event) < 1.0):
+                raise ValueError(
+                    "hard_prune.percent_per_event must be in (0, 1) when "
+                    "hard_prune.policy='fixed_percent', "
+                    f"got {hp.percent_per_event}"
+                )
         if int(hp.every_n) <= 0:
             raise ValueError(f"hard_prune.every_n must be > 0, got {hp.every_n}")
         if int(hp.stop_step) <= 0:
