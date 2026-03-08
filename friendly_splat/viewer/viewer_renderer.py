@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 import torch
@@ -43,6 +44,8 @@ class ViewerRenderer:
         packed: bool = False,
         sparse_grad: bool = False,
         absgrad: bool = False,
+        instance_labels_path: Optional[Path | str] = None,
+        instance_color_seed: int = 0,
         update_counts_fn: Optional[
             Callable[[Optional[dict[str, torch.Tensor]]], None]
         ] = None,
@@ -52,7 +55,14 @@ class ViewerRenderer:
         self.packed = bool(packed)
         self.sparse_grad = bool(sparse_grad)
         self.absgrad = bool(absgrad)
+        self.instance_labels_path = (
+            Path(instance_labels_path).expanduser().resolve()
+            if instance_labels_path is not None
+            else None
+        )
+        self.instance_color_seed = int(instance_color_seed)
         self._update_counts_fn = update_counts_fn
+        self._instance_colors_tensor = self._load_instance_colors()
 
         self._validate_dependencies()
 
@@ -84,6 +94,52 @@ class ViewerRenderer:
             return 0
         degree = int((total_k**0.5) - 1)
         return max(0, degree)
+
+    def _load_instance_colors(self) -> Optional[torch.Tensor]:
+        if self.instance_labels_path is None:
+            return None
+        if np is None:
+            raise ImportError("numpy is required to load instance labels.")
+
+        labels_np = np.load(str(self.instance_labels_path)).astype(np.int64)
+        if labels_np.ndim != 1:
+            raise ValueError(
+                f"instance_labels must be a 1D array, got shape {labels_np.shape}."
+            )
+        if labels_np.shape[0] != int(self.gaussian_model.num_gaussians):
+            raise ValueError(
+                f"instance_labels length {labels_np.shape[0]} != number of Gaussians "
+                f"{int(self.gaussian_model.num_gaussians)}"
+            )
+
+        valid_mask = labels_np >= 0
+        max_label = int(labels_np[valid_mask].max()) if bool(valid_mask.any()) else -1
+        num_instances = max_label + 1
+        rng = np.random.default_rng(self.instance_color_seed)
+        palette = (
+            rng.random((num_instances, 3)).astype(np.float32)
+            if num_instances > 0
+            else np.zeros((0, 3), dtype=np.float32)
+        )
+        default_color = np.array([[0.2, 0.2, 0.2]], dtype=np.float32)
+        palette_full = np.concatenate([palette, default_color], axis=0)
+        default_idx = int(palette_full.shape[0] - 1)
+        labels_clamped = labels_np.copy()
+        labels_clamped[labels_clamped < 0] = default_idx
+        palette_tensor = torch.from_numpy(palette_full).float().to(self.device)
+        labels_tensor = torch.from_numpy(labels_clamped).long().to(self.device)
+        c0 = 0.28209479177387814
+        sh0_colors = ((palette_tensor[labels_tensor] - 0.5) / c0).unsqueeze(1)
+        print(
+            f"[Instance] Loaded labels from {self.instance_labels_path} with "
+            f"{num_instances} instances.",
+            flush=True,
+        )
+        return sh0_colors.contiguous()
+
+    @property
+    def has_instance_colors(self) -> bool:
+        return isinstance(self._instance_colors_tensor, torch.Tensor)
 
     def _handle_mode_depth(
         self,
@@ -222,6 +278,20 @@ class ViewerRenderer:
 
         if mode == "rgb":
             out = render_splats(render_mode="RGB", **render_kwargs)
+            if self._update_counts_fn is not None:
+                self._update_counts_fn(out.meta)
+            return out.pred_rgb[0].clamp(0.0, 1.0).detach().cpu().numpy()
+        if mode == "instance":
+            colors_override = self._instance_colors_tensor
+            if colors_override is None:
+                out = render_splats(render_mode="RGB", **render_kwargs)
+            else:
+                out = render_splats(
+                    render_mode="RGB",
+                    colors_override=colors_override,
+                    sh_degree_override=0,
+                    **render_kwargs,
+                )
             if self._update_counts_fn is not None:
                 self._update_counts_fn(out.meta)
             return out.pred_rgb[0].clamp(0.0, 1.0).detach().cpu().numpy()

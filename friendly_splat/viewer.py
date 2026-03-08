@@ -29,6 +29,11 @@ class ViewerScriptConfig:
     device: str = "cuda"
     # Viewer server port.
     port: int = 8080
+    # Optional path to per-Gaussian instance labels (.npy). If omitted, the viewer
+    # auto-loads `result_dir/cluster_result/instance_labels.npy` when available.
+    instance_labels: Optional[str] = None
+    # Random seed used to generate consistent instance colors.
+    instance_color_seed: int = 0
 
 
 @dataclass(frozen=True)
@@ -368,6 +373,8 @@ def main(cfg: ViewerScriptConfig) -> None:
         sparse_grad=settings.sparse_grad,
         absgrad=settings.absgrad,
         train_dataset=train_dataset,
+        instance_labels_path=cfg.instance_labels,
+        instance_color_seed=cfg.instance_color_seed,
     )
     viewer_runtime.keep_alive()
 

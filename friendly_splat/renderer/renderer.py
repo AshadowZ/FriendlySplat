@@ -37,17 +37,25 @@ def render_splats(
     backgrounds: Optional[torch.Tensor] = None,
     rasterize_mode: Literal["classic", "antialiased"] = "classic",
     camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
+    colors_override: Optional[torch.Tensor] = None,
+    sh_degree_override: Optional[int] = None,
 ) -> RenderOutput:
     from gsplat.rendering import rasterization
 
-    sh_degree = int(sh_degree)
+    sh_degree = int(
+        int(sh_degree_override) if sh_degree_override is not None else int(sh_degree)
+    )
 
     render_tensors = gaussian_model.to_render_tensors(sh_degree=sh_degree)
     means = render_tensors["means"]
     quats = render_tensors["quats"]
     scales = render_tensors["scales"]
     opacities = render_tensors["opacities"]
-    sh_coeffs = render_tensors["colors"]
+    sh_coeffs = (
+        colors_override.contiguous()
+        if isinstance(colors_override, torch.Tensor)
+        else render_tensors["colors"]
+    )
 
     renders, alphas, meta = rasterization(
         means=means,
