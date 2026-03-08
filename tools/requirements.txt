@@ -1,2 +1,5 @@
 open3d
 tqdm
+imageio
+networkx
+scipy

@@ -5,6 +5,7 @@
 
 #include <ATen/Functions.h>
 #include <ATen/NativeFunctions.h>
+#include <algorithm>
 
 #include "Common.h"
 #include "Ops.h"
@@ -17,7 +18,8 @@ namespace gsplat {
 // 3DGS
 ////////////////////////////////////////////////////
 
-std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_3dgs_fwd(
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+rasterize_to_pixels_3dgs_fwd(
     // Gaussian parameters
     const at::Tensor means2d,   // [..., N, 2] or [nnz, 2]
     const at::Tensor conics,    // [..., N, 3] or [nnz, 3]
@@ -31,7 +33,10 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_3dgs_fwd(
     const uint32_t tile_size,
     // intersections
     const at::Tensor tile_offsets, // [..., tile_height, tile_width]
-    const at::Tensor flatten_ids   // [n_isects]
+    const at::Tensor flatten_ids,  // [n_isects]
+    const bool track_pixel_gaussians,
+    const int64_t max_gaussians_per_pixel,
+    const double pixel_gaussian_threshold
 ) {
     DEVICE_GUARD(means2d);
     CHECK_INPUT(means2d);
@@ -63,6 +68,31 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_3dgs_fwd(
     last_ids_dims.append({image_height, image_width});
     at::Tensor last_ids = at::empty(last_ids_dims, opt.dtype(at::kInt));
 
+    at::Tensor pixel_gaussians;
+    at::Tensor pixel_gaussian_counter;
+    int64_t max_pixel_gaussians = 0;
+    if (track_pixel_gaussians) {
+        int64_t num_images = 1;
+        for (const auto dim : image_dims) {
+            num_images *= dim;
+        }
+        const int64_t num_pixels =
+            num_images * static_cast<int64_t>(image_height) * static_cast<int64_t>(image_width);
+        const int64_t clamped_max_per_pixel =
+            std::max<int64_t>(max_gaussians_per_pixel, 0);
+        max_pixel_gaussians = num_pixels * clamped_max_per_pixel;
+        if (max_pixel_gaussians > 0) {
+            pixel_gaussians =
+                at::empty({max_pixel_gaussians, 2}, opt.dtype(at::kInt));
+        } else {
+            pixel_gaussians = at::empty({0, 2}, opt.dtype(at::kInt));
+        }
+        pixel_gaussian_counter = at::zeros({1}, opt.dtype(at::kInt));
+    } else {
+        pixel_gaussians = at::empty({0, 2}, opt.dtype(at::kInt));
+        pixel_gaussian_counter = at::zeros({1}, opt.dtype(at::kInt));
+    }
+
 #define __LAUNCH_KERNEL__(N)                                                   \
     case N:                                                                    \
         launch_rasterize_to_pixels_3dgs_fwd_kernel<N>(                         \
@@ -81,7 +111,15 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_3dgs_fwd(
             alphas,                                                            \
             last_ids,                                                          \
             c10::nullopt,                                                      \
-            c10::nullopt                                                       \
+            c10::nullopt,                                                      \
+            track_pixel_gaussians,                                             \
+            static_cast<float>(pixel_gaussian_threshold),                      \
+            max_pixel_gaussians,                                               \
+            track_pixel_gaussians ? c10::optional<at::Tensor>(pixel_gaussians) \
+                                   : c10::nullopt,                             \
+            track_pixel_gaussians                                              \
+                ? c10::optional<at::Tensor>(pixel_gaussian_counter)            \
+                : c10::nullopt                                                 \
         );                                                                     \
         break;
 
@@ -113,7 +151,16 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_3dgs_fwd(
     }
 #undef __LAUNCH_KERNEL__
 
-    return std::make_tuple(renders, alphas, last_ids);
+    at::Tensor tracked_pixel_gaussians;
+    if (track_pixel_gaussians && max_pixel_gaussians > 0) {
+        const int64_t total = pixel_gaussian_counter.item<int32_t>();
+        const int64_t used = std::min<int64_t>(total, max_pixel_gaussians);
+        tracked_pixel_gaussians = pixel_gaussians.narrow(0, 0, used);
+    } else {
+        tracked_pixel_gaussians = pixel_gaussians;
+    }
+
+    return std::make_tuple(renders, alphas, last_ids, tracked_pixel_gaussians);
 }
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
@@ -189,7 +236,12 @@ rasterize_to_pixels_3dgs_fwd_median(
             alphas,                                                            \
             last_ids,                                                          \
             render_median,                                                     \
-            median_ids                                                         \
+            median_ids,                                                        \
+            false,                                                             \
+            0.0f,                                                              \
+            0,                                                                 \
+            c10::nullopt,                                                      \
+            c10::nullopt                                                       \
         );                                                                     \
         break;
 
