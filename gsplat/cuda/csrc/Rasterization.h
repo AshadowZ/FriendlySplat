@@ -36,7 +36,12 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
     at::Tensor alphas,  // [..., image_height, image_width]
     at::Tensor last_ids, // [..., image_height, image_width]
     at::optional<at::Tensor> render_median, // [..., image_height, image_width, 1]
-    at::optional<at::Tensor> median_ids     // [..., image_height, image_width]
+    at::optional<at::Tensor> median_ids,    // [..., image_height, image_width]
+    const bool track_pixel_gaussians,
+    const float pixel_gaussian_threshold,
+    const int64_t max_pixel_gaussians,
+    at::optional<at::Tensor> pixel_gaussians,
+    at::optional<at::Tensor> pixel_gaussian_counter
 );
 
 template <uint32_t CDIM>
