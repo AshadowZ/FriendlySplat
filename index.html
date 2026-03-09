@@ -1,486 +1,350 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="description"
-        content="Deformable Neural Radiance Fields creates free-viewpoint portraits (nerfies) from casually captured videos.">
-  <meta name="keywords" content="Nerfies, D-NeRF, NeRF">
+  <meta name="description" content="FriendlySplat is a modular 3D Gaussian Splatting framework for fast scene training, geometry-aware regularization, live visualization, and pruning research.">
+  <meta name="keywords" content="FriendlySplat, 3DGS, Gaussian Splatting, pruning, mesh extraction, viewer">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Nerfies: Deformable Neural Radiance Fields</title>
+  <title>FriendlySplat</title>
 
-  <!-- Global site tag (gtag.js) - Google Analytics -->
-  <script async src="https://www.googletagmanager.com/gtag/js?id=G-PYVRSFMDRL"></script>
-  <script>
-    window.dataLayer = window.dataLayer || [];
-
-    function gtag() {
-      dataLayer.push(arguments);
-    }
-
-    gtag('js', new Date());
-
-    gtag('config', 'G-PYVRSFMDRL');
-  </script>
-
-  <link href="https://fonts.googleapis.com/css?family=Google+Sans|Noto+Sans|Castoro"
-        rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css?family=Google+Sans:400,500,700|Noto+Sans:400,500,700|Castoro:400,400i" rel="stylesheet">
 
   <link rel="stylesheet" href="./static/css/bulma.min.css">
-  <link rel="stylesheet" href="./static/css/bulma-carousel.min.css">
-  <link rel="stylesheet" href="./static/css/bulma-slider.min.css">
   <link rel="stylesheet" href="./static/css/fontawesome.all.min.css">
-  <link rel="stylesheet"
-        href="https://cdn.jsdelivr.net/gh/jpswalsh/academicons@1/css/academicons.min.css">
   <link rel="stylesheet" href="./static/css/index.css">
   <link rel="icon" href="./static/images/logo.svg">
 
   <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
   <script defer src="./static/js/fontawesome.all.min.js"></script>
-  <script src="./static/js/bulma-carousel.min.js"></script>
-  <script src="./static/js/bulma-slider.min.js"></script>
   <script src="./static/js/index.js"></script>
 </head>
 <body>
 
-<nav class="navbar" role="navigation" aria-label="main navigation">
-  <div class="navbar-brand">
-    <a role="button" class="navbar-burger" aria-label="menu" aria-expanded="false">
-      <span aria-hidden="true"></span>
-      <span aria-hidden="true"></span>
-      <span aria-hidden="true"></span>
-    </a>
-  </div>
-  <div class="navbar-menu">
-    <div class="navbar-start" style="flex-grow: 1; justify-content: center;">
-      <a class="navbar-item" href="https://keunhong.com">
-      <span class="icon">
-          <i class="fas fa-home"></i>
-      </span>
+<nav class="navbar topbar" role="navigation" aria-label="main navigation">
+  <div class="container">
+    <div class="navbar-brand">
+      <a class="navbar-item brandmark" href="#top">
+        <img src="./static/images/logo.svg" alt="FriendlySplat logo">
+        <span>FriendlySplat</span>
       </a>
-
-      <div class="navbar-item has-dropdown is-hoverable">
-        <a class="navbar-link">
-          More Research
-        </a>
-        <div class="navbar-dropdown">
-          <a class="navbar-item" href="https://hypernerf.github.io">
-            HyperNeRF
-          </a>
-          <a class="navbar-item" href="https://nerfies.github.io">
-            Nerfies
-          </a>
-          <a class="navbar-item" href="https://latentfusion.github.io">
-            LatentFusion
-          </a>
-          <a class="navbar-item" href="https://photoshape.github.io">
-            PhotoShape
-          </a>
-        </div>
-      </div>
+      <a role="button" class="navbar-burger" aria-label="menu" aria-expanded="false" data-target="mainNav">
+        <span aria-hidden="true"></span>
+        <span aria-hidden="true"></span>
+        <span aria-hidden="true"></span>
+      </a>
     </div>
 
+    <div id="mainNav" class="navbar-menu">
+      <div class="navbar-end">
+        <a class="navbar-item" href="#why">Why</a>
+        <a class="navbar-item" href="#framework">Framework</a>
+        <a class="navbar-item" href="#features">Features</a>
+        <a class="navbar-item" href="#gallery">Results</a>
+        <a class="navbar-item" href="#acknowledgements">Credits</a>
+      </div>
+    </div>
   </div>
 </nav>
 
-
-<section class="hero">
-  <div class="hero-body">
-    <div class="container is-max-desktop">
-      <div class="columns is-centered">
-        <div class="column has-text-centered">
-          <h1 class="title is-1 publication-title">Nerfies: Deformable Neural Radiance Fields</h1>
-          <div class="is-size-5 publication-authors">
-            <span class="author-block">
-              <a href="https://keunhong.com">Keunhong Park</a><sup>1</sup>,</span>
-            <span class="author-block">
-              <a href="https://utkarshsinha.com">Utkarsh Sinha</a><sup>2</sup>,</span>
-            <span class="author-block">
-              <a href="https://jonbarron.info">Jonathan T. Barron</a><sup>2</sup>,
-            </span>
-            <span class="author-block">
-              <a href="http://sofienbouaziz.com">Sofien Bouaziz</a><sup>2</sup>,
-            </span>
-            <span class="author-block">
-              <a href="https://www.danbgoldman.com">Dan B Goldman</a><sup>2</sup>,
-            </span>
-            <span class="author-block">
-              <a href="https://homes.cs.washington.edu/~seitz/">Steven M. Seitz</a><sup>1,2</sup>,
-            </span>
-            <span class="author-block">
-              <a href="http://www.ricardomartinbrualla.com">Ricardo Martin-Brualla</a><sup>2</sup>
-            </span>
-          </div>
-
-          <div class="is-size-5 publication-authors">
-            <span class="author-block"><sup>1</sup>University of Washington,</span>
-            <span class="author-block"><sup>2</sup>Google Research</span>
-          </div>
-
-          <div class="column has-text-centered">
-            <div class="publication-links">
-              <!-- PDF Link. -->
-              <span class="link-block">
-                <a href="https://arxiv.org/pdf/2011.12948"
-                   class="external-link button is-normal is-rounded is-dark">
-                  <span class="icon">
-                      <i class="fas fa-file-pdf"></i>
-                  </span>
-                  <span>Paper</span>
-                </a>
-              </span>
-              <span class="link-block">
-                <a href="https://arxiv.org/abs/2011.12948"
-                   class="external-link button is-normal is-rounded is-dark">
-                  <span class="icon">
-                      <i class="ai ai-arxiv"></i>
-                  </span>
-                  <span>arXiv</span>
-                </a>
-              </span>
-              <!-- Video Link. -->
-              <span class="link-block">
-                <a href="https://www.youtube.com/watch?v=MrKrnHhk8IA"
-                   class="external-link button is-normal is-rounded is-dark">
-                  <span class="icon">
-                      <i class="fab fa-youtube"></i>
-                  </span>
-                  <span>Video</span>
-                </a>
-              </span>
-              <!-- Code Link. -->
-              <span class="link-block">
-                <a href="https://github.com/google/nerfies"
-                   class="external-link button is-normal is-rounded is-dark">
-                  <span class="icon">
-                      <i class="fab fa-github"></i>
-                  </span>
-                  <span>Code</span>
-                  </a>
-              </span>
-              <!-- Dataset Link. -->
-              <span class="link-block">
-                <a href="https://github.com/google/nerfies/releases/tag/0.1"
-                   class="external-link button is-normal is-rounded is-dark">
-                  <span class="icon">
-                      <i class="far fa-images"></i>
-                  </span>
-                  <span>Data</span>
-                  </a>
-            </div>
-
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
-
-<section class="hero teaser">
-  <div class="container is-max-desktop">
-    <div class="hero-body">
-      <video id="teaser" autoplay muted loop playsinline height="100%">
-        <source src="./static/videos/teaser.mp4"
-                type="video/mp4">
-      </video>
-      <h2 class="subtitle has-text-centered">
-        <span class="dnerf">Nerfies</span> turns selfie videos from your phone into
-        free-viewpoint
-        portraits.
-      </h2>
-    </div>
-  </div>
-</section>
-
-
-<section class="hero is-light is-small">
+<section class="hero landing-hero" id="top">
   <div class="hero-body">
     <div class="container">
-      <div id="results-carousel" class="carousel results-carousel">
-        <div class="item item-steve">
-          <video poster="" id="steve" autoplay controls muted loop playsinline height="100%">
-            <source src="./static/videos/steve.mp4"
-                    type="video/mp4">
-          </video>
-        </div>
-        <div class="item item-chair-tp">
-          <video poster="" id="chair-tp" autoplay controls muted loop playsinline height="100%">
-            <source src="./static/videos/chair-tp.mp4"
-                    type="video/mp4">
-          </video>
-        </div>
-        <div class="item item-shiba">
-          <video poster="" id="shiba" autoplay controls muted loop playsinline height="100%">
-            <source src="./static/videos/shiba.mp4"
-                    type="video/mp4">
-          </video>
-        </div>
-        <div class="item item-fullbody">
-          <video poster="" id="fullbody" autoplay controls muted loop playsinline height="100%">
-            <source src="./static/videos/fullbody.mp4"
-                    type="video/mp4">
-          </video>
-        </div>
-        <div class="item item-blueshirt">
-          <video poster="" id="blueshirt" autoplay controls muted loop playsinline height="100%">
-            <source src="./static/videos/blueshirt.mp4"
-                    type="video/mp4">
-          </video>
-        </div>
-        <div class="item item-mask">
-          <video poster="" id="mask" autoplay controls muted loop playsinline height="100%">
-            <source src="./static/videos/mask.mp4"
-                    type="video/mp4">
-          </video>
-        </div>
-        <div class="item item-coffee">
-          <video poster="" id="coffee" autoplay controls muted loop playsinline height="100%">
-            <source src="./static/videos/coffee.mp4"
-                    type="video/mp4">
-          </video>
-        </div>
-        <div class="item item-toby">
-          <video poster="" id="toby" autoplay controls muted loop playsinline height="100%">
-            <source src="./static/videos/toby2.mp4"
-                    type="video/mp4">
-          </video>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
-
-
-<section class="section">
-  <div class="container is-max-desktop">
-    <!-- Abstract. -->
-    <div class="columns is-centered has-text-centered">
-      <div class="column is-four-fifths">
-        <h2 class="title is-3">Abstract</h2>
-        <div class="content has-text-justified">
-          <p>
-            We present the first method capable of photorealistically reconstructing a non-rigidly
-            deforming scene using photos/videos captured casually from mobile phones.
+      <div class="columns is-vcentered hero-grid">
+        <div class="column is-5-desktop is-12-tablet">
+          <p class="eyebrow">Modular 3D Gaussian Splatting Framework</p>
+          <h1 class="title hero-title">FriendlySplat</h1>
+          <p class="hero-copy">
+            A research-friendly 3DGS pipeline for rapid scene training, geometry-aware regularization,
+            interactive monitoring, and pluggable pruning experiments.
           </p>
-          <p>
-            Our approach augments neural radiance fields
-            (NeRF) by optimizing an
-            additional continuous volumetric deformation field that warps each observed point into a
-            canonical 5D NeRF.
-            We observe that these NeRF-like deformation fields are prone to local minima, and
-            propose a coarse-to-fine optimization method for coordinate-based models that allows for
-            more robust optimization.
-            By adapting principles from geometry processing and physical simulation to NeRF-like
-            models, we propose an elastic regularization of the deformation field that further
-            improves robustness.
-          </p>
-          <p>
-            We show that <span class="dnerf">Nerfies</span> can turn casually captured selfie
-            photos/videos into deformable NeRF
-            models that allow for photorealistic renderings of the subject from arbitrary
-            viewpoints, which we dub <i>"nerfies"</i>. We evaluate our method by collecting data
-            using a
-            rig with two mobile phones that take time-synchronized photos, yielding train/validation
-            images of the same pose at different viewpoints. We show that our method faithfully
-            reconstructs non-rigidly deforming scenes and reproduces unseen views with high
-            fidelity.
-          </p>
+          <div class="hero-pills">
+            <span>Fast iteration loops</span>
+            <span>Geometry-aware training</span>
+            <span>Viewer-first workflow</span>
+          </div>
+          <div class="hero-actions">
+            <a class="button is-dark is-rounded action-primary" href="https://github.com/AshadowZ/FriendlySplat">
+              <span class="icon"><i class="fab fa-github"></i></span>
+              <span>Code</span>
+            </a>
+            <a class="button is-light is-rounded action-secondary" href="#gallery">Results</a>
+            <a class="button is-light is-rounded action-secondary" href="#framework">Framework</a>
+          </div>
+          <div class="hero-meta">
+            <div>
+              <strong>What it is</strong>
+              <span>A configurable 3DGS training and analysis stack.</span>
+            </div>
+            <div>
+              <strong>Why it stands out</strong>
+              <span>It brings geometry, visualization, and pruning into one workflow.</span>
+            </div>
+            <div>
+              <strong>What to inspect</strong>
+              <span>Jump to the gallery, feature cards, and repository code.</span>
+            </div>
+          </div>
         </div>
-      </div>
-    </div>
-    <!--/ Abstract. -->
 
-    <!-- Paper video. -->
-    <div class="columns is-centered has-text-centered">
-      <div class="column is-four-fifths">
-        <h2 class="title is-3">Video</h2>
-        <div class="publication-video">
-          <iframe src="https://www.youtube.com/embed/MrKrnHhk8IA?rel=0&amp;showinfo=0"
-                  frameborder="0" allow="autoplay; encrypted-media" allowfullscreen></iframe>
-        </div>
-      </div>
-    </div>
-    <!--/ Paper video. -->
-  </div>
-</section>
-
-
-<section class="section">
-  <div class="container is-max-desktop">
-
-    <div class="columns is-centered">
-
-      <!-- Visual Effects. -->
-      <div class="column">
-        <div class="content">
-          <h2 class="title is-3">Visual Effects</h2>
-          <p>
-            Using <i>nerfies</i> you can create fun visual effects. This Dolly zoom effect
-            would be impossible without nerfies since it would require going through a wall.
-          </p>
-          <video id="dollyzoom" autoplay controls muted loop playsinline height="100%">
-            <source src="./static/videos/dollyzoom-stacked.mp4"
-                    type="video/mp4">
-          </video>
-        </div>
-      </div>
-      <!--/ Visual Effects. -->
-
-      <!-- Matting. -->
-      <div class="column">
-        <h2 class="title is-3">Matting</h2>
-        <div class="columns is-centered">
-          <div class="column content">
-            <p>
-              As a byproduct of our method, we can also solve the matting problem by ignoring
-              samples that fall outside of a bounding box during rendering.
-            </p>
-            <video id="matting-video" controls playsinline height="100%">
-              <source src="./static/videos/matting.mp4"
-                      type="video/mp4">
+        <div class="column is-7-desktop is-12-tablet">
+          <div class="hero-media-shell">
+            <div class="hero-media-header">
+              <span>Project Overview</span>
+              <span>Replace with your strongest FriendlySplat teaser when ready</span>
+            </div>
+            <video class="hero-video" autoplay muted loop playsinline controls>
+              <source src="./static/videos/friendlysplat-hero.mp4" type="video/mp4">
             </video>
           </div>
-
         </div>
       </div>
     </div>
-    <!--/ Matting. -->
+  </div>
+</section>
 
-    <!-- Animation. -->
-    <div class="columns is-centered">
-      <div class="column is-full-width">
-        <h2 class="title is-3">Animation</h2>
+<section class="section band-section" id="why">
+  <div class="container is-max-desktop">
+    <div class="section-heading">
+      <p class="eyebrow">Why FriendlySplat</p>
+      <h2 class="title is-2">Built for the parts of 3DGS research that usually stay fragmented</h2>
+      <p class="section-copy">
+        FriendlySplat is organized around short experiment cycles: get a scene training quickly,
+        attach geometry priors, inspect what the optimizer is doing, and evaluate pruning or segmentation ideas
+        without rebuilding the whole stack each time.
+      </p>
+    </div>
 
-        <!-- Interpolating. -->
-        <h3 class="title is-4">Interpolating states</h3>
-        <div class="content has-text-justified">
-          <p>
-            We can also animate the scene by interpolating the deformation latent codes of two input
-            frames. Use the slider here to linearly interpolate between the left frame and the right
-            frame.
-          </p>
-        </div>
-        <div class="columns is-vcentered interpolation-panel">
-          <div class="column is-3 has-text-centered">
-            <img src="./static/images/interpolate_start.jpg"
-                 class="interpolation-image"
-                 alt="Interpolate start reference image."/>
-            <p>Start Frame</p>
-          </div>
-          <div class="column interpolation-video-column">
-            <div id="interpolation-image-wrapper">
-              Loading...
-            </div>
-            <input class="slider is-fullwidth is-large is-info"
-                   id="interpolation-slider"
-                   step="1" min="0" max="100" value="0" type="range">
-          </div>
-          <div class="column is-3 has-text-centered">
-            <img src="./static/images/interpolate_end.jpg"
-                 class="interpolation-image"
-                 alt="Interpolation end reference image."/>
-            <p class="is-bold">End Frame</p>
-          </div>
-        </div>
-        <br/>
-        <!--/ Interpolating. -->
+    <div class="columns is-multiline why-grid">
+      <div class="column is-6-tablet is-3-desktop">
+        <article class="mini-panel">
+          <span class="panel-icon"><i class="fas fa-bolt"></i></span>
+          <h3>Faster iteration</h3>
+          <p>Designed for short turnaround runs so scene fitting and ablations are easier to repeat.</p>
+        </article>
+      </div>
+      <div class="column is-6-tablet is-3-desktop">
+        <article class="mini-panel">
+          <span class="panel-icon"><i class="fas fa-draw-polygon"></i></span>
+          <h3>Better geometry</h3>
+          <p>Supports geometry-aware constraints so training is not limited to pure photometric fitting.</p>
+        </article>
+      </div>
+      <div class="column is-6-tablet is-3-desktop">
+        <article class="mini-panel">
+          <span class="panel-icon"><i class="fas fa-chart-line"></i></span>
+          <h3>Clearer monitoring</h3>
+          <p>Live metrics, camera frustums, and viewer feedback make failures easier to diagnose.</p>
+        </article>
+      </div>
+      <div class="column is-6-tablet is-3-desktop">
+        <article class="mini-panel">
+          <span class="panel-icon"><i class="fas fa-filter"></i></span>
+          <h3>Research on sparsity</h3>
+          <p>Pruning, compression, and segmentation experiments fit into the same training loop.</p>
+        </article>
+      </div>
+    </div>
+  </div>
+</section>
 
-        <!-- Re-rendering. -->
-        <h3 class="title is-4">Re-rendering the input video</h3>
-        <div class="content has-text-justified">
-          <p>
-            Using <span class="dnerf">Nerfies</span>, you can re-render a video from a novel
-            viewpoint such as a stabilized camera by playing back the training deformations.
-          </p>
-        </div>
-        <div class="content has-text-centered">
-          <video id="replay-video"
-                 controls
-                 muted
-                 preload
-                 playsinline
-                 width="75%">
-            <source src="./static/videos/replay.mp4"
-                    type="video/mp4">
+<section class="section" id="framework">
+  <div class="container is-max-desktop">
+    <div class="section-heading">
+      <p class="eyebrow">Training Framework</p>
+      <h2 class="title is-2">A simple pipeline with room for optional modules</h2>
+      <p class="section-copy">
+        The framework is meant to stay readable: feed in multi-view observations and optional priors,
+        optimize a Gaussian scene with interchangeable training-time components, and emit assets that are useful
+        beyond a final render.
+      </p>
+    </div>
+
+    <div class="framework-shell">
+      <div class="framework-step">
+        <span class="step-tag">Input</span>
+        <h3>Images, masks, and geometry hints</h3>
+        <p>Multi-view RGB observations can be paired with segmentation masks or geometry priors before optimization begins.</p>
+      </div>
+      <div class="framework-arrow"><i class="fas fa-long-arrow-alt-right"></i></div>
+      <div class="framework-step">
+        <span class="step-tag">Train</span>
+        <h3>Base 3DGS with pluggable modules</h3>
+        <p>Regularizers, pruning policies, and viewer hooks can be added without changing the overall workflow.</p>
+      </div>
+      <div class="framework-arrow"><i class="fas fa-long-arrow-alt-right"></i></div>
+      <div class="framework-step">
+        <span class="step-tag">Output</span>
+        <h3>Renders, meshes, metrics, and inspection tools</h3>
+        <p>The same run can produce visual results, extracted geometry, real-time statistics, and debugging views.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="features">
+  <div class="container is-max-desktop">
+    <div class="section-heading">
+      <p class="eyebrow">Core Features</p>
+      <h2 class="title is-2">User-facing capabilities, not just internal modules</h2>
+    </div>
+
+    <div class="columns is-multiline feature-grid">
+      <div class="column is-6-tablet is-4-desktop">
+        <article class="feature-card">
+          <span class="feature-icon"><i class="fas fa-mountain"></i></span>
+          <h3>Geometry-Aware Regularization</h3>
+          <p class="feature-value">Encourages reconstructions that respect scene structure instead of only chasing image loss.</p>
+          <p class="feature-detail">Useful when you want mesh quality and geometry consistency to matter during training.</p>
+        </article>
+      </div>
+      <div class="column is-6-tablet is-4-desktop">
+        <article class="feature-card">
+          <span class="feature-icon"><i class="fas fa-stopwatch"></i></span>
+          <h3>Fast Scene Training</h3>
+          <p class="feature-value">Targets short experiment loops so scene-scale iterations stay practical.</p>
+          <p class="feature-detail">Good for rapid ablations, lightweight settings, and quick sanity checks.</p>
+        </article>
+      </div>
+      <div class="column is-6-tablet is-4-desktop">
+        <article class="feature-card">
+          <span class="feature-icon"><i class="fas fa-satellite-dish"></i></span>
+          <h3>Live Viewer and Metrics</h3>
+          <p class="feature-value">Monitor curves, camera frustums, and scene state while training is still running.</p>
+          <p class="feature-detail">Makes it easier to spot unstable runs before wasting a full experiment cycle.</p>
+        </article>
+      </div>
+      <div class="column is-6-tablet is-6-desktop">
+        <article class="feature-card">
+          <span class="feature-icon"><i class="fas fa-cut"></i></span>
+          <h3>Pluggable Pruning Strategies</h3>
+          <p class="feature-value">Swap in different pruning ideas to study sparsity, quality retention, and compression tradeoffs.</p>
+          <p class="feature-detail">The framework is positioned as a practical place to benchmark pruning research.</p>
+        </article>
+      </div>
+      <div class="column is-6-tablet is-6-desktop">
+        <article class="feature-card">
+          <span class="feature-icon"><i class="fas fa-cubes"></i></span>
+          <h3>Mesh Extraction Pipeline</h3>
+          <p class="feature-value">Turn trained splats into geometry artifacts that are easier to inspect and evaluate.</p>
+          <p class="feature-detail">Pairs well with geometry priors when you want a scene representation beyond render-only output.</p>
+        </article>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section gallery-section" id="gallery">
+  <div class="container is-max-desktop">
+    <div class="section-heading">
+      <p class="eyebrow">Gallery / Results</p>
+      <h2 class="title is-2">Demo slots for the scenes you want people to remember</h2>
+      <p class="section-copy">
+        This section is arranged for repository-specific results. The current assets are placeholders from the template directory,
+        so you can replace each clip and caption with actual FriendlySplat outputs as you curate them.
+      </p>
+    </div>
+
+    <div class="columns is-multiline gallery-grid">
+      <div class="column is-6-tablet">
+        <article class="gallery-card">
+          <video autoplay muted loop playsinline controls>
+            <source src="./static/videos/steve.mp4" type="video/mp4">
           </video>
-        </div>
-        <!--/ Re-rendering. -->
-
+          <div class="gallery-copy">
+            <h3>Demo Slot 01</h3>
+            <p>Use this card for a scene that best demonstrates fast convergence and clean reconstruction.</p>
+            <span>Example metrics: training time, FPS, point count</span>
+          </div>
+        </article>
+      </div>
+      <div class="column is-6-tablet">
+        <article class="gallery-card">
+          <video autoplay muted loop playsinline controls>
+            <source src="./static/videos/shiba.mp4" type="video/mp4">
+          </video>
+          <div class="gallery-copy">
+            <h3>Demo Slot 02</h3>
+            <p>Good place for a geometry-aware run where mesh extraction or regularization matters.</p>
+            <span>Example metrics: Chamfer, mesh completeness, PSNR</span>
+          </div>
+        </article>
+      </div>
+      <div class="column is-6-tablet">
+        <article class="gallery-card">
+          <video autoplay muted loop playsinline controls>
+            <source src="./static/videos/coffee.mp4" type="video/mp4">
+          </video>
+          <div class="gallery-copy">
+            <h3>Demo Slot 03</h3>
+            <p>Use a clip that highlights viewer-assisted debugging, monitoring, or camera inspection.</p>
+            <span>Example metrics: live loss curves, camera overlays, timing stats</span>
+          </div>
+        </article>
+      </div>
+      <div class="column is-6-tablet">
+        <article class="gallery-card">
+          <video autoplay muted loop playsinline controls>
+            <source src="./static/videos/toby2.mp4" type="video/mp4">
+          </video>
+          <div class="gallery-copy">
+            <h3>Demo Slot 04</h3>
+            <p>Reserve one result for pruning or sparsity ablations with a short, concrete takeaway.</p>
+            <span>Example metrics: retained quality, prune ratio, model size</span>
+          </div>
+        </article>
       </div>
     </div>
-    <!--/ Animation. -->
-
-
-    <!-- Concurrent Work. -->
-    <div class="columns is-centered">
-      <div class="column is-full-width">
-        <h2 class="title is-3">Related Links</h2>
-
-        <div class="content has-text-justified">
-          <p>
-            There's a lot of excellent work that was introduced around the same time as ours.
-          </p>
-          <p>
-            <a href="https://arxiv.org/abs/2104.09125">Progressive Encoding for Neural Optimization</a> introduces an idea similar to our windowed position encoding for coarse-to-fine optimization.
-          </p>
-          <p>
-            <a href="https://www.albertpumarola.com/research/D-NeRF/index.html">D-NeRF</a> and <a href="https://gvv.mpi-inf.mpg.de/projects/nonrigid_nerf/">NR-NeRF</a>
-            both use deformation fields to model non-rigid scenes.
-          </p>
-          <p>
-            Some works model videos with a NeRF by directly modulating the density, such as <a href="https://video-nerf.github.io/">Video-NeRF</a>, <a href="https://www.cs.cornell.edu/~zl548/NSFF/">NSFF</a>, and <a href="https://neural-3d-video.github.io/">DyNeRF</a>
-          </p>
-          <p>
-            There are probably many more by the time you are reading this. Check out <a href="https://dellaert.github.io/NeRF/">Frank Dellart's survey on recent NeRF papers</a>, and <a href="https://github.com/yenchenlin/awesome-NeRF">Yen-Chen Lin's curated list of NeRF papers</a>.
-          </p>
-        </div>
-      </div>
-    </div>
-    <!--/ Concurrent Work. -->
-
   </div>
 </section>
 
+<section class="section" id="acknowledgements">
+  <div class="container is-max-desktop">
+    <div class="section-heading">
+      <p class="eyebrow">Acknowledgements</p>
+      <h2 class="title is-2">Direct influences and tooling that made the project practical</h2>
+    </div>
 
-<section class="section" id="BibTeX">
-  <div class="container is-max-desktop content">
-    <h2 class="title">BibTeX</h2>
-    <pre><code>@article{park2021nerfies,
-  author    = {Park, Keunhong and Sinha, Utkarsh and Barron, Jonathan T. and Bouaziz, Sofien and Goldman, Dan B and Seitz, Steven M. and Martin-Brualla, Ricardo},
-  title     = {Nerfies: Deformable Neural Radiance Fields},
-  journal   = {ICCV},
-  year      = {2021},
-}</code></pre>
+    <div class="ack-shell">
+      <div class="ack-primary">
+        <h3>Primary thanks</h3>
+        <p>
+          FriendlySplat builds on the broader Gaussian Splatting ecosystem and benefits from tools and ideas around
+          rasterization, online visualization, and project-page design.
+        </p>
+        <div class="tag-cloud">
+          <span>gsplat</span>
+          <span>nerfview</span>
+          <span>viser</span>
+          <span>PyTorch</span>
+          <span>Open3D</span>
+          <span>Nerfies website template</span>
+        </div>
+      </div>
+
+      <div class="ack-secondary">
+        <h3>Suggested credits to keep</h3>
+        <ul>
+          <li>Code and rasterization foundations</li>
+          <li>Viewer and visualization tooling</li>
+          <li>Geometry processing and mesh utilities</li>
+          <li>Datasets, benchmarks, and scene assets you actually use</li>
+        </ul>
+        <p class="ack-note">
+          Replace this section with the exact papers, repos, and collaborators you want to acknowledge once the final project scope is fixed.
+        </p>
+      </div>
+    </div>
   </div>
 </section>
 
-
-<footer class="footer">
+<footer class="footer site-footer">
   <div class="container">
     <div class="content has-text-centered">
-      <a class="icon-link"
-         href="./static/videos/nerfies_paper.pdf">
-        <i class="fas fa-file-pdf"></i>
-      </a>
-      <a class="icon-link" href="https://github.com/keunhong" class="external-link" disabled>
-        <i class="fab fa-github"></i>
-      </a>
-    </div>
-    <div class="columns is-centered">
-      <div class="column is-8">
-        <div class="content">
-          <p>
-            This website is licensed under a <a rel="license"
-                                                href="http://creativecommons.org/licenses/by-sa/4.0/">Creative
-            Commons Attribution-ShareAlike 4.0 International License</a>.
-          </p>
-          <p>
-            This means you are free to borrow the <a
-              href="https://github.com/nerfies/nerfies.github.io">source code</a> of this website,
-            we just ask that you link back to this page in the footer.
-            Please remember to remove the analytics code included in the header of the website which
-            you do not want on your website.
-          </p>
-        </div>
+      <p>FriendlySplat project page. Replace placeholder media and links with final project assets before wider sharing.</p>
+      <div class="footer-links">
+        <a href="https://github.com/AshadowZ/FriendlySplat">GitHub</a>
+        <a href="#gallery">Results</a>
+        <a href="#acknowledgements">Credits</a>
       </div>
     </div>
   </div>
