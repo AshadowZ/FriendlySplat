@@ -175,6 +175,22 @@ a {
   background: #0b1220;
 }
 
+.gallery-placeholder {
+  aspect-ratio: 16 / 9;
+  width: 100%;
+  border-radius: 1rem 1rem 0 0;
+  background:
+    linear-gradient(135deg, rgba(18, 70, 181, 0.07), rgba(22, 160, 133, 0.07)),
+    repeating-linear-gradient(
+      -45deg,
+      rgba(19, 34, 56, 0.045),
+      rgba(19, 34, 56, 0.045) 18px,
+      rgba(255, 255, 255, 0.35) 18px,
+      rgba(255, 255, 255, 0.35) 36px
+    );
+  border-bottom: 1px solid rgba(19, 34, 56, 0.08);
+}
+
 .band-section {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0.88));
 }
