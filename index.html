@@ -7,7 +7,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>FriendlySplat</title>
 
-  <link href="https://fonts.googleapis.com/css?family=Google+Sans:400,500,700|Noto+Sans:400,500,700|Castoro:400,400i" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css?family=Google+Sans:400,500,700|Noto+Sans:400,500,700|Castoro:400,400i|Inter:400,500,700,800" rel="stylesheet">
 
   <link rel="stylesheet" href="./static/css/bulma.min.css">
   <link rel="stylesheet" href="./static/css/fontawesome.all.min.css">
@@ -41,6 +41,10 @@
         <a class="navbar-item" href="#features">Features</a>
         <a class="navbar-item" href="#gallery">Results</a>
         <a class="navbar-item" href="#acknowledgements">Credits</a>
+        <a class="navbar-item nav-cta" href="https://github.com/AshadowZ/FriendlySplat">
+          <span class="icon"><i class="fab fa-github"></i></span>
+          <span>Try it now</span>
+        </a>
       </div>
     </div>
   </div>
@@ -49,49 +53,27 @@
 <section class="hero landing-hero" id="top">
   <div class="hero-body">
     <div class="container">
-      <div class="columns is-vcentered hero-grid">
-        <div class="column is-5-desktop is-12-tablet">
-          <p class="eyebrow">Modular 3D Gaussian Splatting Framework</p>
+      <div class="hero-grid">
+        <div class="hero-copy-panel">
           <h1 class="title hero-title">FriendlySplat</h1>
-          <p class="hero-copy">
-            A research-friendly 3DGS pipeline for rapid scene training, geometry-aware regularization,
-            interactive monitoring, and pluggable pruning experiments.
-          </p>
-          <div class="hero-pills">
-            <span>Fast iteration loops</span>
-            <span>Geometry-aware training</span>
-            <span>Viewer-first workflow</span>
-          </div>
-          <div class="hero-actions">
-            <a class="button is-dark is-rounded action-primary" href="https://github.com/AshadowZ/FriendlySplat">
-              <span class="icon"><i class="fab fa-github"></i></span>
-              <span>Code</span>
-            </a>
-            <a class="button is-light is-rounded action-secondary" href="#gallery">Results</a>
-            <a class="button is-light is-rounded action-secondary" href="#framework">Framework</a>
-          </div>
-          <div class="hero-meta">
-            <div>
-              <strong>What it is</strong>
-              <span>A configurable 3DGS training and analysis stack.</span>
-            </div>
-            <div>
-              <strong>Why it stands out</strong>
-              <span>It brings geometry, visualization, and pruning into one workflow.</span>
-            </div>
-            <div>
-              <strong>What to inspect</strong>
-              <span>Jump to the gallery, feature cards, and repository code.</span>
-            </div>
+          <h2 class="hero-subtitle">Train fast. Inspect live. Edit effortlessly.</h2>
+        </div>
+
+        <div class="hero-tldr-panel">
+          <div class="hero-tldr-copy">
+            <p class="hero-tldr-line hero-tldr-lead">
+              <i class="fas fa-bolt hero-bolt"></i> <strong>TL;DR:</strong>
+              <span class="hero-tldr-normal">FriendlySplat is a user-friendly, open-source Gaussian Splatting toolkit, integrating <strong>SOTA features</strong></span>
+            </p>
+            <p class="hero-tldr-line hero-tldr-detail">
+              into a <strong>unified platform</strong> for <strong>training, pruning, meshing and segmentation</strong>.
+            </p>
           </div>
         </div>
 
-        <div class="column is-7-desktop is-12-tablet">
+        <div class="hero-video-panel">
           <div class="hero-media-shell">
-            <div class="hero-media-header">
-              <span>FriendlySplat: User-friendly, open-source Gaussian Splatting toolkit</span>
-            </div>
-            <video class="hero-video" autoplay muted loop playsinline controls>
+            <video class="hero-showcase-video" autoplay muted loop playsinline preload="metadata">
               <source src="./static/videos/friendlysplat-hero.mp4" type="video/mp4">
             </video>
           </div>
