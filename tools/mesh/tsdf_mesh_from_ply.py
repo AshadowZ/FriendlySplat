@@ -623,8 +623,9 @@ def main() -> None:
     )
     parser.add_argument(
         "--delete_cache",
-        action="store_true",
-        help="Delete the cached RGB/depth .npy directory after mesh extraction.",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Delete the cached RGB/depth .npy directory after mesh extraction (default: on).",
     )
     parser.add_argument(
         "--mask_dir",

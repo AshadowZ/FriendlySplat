@@ -11,7 +11,17 @@ features into a unified platform for training, pruning, meshing and segmentation
 
 ## Installation
 
-This repo builds the local `gsplat` CUDA extension and installs the FriendlySplat package.
+Dependence: Please install [Pytorch](https://pytorch.org/get-started/locally/) first.
+
+Example environment setup:
+
+```bash
+conda create -n friendly-splat python=3.10
+conda activate friendly-splat
+pip install torch==2.4.0 torchvision==0.19.0 --index-url https://download.pytorch.org/whl/cu121
+```
+
+Clone the repository and install FriendlySplat with the training and viewer extras:
 
 ```bash
 git clone https://github.com/AshadowZ/FriendlySplat.git
@@ -29,9 +39,9 @@ pip install -e ".[train,viewer,mesh,segment,sfm,priors]" --no-build-isolation
 Notes:
 
 - A CUDA-enabled PyTorch environment is expected for normal training.
-- `--no-build-isolation` is recommended so the local `gsplat` extension reuses the current environment's
+- `--no-build-isolation` is recommended so the local `gsplat` CUDA kernel reuses the current environment's
   PyTorch/CUDA toolchain instead of creating a separate build env.
-- `setup.py` builds the local `gsplat` extension in this repo.
+- `setup.py` builds the local `gsplat` CUDA kernel in this repo.
 - Some optional tools under `tools/` and `benchmarks/` have extra dependencies; check the README in
   each subfolder if you use them.
 
@@ -78,12 +88,6 @@ Common knobs live in [`friendly_splat/trainer/configs.py`](friendly_splat/traine
 - Strategy benchmark evaluation: `python3 benchmarks/strategies_visual_quality/run_eval_batch.py ...`
 - Pruning benchmark training: `python3 benchmarks/pruning_visual_quality/run_train_batch.py ...`
 - Pruning benchmark evaluation: `python3 benchmarks/pruning_visual_quality/run_eval_batch.py ...`
-
-## Current Scope
-
-FriendlySplat is aimed at single-machine experimentation and benchmarking.
-There are config fields reserved for distributed training, but the current repo is centered on
-single-GPU workflows and benchmark scripts.
 
 ## License
 

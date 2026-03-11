@@ -137,7 +137,9 @@ class ViewerRuntime:
                 detail = f"{type(_GSPLAT_VIEWER_IMPORT_ERROR).__name__}: {_GSPLAT_VIEWER_IMPORT_ERROR}"
             raise ImportError(
                 "Online viewer requested but dependencies are missing. "
-                "Install `viser` and `nerfview` (see friendly_splat/requirements.txt) or run with disable_viewer=True."
+                "Install the viewer extras with "
+                "`pip install -e \".[train,viewer]\" --no-build-isolation` "
+                "or run with disable_viewer=True."
                 + (f" (import error: {detail})" if detail else "")
             ) from _GSPLAT_VIEWER_IMPORT_ERROR
 
