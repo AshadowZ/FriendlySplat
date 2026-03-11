@@ -47,7 +47,22 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     );
 
     m.def(
-        "rasterize_to_pixels_3dgs_fwd", &gsplat::rasterize_to_pixels_3dgs_fwd
+        "rasterize_to_pixels_3dgs_fwd",
+        &gsplat::rasterize_to_pixels_3dgs_fwd,
+        py::arg("means2d"),
+        py::arg("conics"),
+        py::arg("colors"),
+        py::arg("opacities"),
+        py::arg("backgrounds"),
+        py::arg("masks"),
+        py::arg("image_width"),
+        py::arg("image_height"),
+        py::arg("tile_size"),
+        py::arg("tile_offsets"),
+        py::arg("flatten_ids"),
+        py::arg("track_pixel_gaussians") = false,
+        py::arg("max_gaussians_per_pixel") = 100,
+        py::arg("pixel_gaussian_threshold") = 0.1
     );
     m.def(
         "rasterize_to_pixels_3dgs_bwd", &gsplat::rasterize_to_pixels_3dgs_bwd

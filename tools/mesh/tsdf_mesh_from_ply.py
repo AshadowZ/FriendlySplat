@@ -623,8 +623,9 @@ def main() -> None:
     )
     parser.add_argument(
         "--delete_cache",
-        action="store_true",
-        help="Delete the cached RGB/depth .npy directory after mesh extraction.",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Delete the cached RGB/depth .npy directory after mesh extraction (default: on).",
     )
     parser.add_argument(
         "--mask_dir",
@@ -1045,5 +1046,9 @@ def main() -> None:
             print(f"[cache] deleted cache dir: {cache_dir}", flush=True)
 
 
-if __name__ == "__main__":
+def entrypoint() -> None:
     main()
+
+
+if __name__ == "__main__":
+    entrypoint()

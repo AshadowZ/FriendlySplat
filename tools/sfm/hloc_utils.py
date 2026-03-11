@@ -276,13 +276,21 @@ def run_hloc(
     refine_pixsfm: bool = False,
     use_single_camera_mode: bool = True,
     is_panorama: bool = False,
-    enable_gpu_ba: bool = False,
     overwrite: bool = False,
 ) -> None:
     """Run HLOC SfM and export a 3DGS-ready COLMAP scene under export_dir."""
 
     try:
         import pycolmap
+    except ImportError:
+        _log(
+            "Error: missing dependency `pycolmap`. "
+            "Install the sfm extra with "
+            "`pip install -e \".[sfm]\" --no-build-isolation`."
+        )
+        sys.exit(1)
+
+    try:
         from hloc import (  # type: ignore
             extract_features,
             match_features,
@@ -293,7 +301,9 @@ def run_hloc(
         )
     except ImportError:
         _log(
-            "Error: missing dependencies. Install `hloc` toolbox and `pycolmap` to run SfM."
+            "Error: missing dependency `hloc`. "
+            "Install HLOC exactly as described in tools/sfm/README.md "
+            "(clone the repository with submodules, then run `pip install -e /path/to/Hierarchical-Localization`)."
         )
         sys.exit(1)
 
@@ -303,7 +313,10 @@ def run_hloc(
         PixSfM = None
 
     if refine_pixsfm and PixSfM is None:
-        _log("Error: refine_pixsfm=True requires `pixsfm`.")
+        _log(
+            "Error: refine_pixsfm=True requires `pixsfm`. "
+            "See tools/sfm/README.md for the optional installation note."
+        )
         sys.exit(1)
 
     if is_panorama and camera_model not in (
@@ -389,33 +402,6 @@ def run_hloc(
 
     if mapper_opts_candidate is not None:
         mapper_opts = mapper_opts_candidate
-        if hasattr(mapper_opts, "ba_use_gpu"):
-            mapper_opts.ba_use_gpu = enable_gpu_ba
-        if enable_gpu_ba and hasattr(mapper_opts, "ba_gpu_index"):
-            mapper_opts.ba_gpu_index = "0"
-
-        if enable_gpu_ba:
-            local_getter = getattr(mapper_opts, "get_local_bundle_adjustment", None)
-            global_getter = getattr(mapper_opts, "get_global_bundle_adjustment", None)
-            if callable(local_getter) and callable(global_getter):
-                for ba_opts in (local_getter(), global_getter()):
-                    ba_opts.use_gpu = True
-                    ba_opts.gpu_index = "0"
-                    ba_opts.min_num_images_gpu_solver = 50
-            elif all(
-                hasattr(mapper_opts, attr)
-                for attr in ("ba_local_bundle_options", "ba_global_bundle_options")
-            ):
-                for attr in ("ba_local_bundle_options", "ba_global_bundle_options"):
-                    ba_opts = getattr(mapper_opts, attr)
-                    ba_opts.use_gpu = True
-                    ba_opts.gpu_index = "0"
-                    ba_opts.min_num_images_gpu_solver = 50
-            else:
-                _log(
-                    "Warning: unable to locate bundle adjustment accessors on pycolmap "
-                    "IncrementalPipelineOptions; GPU BA settings will not be customized."
-                )
     else:
         mapper_opts = {}
 

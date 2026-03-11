@@ -576,6 +576,9 @@ def rasterize_to_pixels(
     packed: bool = False,
     absgrad: bool = False,
     return_median: bool = False,
+    track_pixel_gaussians: bool = False,
+    max_gaussians_per_pixel: int = 100,
+    pixel_gaussian_threshold: float = 0.1,
 ) -> Tuple[Tensor, Tensor] | Tuple[Tensor, Tensor, Tensor]:
     """Rasterizes Gaussians to pixels.
 
@@ -593,6 +596,11 @@ def rasterize_to_pixels(
         masks: Optional tile mask to skip rendering GS to masked tiles. [..., tile_height, tile_width]. Default: None.
         packed: If True, the input tensors are expected to be packed with shape [nnz, ...]. Default: False.
         absgrad: If True, the backward pass will compute a `.absgrad` attribute for `means2d`. Default: False.
+        return_median: If True, also return per-pixel median depth. Default: False.
+        track_pixel_gaussians: If True, record (gaussian_id, pixel_id) pairs whose contributions exceed
+            `pixel_gaussian_threshold`. Default: False.
+        max_gaussians_per_pixel: Maximum number of recorded Gaussians per pixel. Default: 100.
+        pixel_gaussian_threshold: Contribution threshold `w = alpha * T` used for recording. Default: 0.1.
 
     Returns:
         A tuple:
@@ -601,6 +609,10 @@ def rasterize_to_pixels(
         - **Rendered alphas**. [..., image_height, image_width, 1]
         - **Rendered median depth**. [..., image_height, image_width, 1] (only if `return_median=True`)
     """
+    if return_median and track_pixel_gaussians:
+        raise NotImplementedError(
+            "track_pixel_gaussians is not supported together with return_median=True."
+        )
 
     image_dims = means2d.shape[:-2]
     channels = colors.shape[-1]
@@ -736,7 +748,7 @@ def rasterize_to_pixels(
             )
         return render_colors, render_alphas, render_median
 
-    render_colors, render_alphas = _RasterizeToPixels.apply(
+    raster_outputs = _RasterizeToPixels.apply(
         means2d.contiguous(),
         conics.contiguous(),
         colors.contiguous(),
@@ -749,10 +761,19 @@ def rasterize_to_pixels(
         isect_offsets.contiguous(),
         flatten_ids.contiguous(),
         absgrad,
+        track_pixel_gaussians,
+        max_gaussians_per_pixel,
+        pixel_gaussian_threshold,
     )
+    if track_pixel_gaussians:
+        render_colors, render_alphas, pixel_gaussians = raster_outputs
+    else:
+        render_colors, render_alphas = raster_outputs
 
     if padded_channels > 0:
         render_colors = render_colors[..., :-padded_channels]
+    if track_pixel_gaussians:
+        return render_colors, render_alphas, pixel_gaussians
     return render_colors, render_alphas
 
 
@@ -1510,8 +1531,11 @@ class _RasterizeToPixels(torch.autograd.Function):
         isect_offsets: Tensor,  # [..., tile_height, tile_width]
         flatten_ids: Tensor,  # [n_isects]
         absgrad: bool,
-    ) -> Tuple[Tensor, Tensor]:
-        render_colors, render_alphas, last_ids = _make_lazy_cuda_func(
+        track_pixel_gaussians: bool,
+        max_gaussians_per_pixel: int,
+        pixel_gaussian_threshold: float,
+    ) -> Tuple[Tensor, Tensor] | Tuple[Tensor, Tensor, Tensor]:
+        render_colors, render_alphas, last_ids, pixel_gaussians = _make_lazy_cuda_func(
             "rasterize_to_pixels_3dgs_fwd"
         )(
             means2d,
@@ -1525,6 +1549,9 @@ class _RasterizeToPixels(torch.autograd.Function):
             tile_size,
             isect_offsets,
             flatten_ids,
+            track_pixel_gaussians,
+            max_gaussians_per_pixel,
+            pixel_gaussian_threshold,
         )
 
         ctx.save_for_backward(
@@ -1546,6 +1573,8 @@ class _RasterizeToPixels(torch.autograd.Function):
 
         # double to float
         render_alphas = render_alphas.float()
+        if track_pixel_gaussians:
+            return render_colors, render_alphas, pixel_gaussians
         return render_colors, render_alphas
 
     @staticmethod
@@ -1553,6 +1582,7 @@ class _RasterizeToPixels(torch.autograd.Function):
         ctx,
         v_render_colors: Tensor,  # [..., H, W, 3]
         v_render_alphas: Tensor,  # [..., H, W, 1]
+        _v_pixel_gaussians: Optional[Tensor] = None,
     ):
         (
             means2d,
@@ -1612,6 +1642,9 @@ class _RasterizeToPixels(torch.autograd.Function):
             v_colors,
             v_opacities,
             v_backgrounds,
+            None,
+            None,
+            None,
             None,
             None,
             None,

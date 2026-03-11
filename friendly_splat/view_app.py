@@ -11,6 +11,9 @@ import yaml
 from friendly_splat.data.colmap_dataparser import ColmapDataParser
 from friendly_splat.data.dataset import InputDataset
 from friendly_splat.modules.gaussian import GaussianModel
+from friendly_splat.utils.gaussian_transforms import (
+    apply_similarity_transform_to_model_inplace,
+)
 from friendly_splat.viewer.viewer_runtime import ViewerRuntime
 
 
@@ -29,6 +32,11 @@ class ViewerScriptConfig:
     device: str = "cuda"
     # Viewer server port.
     port: int = 8080
+    # Optional path to per-Gaussian instance labels (.npy). If omitted, the viewer
+    # auto-loads `result_dir/cluster_result/instance_labels.npy` when available.
+    instance_labels: Optional[str] = None
+    # Random seed used to generate consistent instance colors.
+    instance_color_seed: int = 0
 
 
 @dataclass(frozen=True)
@@ -326,6 +334,11 @@ def main(cfg: ViewerScriptConfig) -> None:
         train_dataset = _build_train_dataset_from_ckpt_settings(settings)
         print(f"Loaded checkpoint: {src_path}", flush=True)
     elif kind == "ply":
+        # FriendlySplat exports PLY geometry in the original COLMAP coordinate system.
+        # Checkpoints instead remain in training space when `normalize_world_space=True`.
+        # To make the standalone viewer match checkpoint-based rendering, we load the
+        # dataset using the saved training config and, when normalization was enabled
+        # during training, map the PLY splats back into that training space.
         gaussian_model = GaussianModel.from_splat_ply(
             ply_path=str(src_path),
             device=device,
@@ -333,11 +346,24 @@ def main(cfg: ViewerScriptConfig) -> None:
         )
         cfg_dict = _load_cfg_yml(result_dir)
         settings = _parse_ckpt_settings({"cfg": cfg_dict})
-        # PLY exports are written in the original (COLMAP) coordinate system.
-        train_dataset = _build_train_dataset_from_ckpt_settings(
-            settings,
-            normalize_world_space_override=False,
-        )
+        train_dataset = _build_train_dataset_from_ckpt_settings(settings)
+        if (
+            train_dataset is not None
+            and settings.dataset_cfg is not None
+            and bool(settings.dataset_cfg.normalize_world_space)
+        ):
+            # `parsed_scene.transform` is the dataparser's COLMAP -> training-space
+            # similarity transform. Apply it to means/quats/scales so the viewer uses
+            # the same camera/splat frame as checkpoint loading.
+            transform = (
+                torch.from_numpy(train_dataset.parsed_scene.transform)
+                .float()
+                .to(device=device)
+            )
+            apply_similarity_transform_to_model_inplace(
+                gaussian_model=gaussian_model,
+                transform_src_to_dst=transform,
+            )
         print(f"Loaded splat PLY: {src_path}", flush=True)
     else:
         raise ValueError(f"Unknown source kind: {kind!r}")
@@ -368,9 +394,15 @@ def main(cfg: ViewerScriptConfig) -> None:
         sparse_grad=settings.sparse_grad,
         absgrad=settings.absgrad,
         train_dataset=train_dataset,
+        instance_labels_path=cfg.instance_labels,
+        instance_color_seed=cfg.instance_color_seed,
     )
     viewer_runtime.keep_alive()
 
 
-if __name__ == "__main__":
+def entrypoint() -> None:
     main(tyro.cli(ViewerScriptConfig))
+
+
+if __name__ == "__main__":
+    entrypoint()

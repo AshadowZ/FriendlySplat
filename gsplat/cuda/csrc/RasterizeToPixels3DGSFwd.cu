@@ -38,7 +38,12 @@ __global__ void rasterize_to_pixels_3dgs_fwd_kernel(
     scalar_t *__restrict__ render_alphas, // [I, image_height, image_width, 1]
     scalar_t *__restrict__ render_median, // [I, image_height, image_width, 1] optional
     int32_t *__restrict__ last_ids,       // [I, image_height, image_width]
-    int32_t *__restrict__ median_ids      // [I, image_height, image_width] optional
+    int32_t *__restrict__ median_ids,     // [I, image_height, image_width] optional
+    const bool track_pixel_gaussians,
+    const float pixel_gaussian_threshold,
+    const int64_t max_pixel_gaussians,
+    int32_t *__restrict__ pixel_gaussians,
+    int32_t *__restrict__ pixel_gaussian_counter
 ) {
     // each thread draws one pixel, but also timeshares caching gaussians in a
     // shared tile
@@ -70,6 +75,10 @@ __global__ void rasterize_to_pixels_3dgs_fwd_kernel(
     float px = (float)j + 0.5f;
     float py = (float)i + 0.5f;
     int32_t pix_id = i * image_width + j;
+    const int64_t pixels_per_image =
+        static_cast<int64_t>(image_height) * static_cast<int64_t>(image_width);
+    const int64_t global_pixel_id =
+        static_cast<int64_t>(image_id) * pixels_per_image + pix_id;
 
     // return if out of bounds
     // keep not rasterizing threads around for reading data
@@ -182,6 +191,20 @@ __global__ void rasterize_to_pixels_3dgs_fwd_kernel(
             }
             cur_idx = batch_start + t;
 
+            if (
+                track_pixel_gaussians && pixel_gaussians != nullptr
+                && pixel_gaussian_counter != nullptr
+                && vis > pixel_gaussian_threshold
+            ) {
+                int32_t write_idx = atomicAdd(pixel_gaussian_counter, 1);
+                if (write_idx < max_pixel_gaussians) {
+                    const int64_t offset = static_cast<int64_t>(write_idx) * 2;
+                    pixel_gaussians[offset] = g;
+                    pixel_gaussians[offset + 1] =
+                        static_cast<int32_t>(global_pixel_id);
+                }
+            }
+
             if (render_median != nullptr && median_ids != nullptr) {
                 // Median is defined as the depth of the Gaussian where the accumulated
                 // transmittance crosses 0.5 (non-differentiable selection).
@@ -240,7 +263,12 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
     at::Tensor alphas,  // [..., image_height, image_width]
     at::Tensor last_ids, // [..., image_height, image_width]
     at::optional<at::Tensor> render_median, // [..., image_height, image_width, 1]
-    at::optional<at::Tensor> median_ids     // [..., image_height, image_width]
+    at::optional<at::Tensor> median_ids,    // [..., image_height, image_width]
+    const bool track_pixel_gaussians,
+    const float pixel_gaussian_threshold,
+    const int64_t max_pixel_gaussians,
+    at::optional<at::Tensor> pixel_gaussians,
+    at::optional<at::Tensor> pixel_gaussian_counter
 ) {
     bool packed = means2d.dim() == 2;
 
@@ -297,10 +325,18 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
             alphas.data_ptr<float>(),
             render_median.has_value() ? render_median.value().data_ptr<float>()
                                       : nullptr,
-            last_ids.data_ptr<int32_t>()
-            ,
+            last_ids.data_ptr<int32_t>(),
             median_ids.has_value() ? median_ids.value().data_ptr<int32_t>()
-                                   : nullptr
+                                   : nullptr,
+            track_pixel_gaussians,
+            pixel_gaussian_threshold,
+            max_pixel_gaussians,
+            pixel_gaussians.has_value()
+                ? pixel_gaussians.value().data_ptr<int32_t>()
+                : nullptr,
+            pixel_gaussian_counter.has_value()
+                ? pixel_gaussian_counter.value().data_ptr<int32_t>()
+                : nullptr
         );
 }
 
@@ -324,7 +360,12 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
         at::Tensor alphas,                                                     \
         at::Tensor last_ids,                                                   \
         at::optional<at::Tensor> render_median,                                \
-        at::optional<at::Tensor> median_ids                                    \
+        at::optional<at::Tensor> median_ids,                                   \
+        const bool track_pixel_gaussians,                                      \
+        const float pixel_gaussian_threshold,                                  \
+        const int64_t max_pixel_gaussians,                                     \
+        at::optional<at::Tensor> pixel_gaussians,                              \
+        at::optional<at::Tensor> pixel_gaussian_counter                        \
     );
 
 __INS__(1)

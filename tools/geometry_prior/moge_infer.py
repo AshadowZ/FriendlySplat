@@ -827,5 +827,9 @@ def main() -> None:
     )
 
 
-if __name__ == "__main__":
+def entrypoint() -> None:
     main()
+
+
+if __name__ == "__main__":
+    entrypoint()
