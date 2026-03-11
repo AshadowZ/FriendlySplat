@@ -1,16 +1,22 @@
-# Nerfies
+# FriendlySplat
 
-This is the repository that contains source code for the [Nerfies website](https://nerfies.github.io).
+FriendlySplat is a user-friendly, open-source Gaussian Splatting toolkit.
+It integrates SOTA-style features into a unified platform for training, pruning,
+meshing, and segmentation experiments.
 
-If you find Nerfies useful for your work please cite:
-```
-@article{park2021nerfies
-  author    = {Park, Keunhong and Sinha, Utkarsh and Barron, Jonathan T. and Bouaziz, Sofien and Goldman, Dan B and Seitz, Steven M. and Martin-Brualla, Ricardo},
-  title     = {Nerfies: Deformable Neural Radiance Fields},
-  journal   = {ICCV},
-  year      = {2021},
-}
-```
+Project page:
+- https://ashadowz.github.io/friendlysplat/
 
-# Website License
-<a rel="license" href="http://creativecommons.org/licenses/by-sa/4.0/"><img alt="Creative Commons License" style="border-width:0" src="https://i.creativecommons.org/l/by-sa/4.0/88x31.png" /></a><br />This work is licensed under a <a rel="license" href="http://creativecommons.org/licenses/by-sa/4.0/">Creative Commons Attribution-ShareAlike 4.0 International License</a>.
+Core capabilities:
+- Fast 3DGS training workflows with configurable optimization and export steps
+- Geometry-aware supervision with optional depth, normal, sky, and mask priors
+- Live viewer support for metrics, rendering inspection, and camera frustums
+- Pruning-oriented experimentation in the same training stack
+- Mesh / splat export and checkpoint-based scene inspection
+
+Repository layout:
+- `main`: FriendlySplat source code, training pipeline, viewer, and tools
+- `gh-pages`: static project website assets
+
+This branch contains the website for FriendlySplat rather than the training code.
+If you are looking for the implementation, switch to the `main` branch.

@@ -7,7 +7,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>FriendlySplat</title>
 
-  <link href="https://fonts.googleapis.com/css?family=Google+Sans:400,500,700|Noto+Sans:400,500,700|Castoro:400,400i|Inter:400,500,700,800" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css?family=Inter:400,500,700,800" rel="stylesheet">
 
   <link rel="stylesheet" href="./static/css/bulma.min.css">
   <link rel="stylesheet" href="./static/css/fontawesome.all.min.css">
@@ -36,11 +36,10 @@
 
     <div id="mainNav" class="navbar-menu">
       <div class="navbar-end">
-        <a class="navbar-item" href="#why">Why</a>
         <a class="navbar-item" href="#framework">Framework</a>
         <a class="navbar-item" href="#features">Features</a>
-        <a class="navbar-item" href="#gallery">Results</a>
-        <a class="navbar-item" href="#acknowledgements">Credits</a>
+        <a class="navbar-item" href="#gallery">Gallery</a>
+        <a class="navbar-item" href="#acknowledgements">Acknowledgements</a>
         <a class="navbar-item nav-cta" href="https://github.com/AshadowZ/FriendlySplat">
           <span class="icon"><i class="fab fa-github"></i></span>
           <span>Try it now</span>
@@ -83,146 +82,102 @@
   </div>
 </section>
 
-<section class="section band-section" id="why">
-  <div class="container is-max-desktop">
-    <div class="section-heading">
-      <p class="eyebrow">Why FriendlySplat</p>
-      <h2 class="title is-2">Built for the parts of 3DGS research that usually stay fragmented</h2>
-      <p class="section-copy">
-        FriendlySplat is organized around short experiment cycles: get a scene training quickly,
-        attach geometry priors, inspect what the optimizer is doing, and evaluate pruning or segmentation ideas
-        without rebuilding the whole stack each time.
-      </p>
-    </div>
+<section class="section section-surface-white" id="framework">
+  <div class="container is-max-desktop framework-container">
+    <div class="framework-panel">
+      <div class="framework-heading">
+        <h3 class="framework-title">Framework</h3>
+      </div>
 
-    <div class="columns is-multiline why-grid">
-      <div class="column is-6-tablet is-3-desktop">
-        <article class="mini-panel">
-          <span class="panel-icon"><i class="fas fa-bolt"></i></span>
-          <h3>Faster iteration</h3>
-          <p>Designed for short turnaround runs so scene fitting and ablations are easier to repeat.</p>
-        </article>
-      </div>
-      <div class="column is-6-tablet is-3-desktop">
-        <article class="mini-panel">
-          <span class="panel-icon"><i class="fas fa-draw-polygon"></i></span>
-          <h3>Better geometry</h3>
-          <p>Supports geometry-aware constraints so training is not limited to pure photometric fitting.</p>
-        </article>
-      </div>
-      <div class="column is-6-tablet is-3-desktop">
-        <article class="mini-panel">
-          <span class="panel-icon"><i class="fas fa-chart-line"></i></span>
-          <h3>Clearer monitoring</h3>
-          <p>Live metrics, camera frustums, and viewer feedback make failures easier to diagnose.</p>
-        </article>
-      </div>
-      <div class="column is-6-tablet is-3-desktop">
-        <article class="mini-panel">
-          <span class="panel-icon"><i class="fas fa-filter"></i></span>
-          <h3>Research on sparsity</h3>
-          <p>Pruning, compression, and segmentation experiments fit into the same training loop.</p>
-        </article>
+      <p class="framework-copy framework-abstract-text">
+        FriendlySplat is designed as a modular 3DGS training loop: it parses a scene, initializes Gaussians, renders and optimizes them, and supports optional modules for geometry priors, post-processing, pruning, pose refinement, and runtime inspection. The same pipeline also supports checkpointing, splat export, evaluation, and downstream geometry workflows.
+      </p>
+
+      <div class="framework-figure-shell">
+        <img class="framework-figure" src="./static/images/framework_cleanup.svg" alt="FriendlySplat framework diagram">
       </div>
     </div>
   </div>
 </section>
 
-<section class="section" id="framework">
-  <div class="container is-max-desktop">
+<section class="section section-surface-tint" id="features">
+  <div class="container is-max-desktop features-container">
     <div class="section-heading">
-      <p class="eyebrow">Training Framework</p>
-      <h2 class="title is-2">A simple pipeline with room for optional modules</h2>
-      <p class="section-copy">
-        The framework is meant to stay readable: feed in multi-view observations and optional priors,
-        optimize a Gaussian scene with interchangeable training-time components, and emit assets that are useful
-        beyond a final render.
-      </p>
+      <p class="eyebrow">Features</p>
     </div>
 
-    <div class="framework-shell">
-      <div class="framework-step">
-        <span class="step-tag">Input</span>
-        <h3>Images, masks, and geometry hints</h3>
-        <p>Multi-view RGB observations can be paired with segmentation masks or geometry priors before optimization begins.</p>
+    <div class="applications-carousel feature-carousel">
+      <div class="carousel-container feature-carousel-container">
+        <button class="carousel-btn feature-nav prev" type="button" aria-label="Previous feature">
+          <i class="fas fa-chevron-left"></i>
+        </button>
+        <div class="carousel-content feature-stage">
+          <article class="application-slide feature-slide is-active">
+            <div class="application-video feature-media-shell">
+              <div class="ability-media-placeholder" aria-label="Placeholder for feature demo video">
+                <span>Demo video placeholder</span>
+              </div>
+            </div>
+            <div class="application-info feature-info">
+              <h3><strong>Geometry Supervision + Mesh Extraction</strong></h3>
+              <p>FriendlySplat leverages depth and normal priors from models like Moge and Pi3 as weak supervision, enabling robust convergence even in textureless regions. It also supports TSDF-style mesh extraction.</p>
+            </div>
+          </article>
+
+          <article class="application-slide feature-slide">
+            <div class="application-video feature-media-shell">
+              <div class="ability-media-placeholder" aria-label="Placeholder for feature demo video">
+                <span>Demo video placeholder</span>
+              </div>
+            </div>
+            <div class="application-info feature-info">
+              <h3><strong>Live Viewer with Charts and Camera Frustums</strong></h3>
+              <p>A real-time viewer visualizes training metrics, rendering states, and camera frustums, enabling early diagnostics and instant progress tracking without waiting.</p>
+            </div>
+          </article>
+
+          <article class="application-slide feature-slide">
+            <div class="application-video feature-media-shell">
+              <div class="ability-media-placeholder" aria-label="Placeholder for feature demo video">
+                <span>Demo video placeholder</span>
+              </div>
+            </div>
+            <div class="application-info feature-info">
+              <h3><strong>High-Ratio Pruning Support</strong></h3>
+              <p>FriendlySplat integrates both hard pruning (PUP-GS) and soft pruning (GNS) algorithms, supporting aggressive, high-ratio pruning to achieve significant model compression.</p>
+            </div>
+          </article>
+
+          <article class="application-slide feature-slide">
+            <div class="application-video feature-media-shell">
+              <div class="ability-media-placeholder" aria-label="Placeholder for feature demo video">
+                <span>Demo video placeholder</span>
+              </div>
+            </div>
+            <div class="application-info feature-info">
+              <h3><strong>MaskClustering-Style 2D-to-3D Lift</strong></h3>
+              <p>Lifts 2D masks into consistent 3D structures via Instascene/MaskClustering, providing coarse segmentations and 3D bboxes for downstream tasks.</p>
+            </div>
+          </article>
+        </div>
+        <button class="carousel-btn feature-nav next" type="button" aria-label="Next feature">
+          <i class="fas fa-chevron-right"></i>
+        </button>
       </div>
-      <div class="framework-arrow"><i class="fas fa-long-arrow-alt-right"></i></div>
-      <div class="framework-step">
-        <span class="step-tag">Train</span>
-        <h3>Base 3DGS with pluggable modules</h3>
-        <p>Regularizers, pruning policies, and viewer hooks can be added without changing the overall workflow.</p>
-      </div>
-      <div class="framework-arrow"><i class="fas fa-long-arrow-alt-right"></i></div>
-      <div class="framework-step">
-        <span class="step-tag">Output</span>
-        <h3>Renders, meshes, metrics, and inspection tools</h3>
-        <p>The same run can produce visual results, extracted geometry, real-time statistics, and debugging views.</p>
+      <div class="carousel-indicators feature-indicators" aria-label="Feature navigation">
+        <button class="feature-indicator is-active" type="button" aria-label="Go to feature 1"></button>
+        <button class="feature-indicator" type="button" aria-label="Go to feature 2"></button>
+        <button class="feature-indicator" type="button" aria-label="Go to feature 3"></button>
+        <button class="feature-indicator" type="button" aria-label="Go to feature 4"></button>
       </div>
     </div>
   </div>
 </section>
 
-<section class="section" id="features">
+<section class="section gallery-section section-surface-white" id="gallery">
   <div class="container is-max-desktop">
     <div class="section-heading">
-      <p class="eyebrow">Core Features</p>
-      <h2 class="title is-2">User-facing capabilities, not just internal modules</h2>
-    </div>
-
-    <div class="columns is-multiline feature-grid">
-      <div class="column is-6-tablet is-4-desktop">
-        <article class="feature-card">
-          <span class="feature-icon"><i class="fas fa-mountain"></i></span>
-          <h3>Geometry-Aware Regularization</h3>
-          <p class="feature-value">Encourages reconstructions that respect scene structure instead of only chasing image loss.</p>
-          <p class="feature-detail">Useful when you want mesh quality and geometry consistency to matter during training.</p>
-        </article>
-      </div>
-      <div class="column is-6-tablet is-4-desktop">
-        <article class="feature-card">
-          <span class="feature-icon"><i class="fas fa-stopwatch"></i></span>
-          <h3>Fast Scene Training</h3>
-          <p class="feature-value">Targets short experiment loops so scene-scale iterations stay practical.</p>
-          <p class="feature-detail">Good for rapid ablations, lightweight settings, and quick sanity checks.</p>
-        </article>
-      </div>
-      <div class="column is-6-tablet is-4-desktop">
-        <article class="feature-card">
-          <span class="feature-icon"><i class="fas fa-satellite-dish"></i></span>
-          <h3>Live Viewer and Metrics</h3>
-          <p class="feature-value">Monitor curves, camera frustums, and scene state while training is still running.</p>
-          <p class="feature-detail">Makes it easier to spot unstable runs before wasting a full experiment cycle.</p>
-        </article>
-      </div>
-      <div class="column is-6-tablet is-6-desktop">
-        <article class="feature-card">
-          <span class="feature-icon"><i class="fas fa-cut"></i></span>
-          <h3>Pluggable Pruning Strategies</h3>
-          <p class="feature-value">Swap in different pruning ideas to study sparsity, quality retention, and compression tradeoffs.</p>
-          <p class="feature-detail">The framework is positioned as a practical place to benchmark pruning research.</p>
-        </article>
-      </div>
-      <div class="column is-6-tablet is-6-desktop">
-        <article class="feature-card">
-          <span class="feature-icon"><i class="fas fa-cubes"></i></span>
-          <h3>Mesh Extraction Pipeline</h3>
-          <p class="feature-value">Turn trained splats into geometry artifacts that are easier to inspect and evaluate.</p>
-          <p class="feature-detail">Pairs well with geometry priors when you want a scene representation beyond render-only output.</p>
-        </article>
-      </div>
-    </div>
-  </div>
-</section>
-
-<section class="section gallery-section" id="gallery">
-  <div class="container is-max-desktop">
-    <div class="section-heading">
-      <p class="eyebrow">Gallery / Results</p>
-      <h2 class="title is-2">Demo slots for the scenes you want people to remember</h2>
-      <p class="section-copy">
-        This section is arranged for repository-specific results. The current assets are placeholders from the template directory,
-        so you can replace each clip and caption with actual FriendlySplat outputs as you curate them.
-      </p>
+      <p class="eyebrow">Gallery</p>
     </div>
 
     <div class="columns is-multiline gallery-grid">
@@ -270,42 +225,15 @@
   </div>
 </section>
 
-<section class="section" id="acknowledgements">
+<section class="section section-surface-tint" id="acknowledgements">
   <div class="container is-max-desktop">
     <div class="section-heading">
       <p class="eyebrow">Acknowledgements</p>
-      <h2 class="title is-2">Direct influences and tooling that made the project practical</h2>
     </div>
 
     <div class="ack-shell">
-      <div class="ack-primary">
-        <h3>Primary thanks</h3>
-        <p>
-          FriendlySplat builds on the broader Gaussian Splatting ecosystem and benefits from tools and ideas around
-          rasterization, online visualization, and project-page design.
-        </p>
-        <div class="tag-cloud">
-          <span>gsplat</span>
-          <span>nerfview</span>
-          <span>viser</span>
-          <span>PyTorch</span>
-          <span>Open3D</span>
-          <span>Nerfies website template</span>
-        </div>
-      </div>
-
-      <div class="ack-secondary">
-        <h3>Suggested credits to keep</h3>
-        <ul>
-          <li>Code and rasterization foundations</li>
-          <li>Viewer and visualization tooling</li>
-          <li>Geometry processing and mesh utilities</li>
-          <li>Datasets, benchmarks, and scene assets you actually use</li>
-        </ul>
-        <p class="ack-note">
-          Replace this section with the exact papers, repos, and collaborators you want to acknowledge once the final project scope is fixed.
-        </p>
-      </div>
+      <div class="ack-primary"></div>
+      <div class="ack-secondary"></div>
     </div>
   </div>
 </section>
@@ -313,12 +241,10 @@
 <footer class="footer site-footer">
   <div class="container">
     <div class="content has-text-centered">
-      <p>FriendlySplat project page. Replace placeholder media and links with final project assets before wider sharing.</p>
-      <div class="footer-links">
-        <a href="https://github.com/AshadowZ/FriendlySplat">GitHub</a>
-        <a href="#gallery">Results</a>
-        <a href="#acknowledgements">Credits</a>
-      </div>
+      <p>
+        We thank the authors of <a href="https://github.com/nerfies/nerfies.github.io">Nerfies</a> who kindly open sourced the template of this website,
+        which is located <a href="https://github.com/nerfies/nerfies.github.io">here</a>.
+      </p>
     </div>
   </div>
 </footer>
