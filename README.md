@@ -172,6 +172,14 @@ For pruning-related ideas and code references, we thank
 [GaussianSpa](https://github.com/noodle-lab/GaussianSpa), and
 [LightGaussian](https://github.com/VITA-Group/LightGaussian).
 
+We also thank [PGSR](https://github.com/zju3dv/PGSR),
+[2DGS](https://github.com/hbb1/2d-gaussian-splatting),
+[GGGS](https://github.com/HKUST-SAIL/Geometry-Grounded-Gaussian-Splatting),
+[dn-splatter](https://github.com/maturk/dn-splatter),
+[mvsanywhere](https://github.com/nianticlabs/mvsanywhere), and
+[2DGS++](https://github.com/hugoycj/2d-gaussian-splatting-great-again) for their
+explorations of geometry regularization and high-quality code releases.
+
 We further thank [CityGaussian](https://github.com/Linketic/CityGaussian) for valuable
 code references on urban-scale scene reconstruction, and
 [InstaScene](https://zju3dv.github.io/instascene/) together with
