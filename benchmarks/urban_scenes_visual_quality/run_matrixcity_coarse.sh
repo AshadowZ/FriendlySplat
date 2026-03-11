@@ -82,7 +82,7 @@ if [[ "${FORCE_TRAIN}" != "1" && -f "${FINAL_CKPT}" ]]; then
   exit 0
 fi
 
-python friendly_splat/trainer.py \
+fs-train \
   --io.data-dir "${DATA_DIR}" \
   --io.result-dir "${RESULT_DIR}" \
   --io.device "${DEVICE}" \

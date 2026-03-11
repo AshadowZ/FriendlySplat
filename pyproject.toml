@@ -1,0 +1,70 @@
+[build-system]
+requires = ["setuptools>=61", "wheel", "torch", "ninja"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "friendly-splat"
+version = "0.1.0"
+description = "User-friendly Gaussian Splatting toolkit"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "FriendlySplat Authors" }]
+dependencies = [
+  "numpy<2",
+  "torch",
+  "tyro>=0.8.8",
+  "PyYAML",
+  "tensorboard",
+  "tqdm",
+  "scikit-learn",
+  "torchmetrics",
+  "imageio",
+  "opencv-python",
+]
+
+[project.optional-dependencies]
+train = [
+  "fused-ssim @ git+https://github.com/rahul-goel/fused-ssim@328dc9836f513d00c4b5bc38fe30478b4435cbb5",
+  "fused-bilagrid @ git+https://github.com/harry7557558/fused-bilagrid@49f0ef06c9f81810fb9b5dd9027cf1844950cc16",
+]
+viewer = [
+  "viser",
+  "matplotlib",
+  "splines",
+  "nerfview @ git+https://github.com/nerfstudio-project/nerfview@4538024fe0d15fd1a0e4d760f3695fc44ca72787",
+]
+mesh = [
+  "open3d==0.18.0",
+  "scikit-image",
+  "scipy",
+]
+segment = [
+  "networkx",
+]
+sfm = [
+  "tqdm",
+]
+priors = [
+  "open3d==0.18.0",
+  "scipy",
+]
+dev = [
+  "pytest",
+  "ruff",
+]
+
+[project.scripts]
+fs-train = "friendly_splat.train_app:main"
+fs-view = "friendly_splat.view_app:entrypoint"
+fs-sfm = "tools.sfm.run_hloc_sfm:entrypoint"
+fs-mesh = "tools.mesh.tsdf_mesh_from_ply:entrypoint"
+fs-segment = "tools.segment.instascene_gauscluster:entrypoint"
+fs-prior-moge = "tools.geometry_prior.moge_infer:entrypoint"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["friendly_splat*", "gsplat*", "tools*"]
+exclude = ["benchmarks*", "tests*"]

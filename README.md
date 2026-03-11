@@ -11,20 +11,26 @@ features into a unified platform for training, pruning, meshing and segmentation
 
 ## Installation
 
-This repo builds the local `gsplat` CUDA extension and installs the extra Python dependencies used
-by FriendlySplat.
+This repo builds the local `gsplat` CUDA extension and installs the FriendlySplat package.
 
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/AshadowZ/FriendlySplat.git
 cd FriendlySplat
 
-pip install -r friendly_splat/requirements.txt
-pip install -e .
+pip install -e ".[train,viewer]" --no-build-isolation
+```
+
+Or install with the full optional toolchain:
+
+```bash
+pip install -e ".[train,viewer,mesh,segment,sfm,priors]" --no-build-isolation
 ```
 
 Notes:
 
 - A CUDA-enabled PyTorch environment is expected for normal training.
+- `--no-build-isolation` is recommended so the local `gsplat` extension reuses the current environment's
+  PyTorch/CUDA toolchain instead of creating a separate build env.
 - `setup.py` builds the local `gsplat` extension in this repo.
 - Some optional tools under `tools/` and `benchmarks/` have extra dependencies; check the README in
   each subfolder if you use them.
@@ -34,7 +40,7 @@ Notes:
 Train on a COLMAP scene:
 
 ```bash
-python3 friendly_splat/trainer.py \
+fs-train \
   --io.data-dir /path/to/scene \
   --io.result-dir results/scene \
   --io.device cuda \
@@ -45,7 +51,7 @@ python3 friendly_splat/trainer.py \
 Open the viewer on the latest checkpoint or PLY in a result directory:
 
 ```bash
-python3 friendly_splat/viewer.py \
+fs-view \
   --result-dir results/scene \
   --device cuda \
   --port 8080
@@ -62,8 +68,12 @@ Common knobs live in [`friendly_splat/trainer/configs.py`](friendly_splat/traine
 
 ## Useful Entry Points
 
-- Training: `python3 friendly_splat/trainer.py ...`
-- Viewer: `python3 friendly_splat/viewer.py ...`
+- Training: `fs-train ...`
+- Viewer: `fs-view ...`
+- SfM preprocessing: `fs-sfm ...`
+- TSDF meshing: `fs-mesh ...`
+- Instance clustering: `fs-segment ...`
+- MoGe prior generation: `fs-prior-moge ...`
 - Strategy benchmark training: `python3 benchmarks/strategies_visual_quality/run_train_batch.py ...`
 - Strategy benchmark evaluation: `python3 benchmarks/strategies_visual_quality/run_eval_batch.py ...`
 - Pruning benchmark training: `python3 benchmarks/pruning_visual_quality/run_train_batch.py ...`

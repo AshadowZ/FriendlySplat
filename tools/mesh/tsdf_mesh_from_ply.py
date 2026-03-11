@@ -1045,5 +1045,9 @@ def main() -> None:
             print(f"[cache] deleted cache dir: {cache_dir}", flush=True)
 
 
-if __name__ == "__main__":
+def entrypoint() -> None:
     main()
+
+
+if __name__ == "__main__":
+    entrypoint()
