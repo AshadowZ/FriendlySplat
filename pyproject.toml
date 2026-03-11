@@ -44,6 +44,8 @@ mesh = [
 ]
 segment = [
   "networkx",
+  "open3d==0.18.0",
+  "scipy",
 ]
 sfm = [
   "tqdm",

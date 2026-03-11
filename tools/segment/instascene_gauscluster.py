@@ -38,6 +38,15 @@ class ResolvedContext:
     align_world_axes: bool
 
 
+DEFAULT_RESULT_SOURCE = "ckpt"
+DEFAULT_TEST_EVERY = 8
+DEFAULT_RADIUS_CLIP = 3.0
+DEFAULT_PIXEL_GAUSSIAN_THRESHOLD = 0.25
+DEFAULT_MAX_GAUSSIANS_PER_PIXEL = 100
+DEFAULT_OVERLAP_RATIO = 0.8
+DEFAULT_UNDERSEGMENT_THRESHOLD = 0.8
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Instance clustering for FriendlySplat Gaussian scenes.",
@@ -62,12 +71,6 @@ def parse_args() -> argparse.Namespace:
         nargs="+",
         default=None,
         help="One or more uncompressed splat PLY paths.",
-    )
-    parser.add_argument(
-        "--prefer-source",
-        choices=("ckpt", "ply"),
-        default="ckpt",
-        help="When --result-dir is used, prefer this source type first.",
     )
     parser.add_argument(
         "--step",
@@ -106,17 +109,6 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--test-every",
-        type=int,
-        default=8,
-        help="Same train/test split period as FriendlySplat training.",
-    )
-    parser.add_argument(
-        "--benchmark-train-split",
-        action="store_true",
-        help="Use benchmark train split behavior from FriendlySplat.",
-    )
-    parser.add_argument(
         "--split",
         choices=("train", "test", "all"),
         default="train",
@@ -135,24 +127,6 @@ def parse_args() -> argparse.Namespace:
         help="Device for rasterization, e.g. cuda or cpu.",
     )
     parser.add_argument(
-        "--radius-clip",
-        type=float,
-        default=3.0,
-        help="Radius clip passed to gsplat rasterization while building correspondences.",
-    )
-    parser.add_argument(
-        "--pixel-gaussian-threshold",
-        type=float,
-        default=0.25,
-        help="Per-pixel Gaussian contribution threshold for correspondence tracking.",
-    )
-    parser.add_argument(
-        "--max-gaussians-per-pixel",
-        type=int,
-        default=100,
-        help="Maximum stored Gaussian ids per pixel while tracking correspondences.",
-    )
-    parser.add_argument(
         "--point-filter-threshold",
         type=float,
         default=0.5,
@@ -169,18 +143,6 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=4,
         help="DBSCAN min_points for 3D point clustering.",
-    )
-    parser.add_argument(
-        "--overlap-ratio",
-        type=float,
-        default=0.8,
-        help="Overlap threshold used when removing duplicate objects.",
-    )
-    parser.add_argument(
-        "--undersegment-threshold",
-        type=float,
-        default=0.8,
-        help="Threshold used when assigning under-segmented masks back to instances.",
     )
     parser.add_argument(
         "--use-gpu-dbscan",
@@ -280,7 +242,7 @@ def resolve_context(args: argparse.Namespace) -> ResolvedContext:
         result_cfg = _load_result_cfg(result_dir)
         source_kind, source_paths = _find_result_source(
             result_dir=result_dir,
-            prefer_source=str(args.prefer_source),
+            prefer_source=DEFAULT_RESULT_SOURCE,
             step=args.step,
         )
         if data_dir is None:
@@ -561,7 +523,17 @@ def main() -> None:
 
     if args.use_gpu_dbscan and not HAS_CUML:
         raise RuntimeError(
-            "Detected --use-gpu-dbscan but cuML is missing; install cuML or remove the flag."
+            "Detected --use-gpu-dbscan but cuML/CuPy is missing. "
+            "Install the optional GPU DBSCAN dependencies described in tools/segment/README.md "
+            "or remove the flag."
+        )
+
+    if not HAS_CUML:
+        print(
+            "[warning] cuML/CuPy is not installed; post-processing will use CPU DBSCAN. "
+            "If DBSCAN becomes slow on large scenes, see tools/segment/README.md for optional "
+            "GPU DBSCAN installation instructions.",
+            flush=True,
         )
 
     if str(args.device).startswith("cuda") and not torch.cuda.is_available():
@@ -580,8 +552,8 @@ def main() -> None:
         factor=float(args.data_factor),
         normalize_world_space=context.normalize_world_space,
         align_world_axes=context.align_world_axes,
-        test_every=int(args.test_every),
-        benchmark_train_split=bool(args.benchmark_train_split),
+        test_every=int(DEFAULT_TEST_EVERY),
+        benchmark_train_split=False,
     )
     mask_dir = discover_mask_dir(context.data_dir, args.mask_dir_name)
     view_data = collect_view_data(dataparser, args.split, mask_dir)
@@ -610,9 +582,9 @@ def main() -> None:
         sh_degree=sh_degree,
         view_data=view_data,
         device=device,
-        radius_clip=float(args.radius_clip),
-        pixel_gaussian_threshold=float(args.pixel_gaussian_threshold),
-        max_gaussians_per_pixel=int(args.max_gaussians_per_pixel),
+        radius_clip=float(DEFAULT_RADIUS_CLIP),
+        pixel_gaussian_threshold=float(DEFAULT_PIXEL_GAUSSIAN_THRESHOLD),
+        max_gaussians_per_pixel=int(DEFAULT_MAX_GAUSSIANS_PER_PIXEL),
     )
     total_masks = len(tracker["global_frame_mask_list"])
     total_points_hit = int(tracker["gaussian_in_frame_matrix"].sum())
@@ -636,7 +608,7 @@ def main() -> None:
         point_filter_threshold=float(args.point_filter_threshold),
         dbscan_eps=float(args.dbscan_eps),
         dbscan_min_points=int(args.dbscan_min_points),
-        overlap_ratio=float(args.overlap_ratio),
+        overlap_ratio=float(DEFAULT_OVERLAP_RATIO),
         use_gpu_dbscan=bool(args.use_gpu_dbscan),
     )
     print("Post-processing completed.")
@@ -647,7 +619,7 @@ def main() -> None:
     print("\nStarting under-segmented mask repair (Stage 4)...")
     clustering_result = remedy_undersegment(
         clustering_result,
-        threshold=float(args.undersegment_threshold),
+        threshold=float(DEFAULT_UNDERSEGMENT_THRESHOLD),
     )
     print("Repair completed.")
     print(f"Final instance count: {len(clustering_result['total_point_ids_list'])}")
