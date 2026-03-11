@@ -44,7 +44,7 @@ modify, FriendlySplat is a good place to start.
 ## 📝 To-Do List
 
 ☐ Improve the `Examples` section.<br>
-☐ Better organize the already integrated features and the features still planned.<br>
+☐ Clearly list the features that are already integrated and the features planned for future integration.<br>
 ☐ Build proper docs to replace the current collection of README files.
 
 ## 📦 Installation
@@ -87,12 +87,12 @@ pip install -e ".[train,viewer,mesh,segment,sfm,priors]" --no-build-isolation
 
 Notes:
 
-- A CUDA-enabled PyTorch environment is expected for normal training.
 - `uv pip` is usually faster than plain `pip`.
 - `--no-build-isolation` lets the local `gsplat` CUDA kernel reuse your current
   PyTorch/CUDA toolchain.
-- Some tools still have extra dependencies; check the README in each subfolder if needed.
-- The `sfm` extra does not fully install HLOC by itself; see [tools/sfm/README.md](tools/sfm/README.md).
+- Some tools still have extra dependencies; in particular, the `sfm` extra does not
+  fully install HLOC by itself, so check the README in each subfolder when needed,
+  especially [tools/sfm/README.md](tools/sfm/README.md).
 
 ## 🗂️ Expected Dataset Layout
 
