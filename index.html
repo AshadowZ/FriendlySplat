@@ -184,48 +184,15 @@
       <p class="eyebrow">Gallery</p>
     </div>
 
-    <div class="columns is-multiline gallery-grid">
-      <div class="column is-6-tablet">
-        <article class="gallery-card">
-          <div class="gallery-placeholder" aria-label="Placeholder for future demo video"></div>
-          <div class="gallery-copy">
-            <h3>Demo Slot 01</h3>
-            <p>Use this card for a scene that best demonstrates fast convergence and clean reconstruction.</p>
-            <span>Example metrics: training time, FPS, point count</span>
-          </div>
-        </article>
+    <article class="gallery-under-construction">
+      <div class="gallery-under-construction-art" aria-hidden="true">
+        <i class="fas fa-tools"></i>
       </div>
-      <div class="column is-6-tablet">
-        <article class="gallery-card">
-          <div class="gallery-placeholder" aria-label="Placeholder for future demo video"></div>
-          <div class="gallery-copy">
-            <h3>Demo Slot 02</h3>
-            <p>Good place for a geometry-aware run where mesh extraction or regularization matters.</p>
-            <span>Example metrics: Chamfer, mesh completeness, PSNR</span>
-          </div>
-        </article>
+      <div class="gallery-under-construction-copy">
+        <h3>Gallery Under Construction</h3>
+        <p>The author has been cutting too many videos recently. This gallery will be filled in when the urge to open the editing software strikes again.</p>
       </div>
-      <div class="column is-6-tablet">
-        <article class="gallery-card">
-          <div class="gallery-placeholder" aria-label="Placeholder for future demo video"></div>
-          <div class="gallery-copy">
-            <h3>Demo Slot 03</h3>
-            <p>Use a clip that highlights viewer-assisted debugging, monitoring, or camera inspection.</p>
-            <span>Example metrics: live loss curves, camera overlays, timing stats</span>
-          </div>
-        </article>
-      </div>
-      <div class="column is-6-tablet">
-        <article class="gallery-card">
-          <div class="gallery-placeholder" aria-label="Placeholder for future demo video"></div>
-          <div class="gallery-copy">
-            <h3>Demo Slot 04</h3>
-            <p>Reserve one result for pruning or sparsity ablations with a short, concrete takeaway.</p>
-            <span>Example metrics: retained quality, prune ratio, model size</span>
-          </div>
-        </article>
-      </div>
-    </div>
+    </article>
   </div>
 </section>
 
@@ -236,8 +203,48 @@
     </div>
 
     <div class="ack-shell">
-      <div class="ack-primary"></div>
-      <div class="ack-secondary"></div>
+      <div class="ack-primary">
+        <p>
+          FriendlySplat is built with substantial help from the broader Gaussian Splatting community.
+          We first thank
+          <a href="https://github.com/graphdeco-inria/gaussian-splatting">gaussian-splatting</a>
+          and
+          <a href="https://github.com/nerfstudio-project/gsplat">gsplat</a>
+          for efficient CUDA kernels and strong feature integration.
+        </p>
+        <p>
+          We also thank
+          <a href="https://github.com/XiaoBin2001/Improved-GS">Improved-GS</a>,
+          <a href="https://github.com/TY424/AbsGS">AbsGS</a>,
+          <a href="https://github.com/humansensinglab/taming-3dgs">taming-3dgs</a>,
+          <a href="https://github.com/ubc-vision/3dgs-mcmc">3dgs-mcmc</a>,
+          and
+          <a href="https://github.com/fatPeter/mini-splatting">mini-splatting</a>
+          for high-quality densification implementations and references.
+        </p>
+        <p>
+          For pruning-related ideas and code references, we thank
+          <a href="https://github.com/XiaoBin2001/GNS">GNS</a>,
+          <a href="https://github.com/j-alex-hanson/speedy-splat">speedy-splat</a>,
+          <a href="https://github.com/noodle-lab/GaussianSpa">GaussianSpa</a>,
+          and
+          <a href="https://github.com/VITA-Group/LightGaussian">LightGaussian</a>.
+        </p>
+        <p>
+          We further thank
+          <a href="https://github.com/Linketic/CityGaussian">CityGaussian</a>
+          for valuable code references on urban-scale scene reconstruction, and
+          <a href="https://zju3dv.github.io/instascene/">InstaScene</a>
+          together with
+          <a href="https://github.com/PKU-EPIC/MaskClustering">MaskClustering</a>
+          for 2D-to-3D lifting references.
+        </p>
+        <p>
+          Finally, special thanks to
+          <a href="https://github.com/XiaoBin2001">XiaoBin2001</a>
+          for helpful suggestions throughout development.
+        </p>
+      </div>
     </div>
   </div>
 </section>
