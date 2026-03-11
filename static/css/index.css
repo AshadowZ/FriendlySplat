@@ -438,24 +438,33 @@ a {
 
 .feature-slide {
   display: none;
-  overflow: hidden;
   border: 1px solid rgba(19, 34, 56, 0.08);
   border-radius: 1.25rem;
   background: rgba(255, 255, 255, 0.9);
   box-shadow: 0 18px 40px rgba(15, 33, 64, 0.06);
+  padding: 2rem;
 }
 
 .feature-slide.is-active {
   display: block;
 }
 
+.feature-media-shell {
+  position: relative;
+  padding-bottom: 56.25%;
+  height: 0;
+  overflow: hidden;
+  border-radius: 15px;
+  margin-bottom: 1.8rem;
+  background: #ffffff;
+}
+
 .ability-media-placeholder {
   display: flex;
   align-items: center;
   justify-content: center;
-  aspect-ratio: 16 / 9;
-  width: 100%;
-  border-bottom: 1px solid rgba(19, 34, 56, 0.08);
+  position: absolute;
+  inset: 0;
   background:
     linear-gradient(135deg, rgba(18, 70, 181, 0.08), rgba(22, 160, 133, 0.08)),
     repeating-linear-gradient(
@@ -473,14 +482,16 @@ a {
 }
 
 .feature-demo-video {
-  display: block;
+  position: absolute;
+  inset: 0;
   width: 100%;
-  height: auto;
-  background: #0b1220;
+  height: 100%;
+  object-fit: contain;
+  background: #ffffff;
 }
 
 .feature-info {
-  padding: 1.35rem 1.35rem 1.45rem;
+  padding: 0;
 }
 
 .feature-info h3 {
@@ -566,6 +577,57 @@ a {
   overflow: hidden;
 }
 
+.gallery-under-construction {
+  display: grid;
+  place-items: center;
+  gap: 1.4rem;
+  min-height: 360px;
+  padding: 2.4rem;
+  border: 1px solid rgba(19, 34, 56, 0.08);
+  border-radius: 1.25rem;
+  background:
+    linear-gradient(135deg, rgba(18, 70, 181, 0.04), rgba(22, 160, 133, 0.05)),
+    repeating-linear-gradient(
+      -45deg,
+      rgba(19, 34, 56, 0.03),
+      rgba(19, 34, 56, 0.03) 18px,
+      rgba(255, 255, 255, 0.55) 18px,
+      rgba(255, 255, 255, 0.55) 36px
+    );
+  box-shadow: 0 18px 40px rgba(15, 33, 64, 0.06);
+  text-align: center;
+}
+
+.gallery-under-construction-art {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 5.5rem;
+  height: 5.5rem;
+  border-radius: 1.4rem;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 12px 30px rgba(15, 33, 64, 0.08);
+  color: #f59e0b;
+  font-size: 2rem;
+}
+
+.gallery-under-construction-copy {
+  max-width: 48rem;
+}
+
+.gallery-under-construction-copy h3 {
+  margin-bottom: 0.65rem;
+  color: #0f2140;
+  font-family: 'Inter', sans-serif;
+  font-size: 1.35rem;
+}
+
+.gallery-under-construction-copy p {
+  color: #5a6f88;
+  font-size: 1.02rem;
+  line-height: 1.8;
+}
+
 .gallery-copy {
   padding: 1.2rem 1.25rem 1.35rem;
 }
@@ -580,8 +642,7 @@ a {
 
 .ack-shell {
   display: grid;
-  grid-template-columns: 1.15fr 0.85fr;
-  gap: 1rem;
+  grid-template-columns: 1fr;
 }
 
 .ack-primary,
