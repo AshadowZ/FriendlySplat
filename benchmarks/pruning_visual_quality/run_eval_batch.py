@@ -23,6 +23,10 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from friendly_splat.utils.gaussian_transforms import (
+    apply_similarity_transform_to_splats_inplace,
+)
+
 
 _SCENES_360V2: tuple[str, ...] = (
     "bicycle",
@@ -293,100 +297,6 @@ def _read_train_time_s(scene_out_dir: Path) -> Optional[float]:
     return None
 
 
-def _rotmat_to_quat_wxyz(rot: torch.Tensor) -> torch.Tensor:
-    """Convert a single 3x3 rotation matrix to a wxyz quaternion."""
-    r = rot.detach().cpu().double()
-    t = float(r[0, 0] + r[1, 1] + r[2, 2])
-    if t > 0.0:
-        s = torch.sqrt(torch.tensor(t + 1.0)).item() * 2.0
-        w = 0.25 * s
-        x = float(r[2, 1] - r[1, 2]) / s
-        y = float(r[0, 2] - r[2, 0]) / s
-        z = float(r[1, 0] - r[0, 1]) / s
-    elif float(r[0, 0]) > float(r[1, 1]) and float(r[0, 0]) > float(r[2, 2]):
-        s = (
-            torch.sqrt(
-                torch.tensor(1.0 + float(r[0, 0]) - float(r[1, 1]) - float(r[2, 2]))
-            ).item()
-            * 2.0
-        )
-        w = float(r[2, 1] - r[1, 2]) / s
-        x = 0.25 * s
-        y = float(r[0, 1] + r[1, 0]) / s
-        z = float(r[0, 2] + r[2, 0]) / s
-    elif float(r[1, 1]) > float(r[2, 2]):
-        s = (
-            torch.sqrt(
-                torch.tensor(1.0 + float(r[1, 1]) - float(r[0, 0]) - float(r[2, 2]))
-            ).item()
-            * 2.0
-        )
-        w = float(r[0, 2] - r[2, 0]) / s
-        x = float(r[0, 1] + r[1, 0]) / s
-        y = 0.25 * s
-        z = float(r[1, 2] + r[2, 1]) / s
-    else:
-        s = (
-            torch.sqrt(
-                torch.tensor(1.0 + float(r[2, 2]) - float(r[0, 0]) - float(r[1, 1]))
-            ).item()
-            * 2.0
-        )
-        w = float(r[1, 0] - r[0, 1]) / s
-        x = float(r[0, 2] + r[2, 0]) / s
-        y = float(r[1, 2] + r[2, 1]) / s
-        z = 0.25 * s
-    q = torch.tensor([w, x, y, z], dtype=rot.dtype, device=rot.device)
-    return q / torch.linalg.norm(q).clamp(min=1e-12)
-
-
-def _quat_mul_wxyz(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
-    """Quaternion multiplication in wxyz convention: a ⊗ b."""
-    aw, ax, ay, az = a.unbind(dim=-1)
-    bw, bx, by, bz = b.unbind(dim=-1)
-    w = aw * bw - ax * bx - ay * by - az * bz
-    x = aw * bx + ax * bw + ay * bz - az * by
-    y = aw * by - ax * bz + ay * bw + az * bx
-    z = aw * bz + ax * by - ay * bx + az * bw
-    return torch.stack([w, x, y, z], dim=-1)
-
-
-def _apply_colmap_to_train_transform_inplace(
-    *,
-    splats: dict[str, torch.Tensor],
-    transform_colmap_to_train: torch.Tensor,
-) -> None:
-    """Map PLY-exported splats (COLMAP coords) back into training coords.
-
-    FriendlySplat currently exports PLY geometry (means/quats/scales) in COLMAP coordinates
-    but keeps SH coefficients as-is. Since SH evaluation uses world-space view directions,
-    evaluating with COLMAP cameras would require rotating SH coefficients as well.
-
-    For benchmarking, we instead evaluate in the training coordinate system by:
-      - mapping means/quats/scales back using the same similarity transform used by the dataparser
-      - leaving SH coefficients unchanged
-    """
-    T = transform_colmap_to_train.to(
-        device=splats["means"].device, dtype=splats["means"].dtype
-    )
-    A = T[:3, :3]
-    t = T[:3, 3]
-
-    # means: [N,3] row-vector convention in dataparser.
-    splats["means"] = splats["means"] @ A.T + t
-
-    # uniform similarity scale (columns have norm == scale).
-    col_norms = torch.linalg.norm(A, dim=0)
-    length_scale = float(col_norms.mean().item())
-    splats["scales"] = splats["scales"] + float(
-        torch.log(torch.tensor(max(length_scale, 1e-12))).item()
-    )
-
-    rot = A / float(max(length_scale, 1e-12))
-    q_rot = _rotmat_to_quat_wxyz(rot)
-    splats["quats"] = _quat_mul_wxyz(q_rot, splats["quats"])
-
-
 @dataclass(frozen=True)
 class _EvalCfg:
     eval: EvalConfig
@@ -626,9 +536,9 @@ def main(argv: list[str]) -> int:
                     transform = (
                         torch.from_numpy(dataparser.transform).float().to(device=device)
                     )
-                    _apply_colmap_to_train_transform_inplace(
+                    apply_similarity_transform_to_splats_inplace(
                         splats=splats,
-                        transform_colmap_to_train=transform,
+                        transform_src_to_dst=transform,
                     )
                 gaussian_model = _build_gaussian_model(splats=splats, device=device)
                 if int(gaussian_model.num_gaussians) != int(num_gaussians):
