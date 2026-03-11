@@ -390,7 +390,15 @@ a {
 }
 
 .features-container {
-  max-width: 1180px !important;
+  max-width: 1260px !important;
+}
+
+.gallery-container {
+  max-width: 1188px !important;
+}
+
+.ack-container {
+  max-width: 1210px !important;
 }
 
 .framework-heading {
@@ -430,6 +438,10 @@ a {
   grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 1rem;
   align-items: center;
+}
+
+.feature-carousel {
+  margin-inline: -18px;
 }
 
 .feature-stage {
@@ -582,6 +594,7 @@ a {
   place-items: center;
   gap: 1.4rem;
   min-height: 360px;
+  margin-inline: 0;
   padding: 2.4rem;
   border: 1px solid rgba(19, 34, 56, 0.08);
   border-radius: 1.25rem;
@@ -713,6 +726,14 @@ a {
 @media screen and (max-width: 768px) {
   .landing-hero .hero-body {
     padding-top: 3rem;
+  }
+
+  .feature-carousel {
+    margin-inline: 0;
+  }
+
+  .gallery-under-construction {
+    margin-inline: 0;
   }
 
   .feature-carousel-container {
