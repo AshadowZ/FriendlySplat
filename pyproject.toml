@@ -48,6 +48,8 @@ segment = [
   "scipy",
 ]
 sfm = [
+  "pycolmap==3.13.0",
+  "scipy",
   "tqdm",
 ]
 priors = [
