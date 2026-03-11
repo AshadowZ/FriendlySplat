@@ -29,7 +29,8 @@ def _knn_distances(points: torch.Tensor, k: int = 4) -> torch.Tensor:
     except Exception as e:  # pragma: no cover
         raise ImportError(
             "KNN-based scale initialization requires scikit-learn. "
-            "Install it (e.g. `pip install scikit-learn` or `pip install -r friendly_splat/requirements.txt`)."
+            "Install it (e.g. `pip install scikit-learn` or "
+            "`pip install -e \".[train,viewer]\" --no-build-isolation`)."
         ) from e
 
     x_np = points.detach().cpu().numpy()

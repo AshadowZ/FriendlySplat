@@ -15,10 +15,12 @@ dependencies = [
   "torch",
   "tyro>=0.8.8",
   "PyYAML",
+  "rich>=12",
   "tensorboard",
   "tqdm",
   "scikit-learn",
   "torchmetrics",
+  "typing_extensions>=4.4.0",
   "imageio",
   "opencv-python",
 ]
@@ -29,6 +31,7 @@ train = [
   "fused-bilagrid @ git+https://github.com/harry7557558/fused-bilagrid@49f0ef06c9f81810fb9b5dd9027cf1844950cc16",
 ]
 viewer = [
+  "jaxtyping",
   "viser",
   "matplotlib",
   "splines",
