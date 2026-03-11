@@ -134,7 +134,7 @@ train_one_block() {
   echo "[train] ${block_id}"
   echo "[result] ${block_result_dir}"
 
-  python friendly_splat/trainer.py \
+  fs-train \
     --io.data-dir "${data_dir}" \
     --io.result-dir "${block_result_dir}" \
     --io.device "${device}" \
