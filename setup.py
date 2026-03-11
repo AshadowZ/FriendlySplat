@@ -7,11 +7,6 @@ import sys
 
 from setuptools import find_packages, setup
 
-__version__ = None
-exec(open("gsplat/version.py", "r").read())
-
-URL = "https://github.com/nerfstudio-project/gsplat"
-
 BUILD_NO_CUDA = os.getenv("BUILD_NO_CUDA", "0") == "1"
 WITH_SYMBOLS = os.getenv("WITH_SYMBOLS", "0") == "1"
 LINE_INFO = os.getenv("LINE_INFO", "0") == "1"
@@ -106,39 +101,10 @@ def get_extensions():
 
 
 setup(
-    name="gsplat",
-    version=__version__,
-    description=" Python package for differentiable rasterization of gaussians",
-    keywords="gaussian, splatting, cuda",
-    url=URL,
-    download_url=f"{URL}/archive/gsplat-{__version__}.tar.gz",
-    python_requires=">=3.7",
-    install_requires=[
-        "ninja",
-        "numpy",
-        "jaxtyping",
-        "rich>=12",
-        "torch",
-        "typing_extensions; python_version<'3.8'",
-    ],
-    extras_require={
-        # dev dependencies. Install them by `pip install gsplat[dev]`
-        "dev": [
-            "black[jupyter]==22.3.0",
-            "isort==5.10.1",
-            "pylint==2.13.4",
-            "pytest==7.1.2",
-            "pytest-xdist==2.5.0",
-            "typeguard>=2.13.3",
-            "pyyaml>=6.0.1",
-            "build",
-            "twine",
-        ],
-    },
+    name="friendly-splat",
+    packages=find_packages(include=["friendly_splat*", "gsplat*", "tools*"]),
     ext_modules=get_extensions() if not BUILD_NO_CUDA else [],
     cmdclass={"build_ext": get_ext()} if not BUILD_NO_CUDA else {},
-    packages=find_packages(),
-    # https://github.com/pypa/setuptools/issues/1461#issuecomment-954725244
     include_package_data=True,
 )
 

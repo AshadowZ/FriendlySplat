@@ -326,7 +326,11 @@ def _parse_args() -> TrainConfig:
     return tyro.cli(TrainConfig)
 
 
-if __name__ == "__main__":
+def main() -> None:
     cfg = _parse_args()
     cfg = apply_steps_scaler(cfg=cfg, steps_scaler=float(cfg.optim.steps_scaler))
     Trainer(cfg).train()
+
+
+if __name__ == "__main__":
+    main()

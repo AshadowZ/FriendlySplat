@@ -400,5 +400,9 @@ def main(cfg: ViewerScriptConfig) -> None:
     viewer_runtime.keep_alive()
 
 
-if __name__ == "__main__":
+def entrypoint() -> None:
     main(tyro.cli(ViewerScriptConfig))
+
+
+if __name__ == "__main__":
+    entrypoint()

@@ -660,5 +660,9 @@ def main() -> None:
     print(f"[Done] Outputs written to {output_dir}")
 
 
-if __name__ == "__main__":
+def entrypoint() -> None:
     main()
+
+
+if __name__ == "__main__":
+    entrypoint()

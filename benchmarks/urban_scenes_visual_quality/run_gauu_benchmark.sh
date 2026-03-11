@@ -85,7 +85,7 @@ run_scene() {
   if [[ "${force}" != "1" && -f "${final_ckpt}" ]]; then
     echo "[skip] train: found final checkpoint ${final_ckpt}"
   else
-    python friendly_splat/trainer.py \
+    fs-train \
       --io.data-dir "${data_dir}" \
       --io.result-dir "${result_dir}" \
       --io.device "${device}" \
