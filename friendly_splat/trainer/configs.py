@@ -128,7 +128,7 @@ class ViewerConfig:
 @dataclass(frozen=True)
 class TensorBoardConfig:
     # Enable TensorBoard scalar logging.
-    enable: bool = False
+    enable: bool = True
     # Log training scalars every N training steps (1-based).
     every_n: int = 100
     # Flush TensorBoard event file every N logged training steps.
@@ -153,7 +153,7 @@ class EvalConfig:
     metrics_backend: Literal["gsplat", "inria"] = "gsplat"
     # Whether to compute color-corrected metrics (cc_psnr/cc_ssim/cc_lpips).
     # Effective only when postprocess uses a photometric adapter (e.g. bilateral grid).
-    compute_cc_metrics: bool = True
+    compute_cc_metrics: bool = False
 
 
 @dataclass(frozen=True)
