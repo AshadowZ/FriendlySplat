@@ -75,7 +75,7 @@ def main(argv: list[str]) -> int:
         "extra_args",
         nargs=argparse.REMAINDER,
         help=(
-            "Extra args forwarded to friendly_splat/trainer.py (use after '--'). "
+            "Extra args forwarded to fs-train (use after '--'). "
             "These are appended after the script's default trainer hyperparameters."
         ),
     )

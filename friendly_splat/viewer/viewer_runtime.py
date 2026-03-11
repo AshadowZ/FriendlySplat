@@ -64,6 +64,8 @@ class ViewerRuntime:
         sparse_grad: bool = False,
         absgrad: bool = False,
         train_dataset: Optional["InputDataset"] = None,
+        instance_labels_path: Optional[Path | str] = None,
+        instance_color_seed: int = 0,
         max_display_cameras: int = 128,
         camera_frustum_scale: float = 0.025,
         show_camera_frustums: bool = True,
@@ -82,6 +84,10 @@ class ViewerRuntime:
         self.sparse_grad = sparse_grad
         self.absgrad = absgrad
         self.train_dataset = train_dataset
+        self.instance_labels_path = self._resolve_instance_labels_path(
+            instance_labels_path
+        )
+        self.instance_color_seed = int(instance_color_seed)
         self.max_display_cameras = max_display_cameras
         self.camera_frustum_scale = camera_frustum_scale
         self.show_camera_frustums = show_camera_frustums
@@ -131,7 +137,9 @@ class ViewerRuntime:
                 detail = f"{type(_GSPLAT_VIEWER_IMPORT_ERROR).__name__}: {_GSPLAT_VIEWER_IMPORT_ERROR}"
             raise ImportError(
                 "Online viewer requested but dependencies are missing. "
-                "Install `viser` and `nerfview` (see friendly_splat/requirements.txt) or run with disable_viewer=True."
+                "Install the viewer extras with "
+                "`pip install -e \".[train,viewer]\" --no-build-isolation` "
+                "or run with disable_viewer=True."
                 + (f" (import error: {detail})" if detail else "")
             ) from _GSPLAT_VIEWER_IMPORT_ERROR
 
@@ -142,6 +150,8 @@ class ViewerRuntime:
             packed=self.packed,
             sparse_grad=self.sparse_grad,
             absgrad=self.absgrad,
+            instance_labels_path=self.instance_labels_path,
+            instance_color_seed=self.instance_color_seed,
             update_counts_fn=self._update_counts,
         )
 
@@ -155,11 +165,28 @@ class ViewerRuntime:
             self.render,  # callback
             output_dir=self.output_dir,
             mode="training",
+            enable_instance_mode=self.renderer.has_instance_colors,
             after_render_hook=self._on_after_render,
             after_render_tab_populated_hook=_on_render_tab_populated,
         )
         self._init_train_camera_frustums()
         self._install_frustum_sync_callbacks()
+
+    def _resolve_instance_labels_path(
+        self,
+        instance_labels_path: Optional[Path | str],
+    ) -> Optional[Path]:
+        if instance_labels_path is not None:
+            path = Path(instance_labels_path).expanduser().resolve()
+            if not path.is_file():
+                raise FileNotFoundError(f"Instance labels not found: {path}")
+            return path
+        cluster_dir = self.output_dir / "cluster_result"
+        for filename in ("instance_labels.npy", "instance_labels_knn.npy"):
+            default_path = cluster_dir / filename
+            if default_path.is_file():
+                return default_path
+        return None
 
     @property
     def enabled(self) -> bool:

@@ -5,7 +5,8 @@ from typing import Any, Callable, Literal, Optional, Tuple
 
 import viser
 from nerfview import RenderTabState, Viewer
-from nerfview.render_panel import populate_general_render_tab
+
+from friendly_splat.viewer.nerfview_render_panel import populate_general_render_tab
 
 
 class GsplatRenderTabState(RenderTabState):
@@ -328,6 +329,8 @@ class GsplatViewer(Viewer):
             folder=self._rendering_folder,
             render_tab_state=self.render_tab_state,
             extra_handles=extra_handles,
+            render_fn=self.render_fn,
+            render_lock=self.lock,
         )
         self._rendering_tab_handles.update(handles)
         if self._after_render_tab_populated_hook is not None:

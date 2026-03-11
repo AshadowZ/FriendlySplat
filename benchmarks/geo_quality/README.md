@@ -49,7 +49,7 @@ Training/eval outputs are written under `--data-root / --out-dir-name` (default 
 - TnT default: `<data-root>/benchmark/geo_benchmark/tnt_benchmark/<Scene>/<exp-name>/...`
 - DTU default: `<data-root>/benchmark/geo_benchmark/dtu_benchmark/scanXX/<exp-name>/...`
 
-Both runners append `extra_args` to the end of the `friendly_splat/trainer.py` command line (after `--`), so any
+Both runners append `extra_args` to the end of the `fs-train` command line (after `--`), so any
 trainer flag you pass there overrides the script defaults.
 
 ## Resolution policy (matches prior baseline)

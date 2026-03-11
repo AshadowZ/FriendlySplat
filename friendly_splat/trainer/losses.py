@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Loss utilities used by trainers under `friendly_splat/`.
 
-This module centralizes loss computations so that `friendly_splat/trainer.py` can focus on
+This module centralizes loss computations so that `friendly_splat.train_app` can focus on
 orchestration (data -> render -> loss -> optimize).
 
 Conventions used here:
@@ -208,7 +208,7 @@ def flatness_loss_from_log_scales(log_scales: torch.Tensor) -> torch.Tensor:
 
     Args:
         log_scales: Log-scales tensor of shape [N, 3] (or [..., N, 3]).
-            This matches how we store scales in `friendly_splat/trainer.py` (log-parameterization).
+            This matches how we store scales in `friendly_splat.train_app` (log-parameterization).
 
     Returns:
         Scalar loss: mean of the minimum (linear) scale per Gaussian.
