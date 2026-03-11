@@ -261,13 +261,6 @@ def main(argv: list[str]) -> int:
         default=True,
         help="Use a single shared camera for all frames (default: True).",
     )
-    parser.add_argument(
-        "--gpu-ba",
-        type=str.lower,
-        choices=["on", "off"],
-        default="off",
-        help="Enable GPU bundle adjustment in pycolmap (default: off).",
-    )
 
     parser.add_argument(
         "--is-panorama",
@@ -312,8 +305,6 @@ def main(argv: list[str]) -> int:
             overwrite=overwrite,
         )
 
-    enable_gpu_ba = str(args.gpu_ba).lower() == "on"
-
     run_hloc(
         image_dir=working_images_dir,
         hloc_dir=hloc_dir,
@@ -329,7 +320,6 @@ def main(argv: list[str]) -> int:
         refine_pixsfm=bool(args.refine_pixsfm),
         use_single_camera_mode=bool(args.use_single_camera_mode),
         is_panorama=bool(args.is_panorama),
-        enable_gpu_ba=enable_gpu_ba,
         overwrite=overwrite,
     )
 
