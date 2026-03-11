@@ -472,6 +472,13 @@ a {
   text-transform: uppercase;
 }
 
+.feature-demo-video {
+  display: block;
+  width: 100%;
+  height: auto;
+  background: #0b1220;
+}
+
 .feature-info {
   padding: 1.35rem 1.35rem 1.45rem;
 }
