@@ -25,7 +25,7 @@
 </p>
 
 <p align="center">
-  <video src="assets/why-friendlysplat.mp4" autoplay loop muted playsinline width="100%"></video>
+  <img src="assets/why-friendlysplat.gif" alt="Why FriendlySplat" width="100%">
 </p>
 
 ## 📝 To-Do List
