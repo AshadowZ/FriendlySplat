@@ -1,298 +1,110 @@
-# SfM preprocessing (HLOC + pycolmap)
+# SfM Preprocessing (HLOC + pycolmap)
 
-This tool builds a COLMAP scene from an input image folder using the
-Hierarchical-Localization (HLOC) toolbox and `pycolmap`.
+A fast, lightweight wrapper to build a FriendlySplat-ready COLMAP scene from an
+input image folder using [HLOC](https://github.com/cvg/Hierarchical-Localization).
 
-Its goal is to produce a FriendlySplat-ready scene without modifying your
-original dataset directory.
+> Note: This tool works best for temporally ordered images such as video frames.
+> For highly unordered, sparse, or geometrically difficult scenes, consider more
+> robust tools like Metashape or RealityScan.
 
-At a high level it:
+## Installation
 
-1. reads images from `--input-image-dir`;
-2. optionally splits panoramas into a fixed 5-view rig;
-3. runs HLOC feature extraction, pairing, matching, and reconstruction;
-4. exports a self-contained COLMAP scene under `--output-dir`;
-5. writes the result in a layout directly consumable by FriendlySplat.
-
-This is intentionally a lightweight, toy-style SfM wrapper built on top of HLOC.
-
-Practical positioning:
-
-- it is fast
-- it is convenient
-- it can run from Python packages alone
-- but it is not the most robust SfM pipeline for difficult scenes
-
-In practice, it works best on temporally ordered image sets such as frames
-sampled from a video. If your image collection is more unordered, sparse, or
-geometrically difficult, this pipeline can fail or drift badly.
-
-If your scene is challenging and you care about reconstruction reliability more
-than setup simplicity, it is usually better to obtain camera poses from a more
-robust SfM tool such as Metashape or RealityScan, then feed the resulting scene
-into FriendlySplat.
-
-## Output layout
-
-Given:
+Install the FriendlySplat `sfm` dependencies and the HLOC submodule:
 
 ```bash
---output-dir /path/to/out_scene
-```
-
-the script writes:
-
-- `/path/to/out_scene/images/`
-- `/path/to/out_scene/sparse/0/`
-- `/path/to/out_scene/_sfm_work/`
-
-Meaning:
-
-- `images/`: exported 3DGS-ready image set
-- `sparse/0/`: final COLMAP model
-- `_sfm_work/`: intermediate HLOC files and raw sparse reconstruction
-
-By default `_sfm_work/` is deleted at the end. Use `--keep-work-dir` if you
-want to keep it for debugging.
-
-## Install
-
-Install FriendlySplat with the sfm extra:
-
-```bash
+# 1. Install FriendlySplat sfm extra
 pip install -e ".[sfm]" --no-build-isolation
-```
 
-This installs:
-
-- `pycolmap==3.13.0`
-- Python-side helper dependencies used by the SfM wrapper
-
-`hloc` itself must be installed separately from a local clone so that its
-repository layout and `third_party/` submodules are preserved.
-
-Recommended HLOC setup:
-
-```bash
+# 2. Install HLOC (clone recursively to preserve third_party submodules)
 git clone --recursive https://github.com/AshadowZ/Hierarchical-Localization.git
-pip install -e /path/to/Hierarchical-Localization
+pip install -e ./Hierarchical-Localization
+
+# Optional: install pixsfm for feature refinement
+# pip install pixsfm
 ```
 
-If you already cloned the repository without submodules, run:
+## Data Preparation
+
+Training on extremely high-resolution images rarely yields noticeable
+improvements and usually just slows the pipeline down. A good default is to keep
+the longest edge around 1K-2K (for example, 1600px).
+
+Scenario A: from a video. Extract frames at about 1 FPS and downscale them with
+`ffmpeg`:
 
 ```bash
-cd /path/to/Hierarchical-Localization
-git submodule update --init --recursive
-pip install -e .
+mkdir -p input_frames
+ffmpeg -i input.mp4 -q:v 2 -vf "fps=1,scale='min(1600,iw)':'min(1600,ih)':force_original_aspect_ratio=decrease" input_frames/frame_%05d.jpg
 ```
 
-Optional dependency:
-
-- `pixsfm` (only needed when `--refine-pixsfm` is enabled)
-
-Optional install:
+Scenario B: from existing high-resolution images. Batch resize them with
+ImageMagick:
 
 ```bash
-pip install pixsfm
+mkdir -p input_frames_1600
+# The '>' keeps smaller images unchanged and only downsizes larger ones.
+magick mogrify -path input_frames_1600 -resize '1600x1600>' input_frames/*.jpg
 ```
 
-## Inputs
+## Quick Start
 
-Required inputs:
+The tool reads images, runs feature matching, and exports a self-contained COLMAP
+scene without modifying your original data.
 
-- `--input-image-dir`: directory containing the original images
-- `--output-dir`: destination directory for the exported COLMAP scene
-- `--camera-model`: camera model used by COLMAP / pycolmap
-
-Accepted image extensions:
-
-- `.jpg`
-- `.jpeg`
-- `.png`
-- `.bmp`
-- `.tiff`
-- `.tif`
-
-The script copies images into the output scene and standardizes filenames, so
-it does not modify your original image folder.
-
-## Basic usage
-
-Recommended package entrypoint:
+Recommended for video-like captures:
 
 ```bash
 fs-sfm \
-  --input-image-dir input_image_dir \
-  --output-dir data_dir \
-  --camera-model PINHOLE \
+  --input-image-dir /path/to/input-frames \
+  --output-dir /path/to/data-dir \
+  --camera-model OPENCV \
   --matching-method sequential \
-  --feature-type superpoint_inloc \
-  --retrieval-type megaloc \
+  --feature-type superpoint_aachen \
   --matcher-type superpoint+lightglue \
+  --retrieval-type megaloc \
   --use-single-camera-mode True
 ```
 
-Legacy script path also works:
+We recommend `OPENCV` as it automatically undistorts images for FriendlySplat.
+Use `PINHOLE` only if your images are already perfectly undistorted.
 
-```bash
-python3 tools/sfm/run_hloc_sfm.py \
-  --input-image-dir /path/to/images \
-  --output-dir /path/to/out_scene \
-  --camera-model PINHOLE \
-  --matching-method sequential
-```
+Use `--use-single-camera-mode True` when all images come from the same physical
+camera. If the images are not from a single camera, turn it off.
 
-## Common workflows
+## Alternative Workflows
 
-### 1. Standard sequential SfM
+Add or modify flags based on your dataset characteristics:
 
-```bash
-fs-sfm \
-  --input-image-dir /path/to/images \
-  --output-dir /path/to/out_scene \
-  --camera-model PINHOLE \
-  --matching-method sequential
-```
+- Unordered images: `--matching-method retrieval --retrieval-type megaloc`
+- Small datasets: `--matching-method exhaustive`
+- Panoramas: `--is-panorama --pano-downscale 2`
+- High quality refinement: `--refine-pixsfm`
 
-This is the default recommended mode for video-like captures.
+## Output and Training
 
-Notes:
-
-- internally, sequential mode also uses retrieval to improve loop closure
-- this is usually the best first choice for temporally ordered image sets
-
-### 2. Retrieval-based pairing
-
-```bash
-fs-sfm \
-  --input-image-dir /path/to/images \
-  --output-dir /path/to/out_scene \
-  --camera-model PINHOLE \
-  --matching-method retrieval \
-  --retrieval-type netvlad \
-  --num-matched 50
-```
-
-This is useful when image order is weak or when the dataset is more unordered.
-
-### 3. Exhaustive pairing
-
-```bash
-fs-sfm \
-  --input-image-dir /path/to/images \
-  --output-dir /path/to/out_scene \
-  --camera-model PINHOLE \
-  --matching-method exhaustive
-```
-
-This can work well on small image sets, but may become expensive as the dataset grows.
-
-### 4. Panorama mode
-
-```bash
-fs-sfm \
-  --input-image-dir /path/to/panoramas \
-  --output-dir /path/to/out_scene \
-  --camera-model PINHOLE \
-  --is-panorama \
-  --pano-downscale 2
-```
-
-Panorama mode:
-
-- splits each panorama into a fixed 5-view rig
-- writes split images into `_sfm_work/images/pano_camera*/`
-- builds a rig-aware reconstruction
-
-Current expectation:
-
-- panorama mode works with `PINHOLE` or `SIMPLE_PINHOLE`
-- non-supported models are forced back to `PINHOLE`
-
-### 5. Enable PixSfM refinement
-
-```bash
-fs-sfm \
-  --input-image-dir /path/to/images \
-  --output-dir /path/to/out_scene \
-  --camera-model PINHOLE \
-  --matching-method sequential \
-  --refine-pixsfm
-```
-
-This requires:
-
-```bash
-pip install pixsfm
-```
-
-## Important arguments
-
-Core I/O:
-
-- `--input-image-dir`: source image directory
-- `--output-dir`: destination COLMAP scene root
-- `--overwrite`: delete existing exported content under `--output-dir`
-- `--keep-work-dir`: keep `_sfm_work/` for debugging
-
-Camera setup:
-
-- `--camera-model`: one of `PINHOLE`, `SIMPLE_PINHOLE`, `RADIAL`, `SIMPLE_RADIAL`, `OPENCV`, `FULL_OPENCV`
-- `--use-single-camera-mode`: use a single shared camera model for all frames
-
-Matching / retrieval:
-
-- `--matching-method {exhaustive,sequential,retrieval}`
-- `--feature-type`: HLOC local feature extractor config
-- `--matcher-type`: HLOC matcher config
-- `--retrieval-type`: global retrieval descriptor for retrieval-based pairing
-- `--num-matched`: number of retrieval candidates when `--matching-method retrieval`
-
-Optional refinement / acceleration:
-
-- `--refine-pixsfm`: enable PixSfM refinement
-
-Panorama mode:
-
-- `--is-panorama`: treat inputs as panoramas
-- `--pano-downscale`: downscale factor applied before panorama splitting
-
-## Practical tips
-
-- For ordinary video or phone captures, start with `--matching-method sequential`.
-- For unordered image folders, try `--matching-method retrieval`.
-- For smaller datasets, `exhaustive` can be a useful sanity check.
-- Keep `--use-single-camera-mode True` unless you know you need per-image camera handling.
-- If reconstruction quality is poor, first revisit image quality, overlap, and camera model choice before changing advanced HLOC settings.
-- Panorama mode is useful when your source data is equirectangular and you want a conventional SfM-friendly rig decomposition.
-
-## Troubleshooting
-
-- `missing dependency hloc`:
-  install HLOC from a local clone with submodules, then run `pip install -e /path/to/Hierarchical-Localization`
-- `missing dependency pycolmap`:
-  reinstall the sfm extra with `pip install -e ".[sfm]" --no-build-isolation`
-- `refine_pixsfm=True requires pixsfm`:
-  install `pixsfm` separately
-- `No images found`:
-  check the input folder and supported image extensions
-- existing `images/` or `sparse/` under `--output-dir`:
-  rerun with `--overwrite`
-- panorama mode behaving unexpectedly:
-  use `PINHOLE` or `SIMPLE_PINHOLE`
-
-## Output compatibility
-
-The exported output directory is designed to work directly with FriendlySplat:
+The exported output directory is designed to work directly with FriendlySplat.
+Intermediate files under `_sfm_work/` are deleted automatically unless you pass
+`--keep-work-dir`.
 
 ```text
-<output-dir>/
-  images/
-  sparse/0/
+out_scene/
+├── images/      # standardized and undistorted images
+└── sparse/0/    # final COLMAP model
 ```
 
-That means you can pass it directly to training:
+You can pass this directory directly to training:
 
 ```bash
 fs-train --io.data-dir /path/to/out_scene ...
 ```
+
+## Tips and Troubleshooting
+
+- Camera model: use `--use-single-camera-mode True` by default unless you need
+  per-image camera handling. Supported models include `PINHOLE`,
+  `SIMPLE_PINHOLE`, `RADIAL`, `OPENCV`, and others.
+- Missing dependencies:
+  `hloc`: ensure you cloned HLOC with `--recursive`.
+  `pycolmap`: rerun `pip install -e ".[sfm]" --no-build-isolation`.
+- Existing output directory: use `--overwrite` if `images/` or `sparse/` already
+  exist in the destination directory.

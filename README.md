@@ -49,50 +49,35 @@ modify, FriendlySplat is a good place to start.
 
 ## 📦 Installation
 
-Dependence: Please install [Pytorch](https://pytorch.org/get-started/locally/) first.
-Example environment setup:
+Prerequisite: [PyTorch](https://pytorch.org/get-started/locally/).
 
 ```bash
-conda create -n friendly-splat python=3.10
+# 1. Environment setup
+# Example only; Python and PyTorch version requirements are flexible.
+conda create -n friendly-splat python=3.10 -y
 conda activate friendly-splat
 pip install torch==2.4.0 torchvision==0.19.0 --index-url https://download.pytorch.org/whl/cu121
-```
 
-For faster environment setup and dependency resolution, we recommend installing
-[`uv`](https://docs.astral.sh/uv/):
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-Clone the repository and install FriendlySplat with the full optional toolchain:
-
-```bash
+# 2. Clone and install
 git clone https://github.com/AshadowZ/FriendlySplat.git
 cd FriendlySplat
-uv pip install -e ".[train,viewer,mesh,segment,sfm,priors]" --no-build-isolation
+
+# Basic install (train & viewer)
+pip install -e ".[train,viewer]" --no-build-isolation
+
+# OR install the full toolchain
+# pip install -e ".[train,viewer,mesh,segment,sfm,priors]" --no-build-isolation
 ```
 
-If you only want the training and viewer extras:
+Tips & Notes:
 
-```bash
-uv pip install -e ".[train,viewer]" --no-build-isolation
-```
-
-The equivalent `pip` command also works:
-
-```bash
-pip install -e ".[train,viewer,mesh,segment,sfm,priors]" --no-build-isolation
-```
-
-Notes:
-
-- `uv pip` is usually faster than plain `pip`.
-- `--no-build-isolation` lets the local `gsplat` CUDA kernel reuse your current
-  PyTorch/CUDA toolchain.
-- Some tools still have extra dependencies; in particular, the `sfm` extra does not
-  fully install HLOC by itself, so check the README in each subfolder when needed,
-  especially [tools/sfm/README.md](tools/sfm/README.md).
+- Faster Installation: We highly recommend installing [`uv`](https://docs.astral.sh/uv/)
+  and replacing `pip` with `uv pip` in the commands above.
+- CUDA Build: The `--no-build-isolation` flag is required for `gsplat` to properly
+  reuse your local PyTorch/CUDA setup.
+- Extra Dependencies: Some tools require additional setup (e.g., the `sfm` extra
+  requires HLOC). Please check the respective subfolder docs like
+  [tools/sfm/README.md](tools/sfm/README.md).
 
 ## 🗂️ Expected Dataset Layout
 
@@ -112,6 +97,9 @@ data_dir/
 - `sparse/0/` stores the COLMAP reconstruction.
 - The prior and mask folders are optional and only needed if you enable the
   corresponding inputs in the config.
+- To generate `sparse/0/`, see [tools/sfm/README.md](tools/sfm/README.md). To infer
+  geometry priors such as `depth_prior/` and `normal_prior/`, see
+  [tools/geometry_prior/README.md](tools/geometry_prior/README.md).
 
 ## 🚀 Quick Start
 
@@ -133,6 +121,11 @@ fs-train \
 ```
 
 `--io.export-format` now accepts `ply`, `ply_compressed`, or `sog`.
+
+If you provide inputs such as `--data.depth-dir-name`, `--data.normal-dir-name`, or
+`--data.sky-mask-dir-name`, the corresponding regularization terms are enabled
+automatically during training.
+See the code for the exact implementation details.
 
 Open the viewer on the latest checkpoint or PLY in a result directory:
 
