@@ -1,7 +1,7 @@
 <div align="center">
 
 <p align="center">
-  <img src="assets/logo.png" alt="FriendlySplat" width="100%">
+  <img src="assets/logo.png" alt="FriendlySplat" width="82%">
 </p>
 
 <a href="https://ashadowz.github.io/FriendlySplat/">
@@ -10,22 +10,16 @@
 <img src="https://img.shields.io/badge/Python-3.10%2B-blue" alt="Python 3.10+">
 <img src="https://img.shields.io/badge/Runtime-PyTorch%20%2B%20CUDA-orange" alt="PyTorch CUDA">
 
-<p align="center">
-  FriendlySplat is a user-friendly, open-source Gaussian Splatting toolkit,
-  integrating SOTA features into a unified platform for training, pruning,
-  meshing and segmentation.
-</p>
-
 </div>
 
 ## 🤔 Why FriendlySplat
 
 <p align="center">
-  <strong>Rich Features, Clean Code</strong>
+  <strong><span style="font-size: 1.2em;">Rich Features, Clean Code</span></strong>
 </p>
 
 <p align="center">
-  <img src="assets/why-friendlysplat-v2.gif" alt="Why FriendlySplat" width="100%">
+  <img src="assets/why-friendlysplat-v2.gif" alt="Why FriendlySplat" width="88%">
 </p>
 
 ## 📝 To-Do List
