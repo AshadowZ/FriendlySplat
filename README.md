@@ -1,7 +1,7 @@
 <div align="center">
 
 <p align="center">
-  <img src="assets/training.gif" alt="FriendlySplat" width="100%">
+  <img src="assets/logo.png" alt="FriendlySplat" width="100%">
 </p>
 
 <a href="https://ashadowz.github.io/FriendlySplat/">
@@ -20,26 +20,13 @@
 
 ## 🤔 Why FriendlySplat
 
-If you mostly care about getting a reconstruction quickly and hate setting up
-environments, more mature commercial tools such as
-[KIRI Engine](https://www.kiriengine.app/) and [Polycam](https://poly.cam/) are
-probably a better fit.
+<p align="center">
+  <strong>Rich Features, Clean Code</strong>
+</p>
 
-If you are trying to scale up training on very large synthetic scenes, you should
-also take a look at [Marble World](https://marble.worldlabs.ai/).
-
-If you are looking for a usable codebase for Gaussian Splatting development, or are
-simply curious about GS techniques and want something relatively easy to read and
-modify, FriendlySplat is a good place to start.
-
-## ✨ Highlights
-
-- **Feature-rich workflow toolbox**: this repo integrates SfM preprocessing, more
-  densification and pruning strategies, more regularization terms, downstream mesh
-  extraction, GS scene segmentation, and other practical extensions around the core
-  training loop.
-- **Fast experimentation without hiding the code**: the repo stays easy to read and
-  modify, with benchmark scripts and tool folders kept close to the actual implementation.
+<p align="center">
+  <video src="assets/why-friendlysplat.mp4" autoplay loop muted playsinline width="100%"></video>
+</p>
 
 ## 📝 To-Do List
 
