@@ -1,49 +1,67 @@
-# Geometry priors (MoGe)
+# Geometry Priors (MoGe)
 
-This folder contains scripts for generating dense depth/normal priors that can be consumed by FriendlySplat via `DataConfig.depth_dir_name` / `DataConfig.normal_dir_name` / `DataConfig.sky_mask_dir_name`.
+Generate dense depth and normal priors using
+[MoGe](https://github.com/Ruicheng/moge) to improve FriendlySplat's geometry
+reconstruction.
 
-## Install
-
-`moge` is a pip-installable package.
-
-Suggested environment:
-
-- `pip install moge`
-- `pip install opencv-python tqdm`
-- Optional (better depth alignment): `pip install scikit-learn`
-
-## Generate priors
-
-Run from repo root:
+## Installation
 
 ```bash
-python3 tools/geometry_prior/moge_infer.py --data-dir /path/to/scene \
-  --save-depth \
-  --save-sky-mask
+# Core dependencies
+pip install moge opencv-python tqdm
+
+# Highly recommended for robust depth alignment (RANSAC)
+pip install scikit-learn
 ```
 
-Outputs are written under the scene root:
+## Quick Start
 
-- `moge_normal/<image_stem>.png` (always generated)
-- `moge_depth/<image_stem>.npy` (when `--save-depth`)
-- `sky_mask/<image_stem>.png` (when `--save-sky-mask`, 255=invalid, 0=valid)
+Run the inference script from the repository root. This is the recommended
+standard command:
 
-`--align-depth-with-colmap` is enabled by default and will align each depth map to COLMAP sparse depths when a COLMAP model is found under `sparse/0`, `sparse`, or `colmap/sparse/0`.
+```bash
+python tools/geometry_prior/moge_infer.py \
+  --data-dir /path/to/scene \
+  --factor 1 \
+  --model-id Ruicheng/moge-2-vitl-normal \
+  --out-normal-dir moge_normal \
+  --out-depth-dir moge_depth \
+  --align-depth-with-colmap \
+  --save-depth \
+  --verbose
+```
 
-If you only need normals, run with `--no-align-depth-with-colmap` and without `--save-depth` to skip depth processing.
+## Key Parameters Explained
 
-RGBA images: if the input image has an alpha channel, pixels with `alpha==0` are treated as non-existent; exported depth is forced to `0.0` there and exported normal is forced to `127,127,127`.
+- `--align-depth-with-colmap`: enabled by default and crucial for usable depth.
+  MoGe predicts relative depth. This flag fits it to your COLMAP sparse scene
+  under `sparse/0/`, turning it into scene-consistent depth.
+- `--save-depth`: by default the script always exports normals, but depth `.npy`
+  files are only written when you pass this flag.
+- `--save-sky-mask`: optionally export invalid-depth / sky-like masks under
+  `sky_mask/`, which can be consumed by FriendlySplat via
+  `data.sky_mask_dir_name`.
+- `--factor`: controls which image folder is used, such as `images_2/` or
+  `images_2p5/`. It must match your training `--data.data-factor`, otherwise
+  FriendlySplat will hit image-prior shape mismatches.
+- `--model-id`: HuggingFace model weights. `Ruicheng/moge-2-vitl-normal` is the
+  default and recommended high-quality model.
+- `--remove-depth-edge`: enabled by default. It masks sharp depth
+  discontinuities to reduce floating artifacts during splat training.
+- `--verbose`: prints per-image alignment details and is useful when depth
+  fitting behaves unexpectedly.
 
-## Use in training
+## Use in Training
 
-Set these in your training config:
+Once generated, pass the output directory names to training:
 
-- `data.normal_dir_name="moge_normal"`
-- `data.depth_dir_name="moge_depth"` (if you exported depth)
-- `data.sky_mask_dir_name="sky_mask"` (if you exported masks)
+```bash
+fs-train --io.data-dir /path/to/scene \
+  --data.data-factor 1 \
+  --data.normal-dir-name moge_normal \
+  --data.depth-dir-name moge_depth \
+  --data.sky-mask-dir-name sky_mask
+```
 
-Note: When training with auxiliary priors/masks, the priors/masks must match the training image resolution.
-For example, if you train with `data_factor=2` (using `images_2/`), generate priors/masks at `images_2/` resolution.
-If you train with a non-integer factor like `data_factor=2.5`, FriendlySplat uses `images_2p5/` (dot replaced by `p`),
-so generate priors/masks at `images_2p5/` resolution as well.
-or the dataset loader will raise a shape mismatch error.
+Tip: if you only need normals, skip `--save-depth` and add
+`--no-align-depth-with-colmap` to avoid the heavier COLMAP depth fitting step.

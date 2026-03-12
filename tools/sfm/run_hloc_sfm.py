@@ -234,11 +234,11 @@ def main(argv: list[str]) -> int:
         help="Method for image matching.",
     )
     parser.add_argument("--feature-type", type=str, default="superpoint_aachen")
-    parser.add_argument("--matcher-type", type=str, default="superglue")
+    parser.add_argument("--matcher-type", type=str, default="superpoint+lightglue")
     parser.add_argument(
         "--retrieval-type",
         type=str,
-        default="netvlad",
+        default="megaloc",
         choices=["netvlad", "megaloc", "dir", "openibl"],
         help="Global descriptor used for retrieval.",
     )
