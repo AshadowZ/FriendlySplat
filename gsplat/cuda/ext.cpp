@@ -13,7 +13,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .export_values();
 
     m.def("null", &gsplat::null);
-
     m.def(
         "quat_scale_to_covar_preci_fwd", &gsplat::quat_scale_to_covar_preci_fwd
     );

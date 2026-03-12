@@ -16,12 +16,12 @@ class IOConfig:
     # Global random seed (data sampling + initialization).
     seed: int = 42
 
-    # Whether to export splats as PLY files during training.
-    export_ply: bool = False
-    # PLY export format: "ply" or "ply_compressed".
-    ply_format: str = "ply"
-    # 1-based training step numbers to export PLY files. e.g. (15000, 30000)
-    ply_steps: Tuple[int, ...] = (30000,)
+    # Whether to export splat artifacts during training.
+    export_splats: bool = False
+    # Export format: "ply", "ply_compressed", or "sog".
+    export_format: str = "ply"
+    # 1-based training step numbers to export splat artifacts. e.g. (15000, 30000)
+    export_steps: Tuple[int, ...] = (30000,)
 
     # Whether to save checkpoint(s) during training.
     save_ckpt: bool = False
@@ -563,7 +563,7 @@ def apply_steps_scaler(*, cfg: TrainConfig, steps_scaler: float) -> TrainConfig:
     # 2) IO steps (1-based).
     io_cfg = replace(
         cfg.io,
-        ply_steps=scale_steps(cfg.io.ply_steps, max_step=new_max_steps),
+        export_steps=scale_steps(cfg.io.export_steps, max_step=new_max_steps),
         save_steps=scale_steps(cfg.io.save_steps, max_step=new_max_steps),
     )
 
@@ -868,14 +868,16 @@ def validate_train_config(cfg: TrainConfig) -> None:
                 f"tb.flush_every_n must be > 0, got {cfg.tb.flush_every_n}"
             )
 
-    if cfg.io.export_ply:
-        if len(cfg.io.ply_steps) == 0:
+    if cfg.io.export_splats:
+        if len(cfg.io.export_steps) == 0:
             raise ValueError(
-                "export_ply=True requires non-empty ply_steps (e.g. --io.ply_steps 15000 30000)."
+                "export_splats=True requires non-empty export_steps "
+                "(e.g. --io.export_steps 15000 30000)."
             )
-        if cfg.io.ply_format not in ("ply", "ply_compressed"):
+        if cfg.io.export_format not in ("ply", "ply_compressed", "sog"):
             raise ValueError(
-                f"ply_format must be 'ply' or 'ply_compressed', got {cfg.io.ply_format!r}"
+                "export_format must be 'ply', 'ply_compressed', or 'sog', "
+                f"got {cfg.io.export_format!r}"
             )
 
     # (GNS validation handled above.)

@@ -18,10 +18,10 @@ dependencies = [
   "rich>=12",
   "tensorboard",
   "tqdm",
-  "scikit-learn",
   "torchmetrics",
   "typing_extensions>=4.4.0",
   "imageio",
+  "Pillow",
   "opencv-python",
 ]
 
