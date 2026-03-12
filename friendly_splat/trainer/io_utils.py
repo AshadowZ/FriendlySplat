@@ -23,7 +23,7 @@ def init_output_paths(*, io_cfg: IOConfig) -> None:
     if io_cfg.save_ckpt:
         os.makedirs(os.path.join(io_cfg.result_dir, "ckpts"), exist_ok=True)
 
-    if io_cfg.export_ply:
+    if io_cfg.export_splats:
         os.makedirs(os.path.join(io_cfg.result_dir, "ply"), exist_ok=True)
 
 
@@ -87,23 +87,23 @@ def save_checkpoint(
     return ckpt_path
 
 
-def should_export_ply(
+def should_export_splats(
     *,
     io_cfg: IOConfig,
     step: int,
-    ply_steps: Set[int],
+    export_steps: Set[int],
 ) -> bool:
-    if not io_cfg.export_ply:
+    if not io_cfg.export_splats:
         return False
     train_step = int(step) + 1
-    return int(train_step) in ply_steps
+    return int(train_step) in export_steps
 
 
-def export_ply(
+def export_splats_artifact(
     *,
     step: int,
-    ply_dir: str,
-    ply_format: str,
+    export_dir: str,
+    export_format: str,
     gaussian_model: GaussianModel,
     active_sh_degree: int,
     scene_transform: Optional[torch.Tensor] = None,
@@ -112,7 +112,8 @@ def export_ply(
 
     from gsplat import export_splats  # noqa: WPS433
 
-    out_path = os.path.join(str(ply_dir), f"splats_step{int(train_step):06d}.ply")
+    suffix = ".sog" if str(export_format) == "sog" else ".ply"
+    out_path = os.path.join(str(export_dir), f"splats_step{int(train_step):06d}{suffix}")
     with torch.no_grad():
         sh0 = gaussian_model.sh0.detach()
         shN = gaussian_model.shN.detach()
@@ -142,10 +143,10 @@ def export_ply(
             opacities=gaussian_model.opacity_logits.detach(),  # logits (3DGS convention)
             sh0=sh0,
             shN=shN,
-            format=str(ply_format),
+            format=str(export_format),
             save_to=out_path,
         )
-    print(f"Saved PLY: {out_path}", flush=True)
+    print(f"Saved splat export: {out_path}", flush=True)
     return out_path
 
 
@@ -163,18 +164,18 @@ def maybe_save_outputs(
     scene_transform: Optional[torch.Tensor] = None,
 ) -> None:
     ckpt_dir = os.path.join(io_cfg.result_dir, "ckpts")
-    ply_dir = os.path.join(io_cfg.result_dir, "ply")
+    export_dir = os.path.join(io_cfg.result_dir, "ply")
     save_steps = (
         set(int(step_id) for step_id in io_cfg.save_steps)
         if io_cfg.save_ckpt
         else set()
     )
-    ply_steps = (
-        set(int(step_id) for step_id in io_cfg.ply_steps)
-        if io_cfg.export_ply
+    export_steps = (
+        set(int(step_id) for step_id in io_cfg.export_steps)
+        if io_cfg.export_splats
         else set()
     )
-    ply_format = str(io_cfg.ply_format) if io_cfg.export_ply else "ply"
+    export_format = str(io_cfg.export_format) if io_cfg.export_splats else "ply"
 
     if should_save_checkpoint(
         io_cfg=io_cfg,
@@ -192,15 +193,15 @@ def maybe_save_outputs(
             bilateral_grid=bilateral_grid,
         )
 
-    if should_export_ply(
+    if should_export_splats(
         io_cfg=io_cfg,
         step=int(step),
-        ply_steps=ply_steps,
+        export_steps=export_steps,
     ):
-        export_ply(
+        export_splats_artifact(
             step=int(step),
-            ply_dir=ply_dir,
-            ply_format=ply_format,
+            export_dir=export_dir,
+            export_format=export_format,
             gaussian_model=gaussian_model,
             active_sh_degree=int(active_sh_degree),
             scene_transform=scene_transform,

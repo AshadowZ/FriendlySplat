@@ -122,7 +122,8 @@ fs-train \
   --io.data-dir /path/to/data-dir \
   --io.result-dir /path/to/result-dir \
   --io.device cuda:0 \
-  --io.export-ply \
+  --io.export-splats \
+  --io.export-format sog \
   --io.save-ckpt \
   --data.preload none \
   --postprocess.use-bilateral-grid \
@@ -130,6 +131,8 @@ fs-train \
   --strategy.impl improved \
   --strategy.densification-budget 1000000
 ```
+
+`--io.export-format` now accepts `ply`, `ply_compressed`, or `sog`.
 
 Open the viewer on the latest checkpoint or PLY in a result directory:
 

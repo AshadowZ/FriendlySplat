@@ -6,6 +6,8 @@ from typing import Literal, Optional
 import numpy as np
 import torch
 
+from .sog_exporter import splat2sog_bytes
+
 
 def sh2rgb(sh: torch.Tensor) -> torch.Tensor:
     """Convert Sphere Harmonics to RGB
@@ -479,14 +481,17 @@ def export_splats(
     opacities: torch.Tensor,
     sh0: torch.Tensor,
     shN: torch.Tensor,
-    format: Literal["ply", "splat", "ply_compressed"] = "ply",
+    format: Literal["ply", "splat", "ply_compressed", "sog"] = "ply",
     save_to: Optional[str] = None,
+    sog_iterations: int = 10,
+    sog_cluster_device: Optional[str] = None,
 ) -> bytes:
     """Export a Gaussian Splats model to bytes.
     The three supported formats are:
     - ply: A standard PLY file format. Supported by most viewers.
     - splat: A custom Splat file format. Supported by antimatter15 viewer.
     - ply_compressed: A compressed PLY file format. Used by Supersplat viewer.
+    - sog: A bundled SOG export compatible with PlayCanvas-style tooling.
 
     Args:
         means (torch.Tensor): Splat means. Shape (N, 3)
@@ -495,8 +500,10 @@ def export_splats(
         opacities (torch.Tensor): Splat opacities. Shape (N,)
         sh0 (torch.Tensor): Spherical harmonics. Shape (N, 1, 3)
         shN (torch.Tensor): Spherical harmonics. Shape (N, K, 3)
-        format (str): Export format. Options: "ply", "splat", "ply_compressed". Default: "ply"
+        format (str): Export format. Options: "ply", "splat", "ply_compressed", "sog". Default: "ply"
         save_to (str): Output file path. If provided, the bytes will be written to file.
+        sog_iterations (int): Fixed k-means iterations used by SOG SH clustering.
+        sog_cluster_device (str | None): Optional explicit CUDA clustering device, e.g. "cuda:0".
     """
     total_splats = means.shape[0]
     assert means.shape == (total_splats, 3), "Means must be of shape (N, 3)"
@@ -543,6 +550,17 @@ def export_splats(
         data = splat2splat_bytes(means, scales, quats, opacities, sh0)
     elif format == "ply_compressed":
         data = splat2ply_bytes_compressed(means, scales, quats, opacities, sh0, shN)
+    elif format == "sog":
+        data = splat2sog_bytes(
+            means,
+            scales,
+            quats,
+            opacities,
+            sh0,
+            shN,
+            iterations=sog_iterations,
+            cluster_device=sog_cluster_device,
+        )
     else:
         raise ValueError(f"Unsupported format: {format}")
 
