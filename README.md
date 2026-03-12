@@ -25,7 +25,7 @@
 </p>
 
 <p align="center">
-  <img src="assets/why-friendlysplat.gif" alt="Why FriendlySplat" width="100%">
+  <img src="assets/why-friendlysplat-v2.gif" alt="Why FriendlySplat" width="100%">
 </p>
 
 ## 📝 To-Do List
