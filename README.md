@@ -41,6 +41,7 @@ pip install torch==2.4.0 torchvision==0.19.0 --index-url https://download.pytorc
 
 # 2. Clone and install
 git clone https://github.com/AshadowZ/FriendlySplat.git
+git submodule update --init --recursive
 cd FriendlySplat
 
 # Basic install (train & viewer)
