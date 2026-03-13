@@ -7,11 +7,7 @@ reconstruction.
 ## Installation
 
 ```bash
-# Core dependencies
-pip install moge opencv-python tqdm
-
-# Highly recommended for robust depth alignment (RANSAC)
-pip install scikit-learn
+pip install -e ".[priors]" --no-build-isolation
 ```
 
 ## Quick Start
