@@ -53,7 +53,9 @@ sfm = [
   "tqdm",
 ]
 priors = [
+  "moge @ git+https://github.com/microsoft/MoGe.git",
   "open3d==0.18.0",
+  "scikit-learn",
   "scipy",
 ]
 dev = [
