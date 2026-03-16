@@ -30,7 +30,7 @@ def _knn_distances(points: torch.Tensor, k: int = 4) -> torch.Tensor:
         raise ImportError(
             "KNN-based scale initialization requires scikit-learn. "
             "Install it (e.g. `pip install scikit-learn` or "
-            "`pip install -e \".[train,viewer]\" --no-build-isolation`)."
+            "`pip install -e \".[train]\" --no-build-isolation`)."
         ) from e
 
     x_np = points.detach().cpu().numpy()
