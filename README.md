@@ -40,11 +40,11 @@ conda activate friendly-splat
 pip install torch==2.4.0 torchvision==0.19.0 --index-url https://download.pytorch.org/whl/cu121
 
 # 2. Clone and install
-git clone https://github.com/AshadowZ/FriendlySplat.git
+git clone --recursive https://github.com/AshadowZ/FriendlySplat.git
 cd FriendlySplat
-git submodule update --init --recursive
 
 # Basic install (train & viewer)
+pip install ninja
 pip install -e ".[train,viewer]" --no-build-isolation
 
 # OR install the full toolchain
