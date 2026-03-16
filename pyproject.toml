@@ -12,6 +12,7 @@ license = { file = "LICENSE" }
 authors = [{ name = "FriendlySplat Authors" }]
 dependencies = [
   "numpy<2",
+  "ninja",
   "torch",
   "tyro>=0.8.8",
   "PyYAML",
