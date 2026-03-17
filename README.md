@@ -128,8 +128,37 @@ command for your scene.
 
 ## 🛠️ Development and Contribution
 
+### Project Team
+
+FriendlySplat is developed by researchers and contributors from
+[Differential Robotics](https://diffrobot.com/),
+[FastLab](https://github.com/ZJU-FAST-Lab), and
+[Zhejiang University](https://www.zju.edu.cn/english/).
+
+<table cellpadding="6" cellspacing="0">
+  <tr>
+    <td align="left" valign="middle">
+      <a href="https://diffrobot.com/">
+        <img src="assets/Differential%20Robotics.png" alt="Differential Robotics" width="100">
+      </a>
+    </td>
+    <td align="left" valign="middle">
+      <a href="https://github.com/ZJU-FAST-Lab">
+        <img src="assets/FastLab.png" alt="FastLab" width="200">
+      </a>
+    </td>
+    <td align="left" valign="middle">
+      <a href="https://www.zju.edu.cn/english/">
+        <img src="assets/Zhejiang%20University.png" alt="Zhejiang University" width="90">
+      </a>
+    </td>
+  </tr>
+</table>
+
 Issues and pull requests are welcome. The codebase is still evolving, and many
 features may not have been widely tested yet, so issue reports are especially welcome.
+
+### Acknowledgements
 
 FriendlySplat is built with substantial help from the broader Gaussian Splatting
 community. We first thank
