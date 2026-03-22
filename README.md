@@ -24,8 +24,8 @@
 
 ## 📝 To-Do List
 
-☐ Improve the `Examples` section.
-☐ Clearly list the features that are already integrated and the features planned for future integration.
+☐ Improve the `Examples` section.<br>
+☐ Clearly list the features that are already integrated and the features planned for future integration.<br>
 ☐ Build proper docs to replace the current collection of README files.
 
 ## 📦 Installation
@@ -134,7 +134,7 @@ data_dir/
   corresponding inputs in the config.
 - To generate `sparse/0/`, see [tools/sfm/README.md](tools/sfm/README.md). To infer
   geometry priors such as `depth_prior/` and `normal_prior/`, see
-  [tools/geometry\_prior/README.md](tools/geometry_prior/README.md).
+  [tools/geometry_prior/README.md](tools/geometry_prior/README.md).
 
 ## 🚀 Quick Start
 
