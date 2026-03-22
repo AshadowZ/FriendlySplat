@@ -24,8 +24,8 @@
 
 ## 📝 To-Do List
 
-☐ Improve the `Examples` section.<br>
-☐ Clearly list the features that are already integrated and the features planned for future integration.<br>
+☐ Improve the `Examples` section.
+☐ Clearly list the features that are already integrated and the features planned for future integration.
 ☐ Build proper docs to replace the current collection of README files.
 
 ## 📦 Installation
@@ -61,6 +61,59 @@ Tips & Notes:
   requires HLOC). Please check the respective subfolder docs like
   [tools/sfm/README.md](tools/sfm/README.md).
 
+## 🐳 Docker Support
+
+FriendlySplat provides Docker support for consistent development and deployment environments.
+
+### Build Docker Image
+
+```bash
+# Clone the repository
+git clone --recursive https://github.com/AshadowZ/FriendlySplat.git
+cd FriendlySplat
+
+# Build the Docker image
+docker build -t friendlysplat .
+```
+
+### Run Docker Container
+
+#### For Production Use
+
+```bash
+docker run --gpus all -it --rm \
+    -v /path/to/data:/app/data \
+    -v /path/to/results:/app/results \
+    -p 8080:8080 \
+    friendlysplat
+```
+
+#### For Development (Bidirectional Code Mapping)
+
+```bash
+# Create necessary directories if they don't exist
+mkdir -p /path/to/FriendlySplat/data
+mkdir -p /path/to/FriendlySplat/results
+
+# Run container with bidirectional mapping
+docker run --gpus all -it --rm \
+    --user $(id -u):$(id -g) \
+    -v /path/to/FriendlySplat:/app/FriendlySplat \
+    -v /path/to/FriendlySplat/data:/app/data \
+    -v /path/to/FriendlySplat/results:/app/results \
+    -p 8080:8080 \
+    friendlysplat
+```
+
+### Docker Tips & Notes
+
+- **GPU Support**: Ensure you have NVIDIA Container Toolkit installed
+- **Permission Issues**: Use `--user $(id -u):$(id -g)` to avoid permission problems
+- **Port Mapping**: If port 8080 is occupied, use a different port (e.g., `-p 8081:8080`)
+- **Volume Mounting**: Adjust the volume paths to match your local setup
+- **Directory Structure**: The `data` and `results` directories will be created automatically if they don't exist, but it's recommended to create them beforehand for better control
+- **Development Workflow**: When using bidirectional mapping, changes made in either the local directory or the container will be synchronized in real-time
+
 ## 🗂️ Expected Dataset Layout
 
 FriendlySplat expects a COLMAP-style dataset directory under `--io.data-dir`:
@@ -81,7 +134,7 @@ data_dir/
   corresponding inputs in the config.
 - To generate `sparse/0/`, see [tools/sfm/README.md](tools/sfm/README.md). To infer
   geometry priors such as `depth_prior/` and `normal_prior/`, see
-  [tools/geometry_prior/README.md](tools/geometry_prior/README.md).
+  [tools/geometry\_prior/README.md](tools/geometry_prior/README.md).
 
 ## 🚀 Quick Start
 
