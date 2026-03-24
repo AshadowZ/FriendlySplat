@@ -50,7 +50,9 @@ segment = [
   "scipy",
 ]
 sfm = [
+  "huggingface_hub",
   "pycolmap==3.13.0",
+  "safetensors",
   "scipy",
   "tqdm",
 ]

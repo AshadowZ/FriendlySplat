@@ -105,6 +105,7 @@ fs-train --io.data-dir /path/to/out_scene ...
   `SIMPLE_PINHOLE`, `RADIAL`, `OPENCV`, and others.
 - Missing dependencies:
   `hloc`: ensure you cloned HLOC with `--recursive`.
-  `pycolmap`: rerun `pip install -e ".[sfm]" --no-build-isolation`.
+  `pycolmap`, `huggingface_hub`, `safetensors`: rerun
+  `pip install -e ".[sfm]" --no-build-isolation`.
 - Existing output directory: use `--overwrite` if `images/` or `sparse/` already
   exist in the destination directory.

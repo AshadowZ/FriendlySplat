@@ -12,11 +12,11 @@ pip install -e ".[priors]" --no-build-isolation
 
 ## Quick Start
 
-Run the inference script from the repository root. This is the recommended
-standard command:
+Run the installed CLI entrypoint. This is the recommended standard
+command:
 
 ```bash
-python tools/geometry_prior/moge_infer.py \
+fs-prior-moge \
   --data-dir /path/to/scene \
   --factor 1 \
   --model-id Ruicheng/moge-2-vitl-normal \
