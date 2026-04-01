@@ -63,56 +63,49 @@ Tips & Notes:
 
 ## 🐳 Docker Support
 
-FriendlySplat provides Docker support for consistent development and deployment environments.
+To build and run FriendlySplat using Docker, please follow the steps below:
 
-### Build Docker Image
+### Build the Image
+
+Navigate to the project root directory and execute the build command. The example below uses `TORCH_CUDA_ARCH_LIST="8.9"`, which is targeted for an **RTX 4090**.
 
 ```bash
-# Clone the repository
-git clone --recursive https://github.com/AshadowZ/FriendlySplat.git
-cd FriendlySplat
-
-# Build the Docker image
-docker build -t friendlysplat .
+docker build --build-arg TORCH_CUDA_ARCH_LIST="8.9" -t friendlysplat:latest .
 ```
 
-### Run Docker Container
+  * **GPU Architecture:** If you are using a different graphics card, please check your GPU architecture via `nvidia-smi` or refer to NVIDIA's compute capability table to confirm and update the `TORCH_CUDA_ARCH_LIST` version to match your specific hardware.
+  * **Driver Requirements:** Regardless of your GPU, ensure that your host NVIDIA driver is >= 530.30 to ensure CUDA runtime compatibility with the container.
+  * **Large Files Warning:** Exclude unnecessary large files that are **not required for building the Docker environment** (e.g., datasets, checkpoints, outputs) using the `.dockerignore` file to prevent Out-Of-Memory (OOM) crashes during the "transferring context" phase (often surfacing as `rpc error: ... EOF`), excessively long build times and bloated image sizes.
 
-#### For Production Use
+### Run the Container
+
+After a successful build, you can start the container using the following command (make sure to replace `/path/to/FriendlySplat` with your local FriendlySplat project path and `/path/to/your/datasets` with your local dataset path):
 
 ```bash
 docker run --gpus all -it --rm \
-    -v /path/to/data:/app/data \
-    -v /path/to/results:/app/results \
-    -p 8080:8080 \
-    friendlysplat
+  -v /path/to/your/datasets:/data \
+  -v /path/to/FriendlySplat:/app/FriendlySplat \
+  -p 8080:8080 \
+  --shm-size=8g \
+  friendlysplat:latest
 ```
 
-#### For Development (Bidirectional Code Mapping)
+**Important Notes for Development:**
+
+  * **Hot-Reloading Code:** The `-v` flag maps your local source code directly into the container. If your local code modifications do not affect project dependencies, this mapping allows you to easily verify your code changes without needing to rebuild.
+  * **Handling C-Extensions:** Mounting local source code can **overwrite files generated during image build**, such as compiled artifacts like `gsplat/csrc.so`.  `entrypoint.sh` **restores these critical files** from a protected location inside the image, effectively **patching the mounted directory** so the modules remain usable.
+  * **Rebuilding on Dependency Changes:** If your local modifications *do* break or change the original dependency relationships (e.g., updating `pyproject.toml` or `setup.py`), you must re-run the `docker build` command to update the system dependencies within the image.
+  * **Shared Memory:** The `--shm-size=8g` parameter is crucial. It increases the container's shared memory from the default 64 MB to 8 GB, which prevents the PyTorch DataLoader from crashing during training.
+
+### Using Docker Compose
+
+For a more streamlined development experience, we highly recommend using Docker Compose. It allows you to define all your configurations—including volume mounts for source code, datasets, and model outputs—in a single `docker-compose.yml` file. This drastically reduces the complexity of terminal commands and accelerates your development workflow.
+
+Before running, please ensure you have updated the volume paths in your `docker-compose.yml` to match your local environment. Then, simply execute:
 
 ```bash
-# Create necessary directories if they don't exist
-mkdir -p /path/to/FriendlySplat/data
-mkdir -p /path/to/FriendlySplat/results
-
-# Run container with bidirectional mapping
-docker run --gpus all -it --rm \
-    --user $(id -u):$(id -g) \
-    -v /path/to/FriendlySplat:/app/FriendlySplat \
-    -v /path/to/FriendlySplat/data:/app/data \
-    -v /path/to/FriendlySplat/results:/app/results \
-    -p 8080:8080 \
-    friendlysplat
+docker compose run --rm friendlysplat
 ```
-
-### Docker Tips & Notes
-
-- **GPU Support**: Ensure you have NVIDIA Container Toolkit installed
-- **Permission Issues**: Use `--user $(id -u):$(id -g)` to avoid permission problems
-- **Port Mapping**: If port 8080 is occupied, use a different port (e.g., `-p 8081:8080`)
-- **Volume Mounting**: Adjust the volume paths to match your local setup
-- **Directory Structure**: The `data` and `results` directories will be created automatically if they don't exist, but it's recommended to create them beforehand for better control
-- **Development Workflow**: When using bidirectional mapping, changes made in either the local directory or the container will be synchronized in real-time
 
 ## 🗂️ Expected Dataset Layout
 

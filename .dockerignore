@@ -1,0 +1,46 @@
+# Large datasets / model weights (manually manage these outside Docker context)
+# Update or replace the directory names below to match your actual dataset/model paths
+data/
+datasets/
+checkpoints/
+outputs/
+runs/
+logs/
+*.pth
+*.pt
+*.safetensors
+
+# Git history
+.git/
+
+# Python virtual environments 
+.venv/
+venv/
+env/
+
+# Python cache / compiled files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Test & cache directories
+.pytest_cache/
+
+# EDITOR / IDE FILES
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Documentation & assets (only ignore if NOT used by your code)
+# README.md
+# LICENSE
+# assets/
+# tests/
+# benchmarks/

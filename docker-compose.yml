@@ -1,0 +1,46 @@
+services:
+  friendlysplat:
+    # Image name (can also be built from Dockerfile below)
+    image: friendlysplat:latest
+    build:
+      context: .                     # Build context: current directory
+      dockerfile: Dockerfile         # Use this Dockerfile to build the image
+    container_name: friendlysplat_dev
+
+    shm_size: "8gb"                  # Increase shared memory to avoid PyTorch DataLoader crashes
+
+    deploy:
+    # GPU reservation for multi-node Docker Swarm / production deployment
+    # Note: This is ignored by `docker-compose up` on a single machine
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, utility, compute]
+
+    # Enable NVIDIA GPU support
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all   # Expose all GPUs to the container
+      - DEBIAN_FRONTEND=noninteractive
+
+    # Mount local directories to container for development and data persistence
+    volumes:
+    # Update volumes if your dataset or results use different directories
+      - ./data:/app/FriendlySplat/data          # Local dataset directory
+      - ./outputs:/app/FriendlySplat/outputs    # Directory to store results
+      - .:/app/FriendlySplat                    # Mount project code for hot-reload
+
+    # Map container ports to host (for viewer / web interface)
+    ports:
+      - "8080:8080"                             # Access viewer at http://localhost:8080
+
+    # Keep container interactive (useful for `docker-compose exec`)
+    tty: false
+    stdin_open: false
+
+    # Notes:
+    # - Adjust volume paths if your datasets or checkpoints are in different directories.
+    # - Expose additional ports if using other services or viewers.
+    # - Use `docker-compose up -d` for detached mode in production/development.
