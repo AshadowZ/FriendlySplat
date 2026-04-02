@@ -61,6 +61,52 @@ Tips & Notes:
   requires HLOC). Please check the respective subfolder docs like
   [tools/sfm/README.md](tools/sfm/README.md).
 
+## 🐳 Docker Support
+
+To build and run FriendlySplat using Docker, please follow the steps below:
+
+### Build the Image
+
+Navigate to the project root directory and execute the build command. The example below uses `TORCH_CUDA_ARCH_LIST="8.9"`, which is targeted for an **RTX 4090**.
+
+```bash
+docker build --build-arg TORCH_CUDA_ARCH_LIST="8.9" -t friendlysplat:latest .
+```
+
+  * **GPU Architecture:** If you are using a different graphics card, please check your GPU architecture via `nvidia-smi` or refer to NVIDIA's compute capability table to confirm and update the `TORCH_CUDA_ARCH_LIST` version to match your specific hardware.
+  * **Driver Requirements:** Regardless of your GPU, ensure that your host NVIDIA driver is >= 530.30 to ensure CUDA runtime compatibility with the container.
+  * **Large Files Warning:** Exclude unnecessary large files that are **not required for building the Docker environment** (e.g., datasets, checkpoints, outputs) using the `.dockerignore` file to prevent Out-Of-Memory (OOM) crashes during the "transferring context" phase (often surfacing as `rpc error: ... EOF`), excessively long build times and bloated image sizes.
+
+### Run the Container
+
+After a successful build, you can start the container using the following command (make sure to replace `/path/to/FriendlySplat` with your local FriendlySplat project path and `/path/to/your/datasets` with your local dataset path):
+
+```bash
+docker run --gpus all -it --rm \
+  -v /path/to/your/datasets:/data \
+  -v /path/to/FriendlySplat:/app/FriendlySplat \
+  -p 8080:8080 \
+  --shm-size=8g \
+  friendlysplat:latest
+```
+
+**Important Notes for Development:**
+
+  * **Hot-Reloading Code:** The `-v` flag maps your local source code directly into the container. If your local code modifications do not affect project dependencies, this mapping allows you to easily verify your code changes without needing to rebuild.
+  * **Handling C-Extensions:** Mounting local source code can **overwrite files generated during image build**, such as compiled artifacts like `gsplat/csrc.so`.  `entrypoint.sh` **restores these critical files** from a protected location inside the image, effectively **patching the mounted directory** so the modules remain usable.
+  * **Rebuilding on Dependency Changes:** If your local modifications *do* break or change the original dependency relationships (e.g., updating `pyproject.toml` or `setup.py`), you must re-run the `docker build` command to update the system dependencies within the image.
+  * **Shared Memory:** The `--shm-size=8g` parameter is crucial. It increases the container's shared memory from the default 64 MB to 8 GB, which prevents the PyTorch DataLoader from crashing during training.
+
+### Using Docker Compose
+
+For a more streamlined development experience, we highly recommend using Docker Compose. It allows you to define all your configurations—including volume mounts for source code, datasets, and model outputs—in a single `docker-compose.yml` file. This drastically reduces the complexity of terminal commands and accelerates your development workflow.
+
+Before running, please ensure you have updated the volume paths in your `docker-compose.yml` to match your local environment. Then, simply execute:
+
+```bash
+docker compose run --rm friendlysplat
+```
+
 ## 🗂️ Expected Dataset Layout
 
 FriendlySplat expects a COLMAP-style dataset directory under `--io.data-dir`:
