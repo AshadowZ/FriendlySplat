@@ -125,3 +125,6 @@ data/*
 results/*
 
 !examples/benchmarks/compression/results/
+req.txt
+data
+output
