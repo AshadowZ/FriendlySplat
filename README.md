@@ -30,14 +30,24 @@
 
 ## 📦 Installation
 
-Prerequisite: [PyTorch](https://pytorch.org/get-started/locally/).
+**Platform requirement: Linux with an NVIDIA GPU and CUDA 12.x.** FriendlySplat
+compiles CUDA extensions (gsplat, `fused-ssim`, `fused-bilagrid`) during install,
+so there is no CPU-only, Windows or macOS path.
+
+**Recommended PyTorch: `torch==2.4.1` + `torchvision==0.19.1`, cu124.** That is
+the combination the Docker image and the `uv` lockfile use. The package itself
+declares a range (`torch>=2.4,<2.6`), so an existing compatible CUDA build of
+PyTorch is kept rather than replaced.
+
+> **NumPy 2 required.** FriendlySplat depends on `numpy>=2.0`. If you are
+> upgrading an older environment, any package compiled against the NumPy 1 ABI
+> (notably `opencv-python<4.10`) has to be upgraded with it.
 
 ```bash
 # 1. Environment setup
-# Example only; Python and PyTorch version requirements are flexible.
 conda create -n friendly-splat python=3.10 -y
 conda activate friendly-splat
-pip install torch==2.4.0 torchvision==0.19.0 --index-url https://download.pytorch.org/whl/cu121
+pip install torch==2.4.1 torchvision==0.19.1 --index-url https://download.pytorch.org/whl/cu124
 
 # 2. Clone and install
 git clone --recursive https://github.com/AshadowZ/FriendlySplat.git
