@@ -52,6 +52,7 @@ from friendly_splat.trainer.io_utils import (
     maybe_save_outputs,
 )
 from friendly_splat.trainer.speedy_pruning import maybe_hard_prune_after_densify
+from friendly_splat.fastgs import apply_fastgs_presets
 
 
 def set_seed(seed: int) -> None:
@@ -92,6 +93,8 @@ class Trainer:
         self.strategy = context.strategy
         self.strategy_state = context.strategy_state
         self.optimizer_coordinator = context.optimizer_coordinator
+        # FastGS runtime (`--fast`); None when disabled.
+        self.fastgs = context.fastgs
         print(f"Initialized {self.gaussian_model.num_gaussians} gaussians.")
 
         # Similarity transform applied by the dataparser (COLMAP -> training space).
@@ -115,6 +118,7 @@ class Trainer:
         strategy = self.strategy
         strategy_state = self.strategy_state
         gns = self.natural_selection_policy
+        fastgs = self.fastgs
         optimizer_coordinator = self.optimizer_coordinator
         loader_iter = iter(self.loader)
         tb_writer = TensorBoardWriter(io_cfg=cfg.io, tb_cfg=cfg.tb)
@@ -173,6 +177,17 @@ class Trainer:
             )
             meta = render_out.meta
             active_sh_degree = render_out.active_sh_degree
+
+            # FastGS scores Gaussians against recently trained views; keep this
+            # batch so scoring never has to re-read images from disk.
+            if fastgs is not None:
+                fastgs.observe_step(
+                    pixels=prepared_batch.pixels,
+                    camtoworlds=prepared_batch.camtoworlds,
+                    Ks=prepared_batch.Ks,
+                    image_ids=prepared_batch.image_ids,
+                    active_sh_degree=int(active_sh_degree),
+                )
 
             # Losses.
             loss_output = compute_losses_from_prepared_batch_and_render(
@@ -258,6 +273,15 @@ class Trainer:
                 strategy_state=strategy_state,
             )
 
+            # Optional FastGS post-densification multi-view consistent pruning.
+            if fastgs is not None:
+                fastgs.maybe_final_prune(
+                    step=int(step),
+                    gaussian_model=gaussian_model,
+                    splat_optimizers=optimizer_coordinator.splat_optimizers,
+                    strategy_state=strategy_state,
+                )
+
             # Periodic evaluation.
             eval_output = maybe_run_evaluation_for_step(
                 step=int(step),
@@ -329,6 +353,8 @@ def _parse_args() -> TrainConfig:
 def main() -> None:
     cfg = _parse_args()
     cfg = apply_steps_scaler(cfg=cfg, steps_scaler=float(cfg.optim.steps_scaler))
+    # `--fast` also retunes a few learning rates / the densification cadence.
+    cfg = apply_fastgs_presets(cfg)
     Trainer(cfg).train()
 
 

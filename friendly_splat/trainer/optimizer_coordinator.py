@@ -5,6 +5,7 @@ from typing import Dict, Optional
 
 import torch
 
+from friendly_splat.fastgs import FastGSStepGate
 from friendly_splat.modules.gaussian import GaussianModel
 from friendly_splat.trainer.configs import OptimConfig
 
@@ -169,13 +170,21 @@ class OptimizerCoordinator:
         gaussian_model: GaussianModel,
         optimizers: OptimizerBundle,
         gns: Optional[NaturalSelectionPolicy],
+        splat_step_gate: Optional[FastGSStepGate] = None,
     ) -> None:
         self.optim_cfg = optim_cfg
         self.device = device
         self.gaussian_model = gaussian_model
         self.optimizers = optimizers
         self.gns = gns
+        # Optional per-group step schedule (FastGS). When set it replaces the
+        # MU schedule and decides per parameter group, not globally.
+        self.splat_step_gate = splat_step_gate
         self._gns_opacity_visibility: Optional[torch.Tensor] = None
+        # Visibility accumulated across the iterations a gated group skips, so
+        # SelectiveAdam still updates every Gaussian seen while its gradients
+        # were accumulating (not just the ones visible in the last render).
+        self._accum_visibility: Optional[torch.Tensor] = None
 
     @property
     def splat_optimizers(self) -> Dict[str, torch.optim.Optimizer]:
@@ -214,17 +223,37 @@ class OptimizerCoordinator:
             return True
         return False
 
+    def _should_step_group(self, *, name: str, step: int) -> bool:
+        """Whether one splat parameter group steps at `step`.
+
+        Groups that do not step keep their accumulated gradients (see
+        `zero_grad`), so skipping is gradient accumulation, not a dropped update.
+        """
+        if self.splat_step_gate is not None:
+            return bool(
+                self.splat_step_gate.should_step(group=str(name), step=int(step))
+            )
+        return self._should_step_splats(step=int(step))
+
+    def _splat_groups_to_step(self, *, step: int) -> set[str]:
+        return {
+            name
+            for name in self.optimizers.splat_optimizers
+            if self._should_step_group(name=name, step=int(step))
+        }
+
     def zero_grad(self, *, step: int) -> None:
         """Clear gradients after a training step.
 
         Uses ``set_to_none=True`` to reduce memory traffic and let PyTorch
         allocate grad tensors lazily on the next backward pass.
 
-        When `optim.mu_enable=True`, splat gradients are only cleared on iterations
-        where splat optimizers actually step (otherwise gradients accumulate).
+        When `optim.mu_enable=True` (or when a FastGS step gate is installed),
+        a splat group's gradients are only cleared on the iterations where that
+        group actually steps; otherwise gradients accumulate.
         """
-        if self._should_step_splats(step=int(step)):
-            for opt in self.optimizers.splat_optimizers.values():
+        for name, opt in self.optimizers.splat_optimizers.items():
+            if self._should_step_group(name=name, step=int(step)):
                 opt.zero_grad(set_to_none=True)
         for opt in self.optimizers.extra_optimizers.values():
             opt.zero_grad(set_to_none=True)
@@ -250,7 +279,8 @@ class OptimizerCoordinator:
         splat_optimizers = self.optimizers.splat_optimizers
         gns = self.gns
 
-        step_splats = self._should_step_splats(step=int(step))
+        groups_to_step = self._splat_groups_to_step(step=int(step))
+        step_splats = len(groups_to_step) > 0
 
         # In packed+sparse mode, convert dense grads to sparse COO so SparseAdam
         # updates only active Gaussian entries.
@@ -275,7 +305,9 @@ class OptimizerCoordinator:
 
         # Build visibility mask for SelectiveAdam (visible-only updates).
         visibility = None
-        if step_splats and optim_cfg.visible_adam:
+        # With a step gate the mask must be built on every iteration (it is
+        # accumulated below); otherwise only on the iterations that step.
+        if optim_cfg.visible_adam and (step_splats or self.splat_step_gate is not None):
             opacity_logits = gaussian_model.opacity_logits
             if optim_cfg.packed:
                 gaussian_ids = meta.get("gaussian_ids")
@@ -300,13 +332,29 @@ class OptimizerCoordinator:
                 reduce_dims = tuple(range(vis.dim() - 1))
                 visibility = vis.any(dim=reduce_dims)
 
+        if visibility is not None and self.splat_step_gate is not None:
+            # Under a step gate, gradients accumulate over several renders, so the
+            # update mask must be the union of the visibilities seen since the
+            # last step. Densification changes the Gaussian count, in which case
+            # the accumulator is simply restarted.
+            accum = self._accum_visibility
+            if accum is not None and int(accum.numel()) == int(visibility.numel()):
+                visibility = visibility | accum
+            self._accum_visibility = visibility
+
         gns_window_active = gns is not None and gns.window_active(step=int(step))
+
+        if step_splats and visibility is not None:
+            # Consume the accumulated mask on the iterations that actually step.
+            self._accum_visibility = None
 
         if step_splats:
             # Step splat optimizers.
             # During the GNS window, opacities are forced to "fully visible" so the
             # global opacity regularizer can affect every Gaussian.
             for name, opt in splat_optimizers.items():
+                if name not in groups_to_step:
+                    continue
                 if optim_cfg.visible_adam:
                     assert visibility is not None
                     # During GNS, update *all* opacities regardless of visibility so the global

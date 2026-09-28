@@ -4,6 +4,9 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Literal, Optional, Tuple
 
+from friendly_splat.fastgs.config import FastGSConfig
+from friendly_splat.fastgs.validate import validate_fastgs_config
+
 
 @dataclass(frozen=True)
 class IOConfig:
@@ -496,6 +499,13 @@ class TrainConfig:
     gns: GNSConfig = field(default_factory=GNSConfig)
     # Speedy-Splat-style hard pruning (score-based budget pruning).
     hard_prune: HardPruneConfig = field(default_factory=HardPruneConfig)
+    # FastGS (https://github.com/fastgs/FastGS): multi-view consistent
+    # densification + sparse-in-time optimizer schedule. Everything it adds lives
+    # in `friendly_splat/fastgs/`; pass `--fast` to enable it and tune it with
+    # `--fastgs.*`. When enabled it replaces `strategy.impl`.
+    fast: bool = False
+    # FastGS knobs (read only when `fast=True`).
+    fastgs: FastGSConfig = field(default_factory=FastGSConfig)
     # Pose optimization / noise configuration.
     pose: PoseConfig = field(default_factory=PoseConfig)
     # Post-processing configuration (photometric adapters).
@@ -650,6 +660,22 @@ def apply_steps_scaler(*, cfg: TrainConfig, steps_scaler: float) -> TrainConfig:
         stop_step=scale(int(cfg.hard_prune.stop_step), min_value=1),
     )
 
+    # 8) FastGS schedules (densification cadence, prune window, optimizer gate).
+    fastgs_cfg = replace(
+        cfg.fastgs,
+        densify_every=scale(int(cfg.fastgs.densify_every), min_value=1),
+        final_prune_start_step=scale(
+            int(cfg.fastgs.final_prune_start_step), min_value=1
+        ),
+        final_prune_every=scale(int(cfg.fastgs.final_prune_every), min_value=1),
+        final_prune_stop_step=scale(int(cfg.fastgs.final_prune_stop_step), min_value=1),
+        optim_phase1_end_step=scale(int(cfg.fastgs.optim_phase1_end_step), min_value=1),
+        optim_phase2_end_step=scale(int(cfg.fastgs.optim_phase2_end_step), min_value=1),
+        shN_every=scale(int(cfg.fastgs.shN_every), min_value=1),
+        phase2_every=scale(int(cfg.fastgs.phase2_every), min_value=1),
+        phase3_every=scale(int(cfg.fastgs.phase3_every), min_value=1),
+    )
+
     return replace(
         cfg,
         io=io_cfg,
@@ -658,6 +684,7 @@ def apply_steps_scaler(*, cfg: TrainConfig, steps_scaler: float) -> TrainConfig:
         strategy=strategy_cfg,
         gns=gns_cfg,
         hard_prune=hard_prune_cfg,
+        fastgs=fastgs_cfg,
     )
 
 
@@ -915,3 +942,6 @@ def validate_train_config(cfg: TrainConfig) -> None:
                 raise ValueError(
                     f"optim.optimizers.{name}.scheduler.warmup_steps must be >= 0, got {sch.warmup_steps}"
                 )
+
+    # FastGS (`--fast`) validation lives next to its implementation.
+    validate_fastgs_config(cfg)

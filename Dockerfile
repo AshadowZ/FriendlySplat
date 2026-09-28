@@ -36,7 +36,7 @@ COPY setup.py pyproject.toml ./
 RUN uv pip install --system --no-cache-dir "setuptools>=61" wheel \
     ninja \
     safetensors \
-    torch==2.4.0 torchvision==0.19.0 --extra-index-url https://download.pytorch.org/whl/cu121 \
+    torch==2.4.1 torchvision==0.19.1 --extra-index-url https://download.pytorch.org/whl/cu124 \
     && uv cache clean
 
 # Install additional SFM dependencies (required for hloc)

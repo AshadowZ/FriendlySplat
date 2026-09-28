@@ -1,71 +1,108 @@
 [build-system]
-requires = ["setuptools>=61", "wheel", "torch", "ninja"]
+requires = [
+    "setuptools>=75",
+    "wheel",
+    "torch",
+    "ninja",
+]
 build-backend = "setuptools.build_meta"
+
 
 [project]
 name = "friendly-splat"
 version = "0.1.0"
 description = "User-friendly Gaussian Splatting toolkit"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.10,<3.13"
+
 license = { file = "LICENSE" }
-authors = [{ name = "FriendlySplat Authors" }]
-dependencies = [
-  "numpy<2",
-  "ninja",
-  "torch",
-  "tyro>=0.8.8",
-  "PyYAML",
-  "rich>=12",
-  "tensorboard",
-  "tqdm",
-  "torchmetrics",
-  "typing_extensions>=4.4.0",
-  "imageio",
-  "Pillow",
-  "opencv-python",
+
+authors = [
+    { name = "FriendlySplat Authors" },
 ]
 
+dependencies = [
+    # Numerical stack
+    "numpy>=2.0,<3",
+    "scipy>=1.13",
+
+    # PyTorch. A range rather than an exact pin, so an existing working CUDA
+    # build is not replaced on install. Recommended combination:
+    # torch 2.4.1 + torchvision 0.19.1 on cu124 (see README).
+    "torch>=2.4,<2.6",
+    "torchvision>=0.19,<0.21",
+
+    # CLI / configuration
+    "tyro>=0.8.8",
+    "PyYAML>=6",
+    "rich>=12",
+    "typing-extensions>=4.4",
+
+    # Training / logging
+    "tensorboard",
+    "torchmetrics",
+    "tqdm",
+
+    # Imaging. opencv-python is capped below 5.x, which has not been tested
+    # against this stack (see the NumPy 2 note in the README).
+    "imageio",
+    "Pillow",
+    "opencv-python<5",
+
+    # Native-extension build helper
+    "ninja",
+]
+
+
 [project.optional-dependencies]
+
+# Direct URLs rather than bare names: fused-ssim, fused-bilagrid and moge are
+# not published on PyPI, and the nerfview release there (0.1.3) is not the
+# revision this repo is tested against. PEP 508 direct references are understood
+# by pip *and* uv, so both installers resolve these identically.
 train = [
-  "fused-ssim @ git+https://github.com/rahul-goel/fused-ssim@328dc9836f513d00c4b5bc38fe30478b4435cbb5",
-  "fused-bilagrid @ git+https://github.com/harry7557558/fused-bilagrid@49f0ef06c9f81810fb9b5dd9027cf1844950cc16",
-  "scikit-learn",
+    "fused-ssim @ git+https://github.com/rahul-goel/fused-ssim@328dc9836f513d00c4b5bc38fe30478b4435cbb5",
+    "fused-bilagrid @ git+https://github.com/harry7557558/fused-bilagrid@49f0ef06c9f81810fb9b5dd9027cf1844950cc16",
+    "scikit-learn",
 ]
+
 viewer = [
-  "jaxtyping",
-  "viser",
-  "matplotlib",
-  "splines",
-  "nerfview @ git+https://github.com/nerfstudio-project/nerfview@4538024fe0d15fd1a0e4d760f3695fc44ca72787",
+    "jaxtyping",
+    "viser",
+    "matplotlib",
+    "splines",
+    "nerfview @ git+https://github.com/nerfstudio-project/nerfview@4538024fe0d15fd1a0e4d760f3695fc44ca72787",
 ]
+
 mesh = [
-  "open3d==0.18.0",
-  "scikit-image",
-  "scipy",
+    "open3d>=0.19.0,<0.20",
+    "scikit-image",
 ]
+
 segment = [
-  "networkx",
-  "open3d==0.18.0",
-  "scipy",
+    "networkx",
+    "open3d>=0.19.0,<0.20",
 ]
+
 sfm = [
-  "huggingface_hub",
-  "pycolmap==3.13.0",
-  "safetensors",
-  "scipy",
-  "tqdm",
+    "huggingface-hub",
+    "pycolmap==3.13.0",
+    "safetensors",
 ]
+
 priors = [
-  "moge @ git+https://github.com/microsoft/MoGe.git",
-  "open3d==0.18.0",
-  "scikit-learn",
-  "scipy",
+    # MoGe 2. Pinned before the MoGe 3 transition, which introduced its own
+    # cu130 PyTorch source and conflicts with FriendlySplat's cu124 stack.
+    "moge @ git+https://github.com/microsoft/MoGe.git@07444410f1e33f402353b99d6ccd26bd31e469e8",
+    "open3d>=0.19.0,<0.20",
+    "scikit-learn",
 ]
+
 dev = [
-  "pytest",
-  "ruff",
+    "pytest",
+    "ruff",
 ]
+
 
 [project.scripts]
 fs-train = "friendly_splat.train_app:main"
@@ -75,9 +112,78 @@ fs-mesh = "tools.mesh.tsdf_mesh_from_ply:entrypoint"
 fs-segment = "tools.segment.instascene_gauscluster:entrypoint"
 fs-prior-moge = "tools.geometry_prior.moge_infer:entrypoint"
 
+
+# ---------------------------------------------------------------------------
+# setuptools
+# ---------------------------------------------------------------------------
+
 [tool.setuptools]
 include-package-data = true
 
+
 [tool.setuptools.packages.find]
-include = ["friendly_splat*", "gsplat*", "tools*"]
-exclude = ["benchmarks*", "tests*"]
+include = [
+    "friendly_splat*",
+    "gsplat*",
+    "tools*",
+]
+
+exclude = [
+    "benchmarks*",
+    "tests*",
+]
+
+
+# ---------------------------------------------------------------------------
+# uv: PyTorch CUDA 12.4 index
+# ---------------------------------------------------------------------------
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
+
+
+# ---------------------------------------------------------------------------
+# uv: package sources
+# ---------------------------------------------------------------------------
+
+[tool.uv.sources]
+
+# PyTorch CUDA 12.4 wheels. The git dependencies live in
+# [project.optional-dependencies] as direct references so that pip resolves them
+# too; only the index redirect has to be uv-specific.
+torch = { index = "pytorch-cu124" }
+torchvision = { index = "pytorch-cu124" }
+
+
+# ---------------------------------------------------------------------------
+# uv: extra isolated-build dependencies
+# ---------------------------------------------------------------------------
+
+[tool.uv.extra-build-dependencies]
+
+# FriendlySplat's setup/build code imports torch while discovering/building
+# native extensions.
+friendly-splat = [
+    { requirement = "torch", match-runtime = true },
+    "setuptools",
+    "wheel",
+    "ninja",
+]
+
+# fused-ssim builds a torch CUDA/C++ extension.
+fused-ssim = [
+    { requirement = "torch", match-runtime = true },
+    "setuptools",
+    "wheel",
+    "ninja",
+]
+
+# fused-bilagrid builds a torch CUDA/C++ extension.
+fused-bilagrid = [
+    { requirement = "torch", match-runtime = true },
+    "setuptools",
+    "wheel",
+    "ninja",
+]

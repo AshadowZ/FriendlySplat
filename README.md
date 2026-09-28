@@ -30,14 +30,24 @@
 
 ## 📦 Installation
 
-Prerequisite: [PyTorch](https://pytorch.org/get-started/locally/).
+**Platform requirement: Linux with an NVIDIA GPU and CUDA 12.x.** FriendlySplat
+compiles CUDA extensions (gsplat, `fused-ssim`, `fused-bilagrid`) during install,
+so there is no CPU-only, Windows or macOS path.
+
+**Recommended PyTorch: `torch==2.4.1` + `torchvision==0.19.1`, cu124.** That is
+the combination the Docker image and the `uv` lockfile use. The package itself
+declares a range (`torch>=2.4,<2.6`), so an existing compatible CUDA build of
+PyTorch is kept rather than replaced.
+
+> **NumPy 2 required.** FriendlySplat depends on `numpy>=2.0`. If you are
+> upgrading an older environment, any package compiled against the NumPy 1 ABI
+> (notably `opencv-python<4.10`) has to be upgraded with it.
 
 ```bash
 # 1. Environment setup
-# Example only; Python and PyTorch version requirements are flexible.
 conda create -n friendly-splat python=3.10 -y
 conda activate friendly-splat
-pip install torch==2.4.0 torchvision==0.19.0 --index-url https://download.pytorch.org/whl/cu121
+pip install torch==2.4.1 torchvision==0.19.1 --index-url https://download.pytorch.org/whl/cu124
 
 # 2. Clone and install
 git clone --recursive https://github.com/AshadowZ/FriendlySplat.git
@@ -49,6 +59,31 @@ pip install -e ".[train,viewer]" --no-build-isolation
 
 # OR install the full toolchain
 # pip install -e ".[train,viewer,mesh,segment,sfm,priors]" --no-build-isolation
+```
+
+## Use UV
+
+```
+uv sync --all-extras
+
+This creates a `.venv` and installs all optional components, including training, viewer, mesh, segmentation, SfM, geometry priors, and development dependencies.
+
+For only the basic **training + viewer** setup:
+
+```bash
+uv sync --extra train --extra viewer
+```
+
+Extras can also be selected individually:
+
+```bash
+uv sync \
+  --extra train \
+  --extra viewer \
+  --extra mesh \
+  --extra segment \
+  --extra sfm \
+  --extra priors
 ```
 
 Tips & Notes:
@@ -150,6 +185,56 @@ fs-train \
 
 `--io.export-format` now accepts `ply`, `ply_compressed`, or `sog`.
 
+### FastGS (`--fast`)
+
+Add `--fast` to train with the [FastGS](https://github.com/fastgs/FastGS) recipe
+(CVPR 2026). Instead of growing Gaussians wherever the image-plane gradient is
+large, FastGS first asks *which Gaussians are actually responsible for the pixels
+that are still badly reconstructed*: every densification event renders a handful
+of views, marks the high-error pixels, and scores each Gaussian by how much of
+that error it accounts for. Only Gaussians that are both high-gradient and
+genuinely to blame are allowed to split or clone, the same score drives pruning,
+and once the geometry has settled the optimizer stops updating every parameter on
+every iteration. The result is fewer Gaussians and less wall time for comparable
+quality:
+
+```bash
+fs-train \
+  --io.data-dir /path/to/data-dir \
+  --io.result-dir /path/to/result-dir \
+  --fast
+```
+
+#### Benchmark: `garden` (MipNeRF360)
+
+Standard protocol — `images_4`, every 8th image held out of training, 30k steps,
+PSNR/SSIM computed the way 3DGS's `metrics.py` does
+(`--eval.metrics-backend inria`), single NVIDIA T4. Both strategies are given the
+same hard `--strategy.densification-budget`, since the Gaussian budget dominates
+quality and an unmatched comparison mostly measures capacity.
+
+| Gaussians | strategy | PSNR ↑ | SSIM ↑ | train time ↓ |
+| --- | --- | --- | --- | --- |
+| 400k | `--strategy.impl improved` | 25.754 | 0.7916 | 21.2 min |
+| 400k | `--fast` | **26.211** | **0.8055** | **20.7 min** |
+| 1M | `--strategy.impl improved` | **26.860** | 0.8445 | 34.8 min |
+| 1M | `--fast` | 26.825 | **0.8505** | **33.6 min** |
+| 2.5M | `--strategy.impl improved` | 27.428 | 0.8684 | 63.6 min |
+| 2.5M | `--fast` | **27.571** | **0.8706** | **59.8 min** |
+
+`--fast` wins SSIM at all three budgets and is faster at all three; PSNR wins at
+400k and 2.5M and ties at 1M (−0.035, within run-to-run variance). Every cell is
+a single seed, so treat differences below ~0.1 dB as noise. The `--fast` rows use
+`--fastgs.densify-every 100 --fastgs.grad-abs-thresh 0.0003
+--fastgs.loss-thresh 0.06 --fastgs.shN-lr 0.02 --fastgs.importance-thresh 0.15
+--fastgs.no-final-prune-enable`; full results, protocol and commands are in
+[`benchmarks/fastgs/`](benchmarks/fastgs/README.md).
+
+`--fast` replaces `--strategy.impl` and every part of the recipe is settable via
+`--fastgs.*`. See **[friendly_splat/fastgs/README.md](friendly_splat/fastgs/README.md)**
+for a per-parameter reference with the trade-offs, tuning recipes, the measured
+numbers, and how this integration differs from the upstream implementation.
+
 If you provide inputs such as `--data.depth-dir-name`, `--data.normal-dir-name`, or
 `--data.sky-mask-dir-name`, the corresponding regularization terms are enabled
 automatically during training.
@@ -218,6 +303,10 @@ We also thank [Improved-GS](https://github.com/XiaoBin2001/Improved-GS),
 [3dgs-mcmc](https://github.com/ubc-vision/3dgs-mcmc), and
 [mini-splatting](https://github.com/fatPeter/mini-splatting) for high-quality
 densification implementations and references.
+
+We thank [FastGS](https://github.com/fastgs/FastGS) for the multi-view consistent
+densification and pruning recipe behind `--fast`
+(see [friendly_splat/fastgs/README.md](friendly_splat/fastgs/README.md)).
 
 For pruning-related ideas and code references, we thank
 [GNS](https://github.com/XiaoBin2001/GNS),

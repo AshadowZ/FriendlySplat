@@ -7,6 +7,7 @@ import torch
 
 from friendly_splat.data import DataLoader, InputDataset
 from friendly_splat.data.colmap_dataparser import ColmapDataParser
+from friendly_splat.fastgs import FastGSRuntime, build_fastgs_runtime
 from friendly_splat.modules.bilateral_grid import BilateralGridPostProcessor
 from friendly_splat.modules.gaussian import GaussianModel
 from friendly_splat.modules.pose_opt import PoseOptModule
@@ -43,6 +44,7 @@ class TrainingContext:
     strategy: Strategy
     strategy_state: Dict[str, Any]
     optimizer_coordinator: OptimizerCoordinator
+    fastgs: Optional[FastGSRuntime]
 
 
 def build_dataset_and_loader(
@@ -209,8 +211,30 @@ def build_training_context(cfg: TrainConfig) -> TrainingContext:
             verbose=bool(cfg.strategy.verbose),
         )
 
+    # FastGS (`--fast`) supplies its own densification strategy plus the runtime
+    # that scores Gaussians against recent views. It replaces `strategy.impl`.
+    fastgs_runtime: Optional[FastGSRuntime] = None
+
     impl = str(cfg.strategy.impl).strip().lower()
-    if impl == "improved":
+    if bool(cfg.fast):
+        fastgs_runtime = build_fastgs_runtime(
+            fast_cfg=cfg.fastgs,
+            strategy_cfg=cfg.strategy,
+            optim_cfg=cfg.optim,
+            reg_cfg=cfg.reg,
+            scene_scale=float(parsed_scene.scene_scale),
+            seed=int(cfg.io.seed),
+            gaussian_model=gaussian_model,
+            bilateral_grid=bilateral_grid,
+        )
+        strategy = fastgs_runtime.strategy
+        if bool(cfg.fastgs.verbose):
+            print(
+                "[FastGS] enabled: using the FastGS densification strategy "
+                f"instead of strategy.impl={impl!r}.",
+                flush=True,
+            )
+    elif impl == "improved":
         strategy = ImprovedStrategy(
             prune_opa=float(cfg.strategy.prune_opa),
             grow_grad2d=float(cfg.strategy.grow_grad2d),
@@ -274,6 +298,9 @@ def build_training_context(cfg: TrainConfig) -> TrainingContext:
         gaussian_model=gaussian_model,
         optimizers=optimizer_bundle,
         gns=natural_selection_policy,
+        splat_step_gate=(
+            fastgs_runtime.step_gate if fastgs_runtime is not None else None
+        ),
     )
 
     return TrainingContext(
@@ -290,4 +317,5 @@ def build_training_context(cfg: TrainConfig) -> TrainingContext:
         strategy=strategy,
         strategy_state=strategy_state,
         optimizer_coordinator=optimizer_coordinator,
+        fastgs=fastgs_runtime,
     )
